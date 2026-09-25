@@ -254,7 +254,7 @@ impl Add {
         pt.daemons.insert(
             daemon_id.clone(),
             PitchforkTomlDaemon {
-                run: run_cmd,
+                run: run_cmd.into(),
                 auto,
                 cron,
                 retry,

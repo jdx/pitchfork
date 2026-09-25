@@ -1066,7 +1066,7 @@ mod tests {
     #[test]
     fn test_auto_host_skips_global_config_daemons() {
         let config = PitchforkTomlDaemon {
-            run: "server".to_string(),
+            run: "server".into(),
             port: Some(crate::config_types::PortConfig {
                 expect: vec![3000],
                 ..Default::default()

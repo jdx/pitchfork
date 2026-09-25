@@ -131,7 +131,9 @@ pub async fn build_run_options(
     daemon_config: &PitchforkTomlDaemon,
     overrides: Option<&StartOptions>,
 ) -> std::result::Result<RunOptions, String> {
-    let cmd = shell_words::split(&daemon_config.run)
+    let cmd = daemon_config
+        .run
+        .argv()
         .map_err(|e| format!("Failed to parse command: {e}"))?;
 
     let mut run_opts = daemon_config.to_run_options(id, cmd);
@@ -1423,7 +1425,7 @@ mod tests {
     async fn build_run_options_preserves_ready_http_status_for_cli_http_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             ready_http: Some(ReadyHttp {
                 url: "http://localhost:3000/original".to_string(),
                 status: vec![401],
@@ -1449,7 +1451,7 @@ mod tests {
     async fn build_run_options_resolves_global_mise_for_supervisor() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             ..PitchforkTomlDaemon::default()
         };
 
@@ -1527,7 +1529,7 @@ mod tests {
 
         let id = DaemonId::try_new("other-project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             path: Some(config_path),
             ..PitchforkTomlDaemon::default()
         };
@@ -1541,7 +1543,7 @@ mod tests {
     async fn build_run_options_preserves_daemon_mise_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             mise: Some(!crate::settings::settings().general.mise),
             ..PitchforkTomlDaemon::default()
         };
@@ -1555,7 +1557,7 @@ mod tests {
     async fn build_run_options_falls_back_to_global_ready_delay() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             ..PitchforkTomlDaemon::default()
         };
 
@@ -1571,7 +1573,7 @@ mod tests {
     async fn build_run_options_preserves_daemon_ready_delay_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             ready_delay: Some(5),
             ..PitchforkTomlDaemon::default()
         };
@@ -1586,22 +1588,22 @@ mod tests {
         let id = DaemonId::try_new("project", "api").unwrap();
         let configured_checks = [
             PitchforkTomlDaemon {
-                run: "echo ready".to_string(),
+                run: "echo ready".into(),
                 ready_output: Some(ReadyOutput::new("ready")),
                 ..PitchforkTomlDaemon::default()
             },
             PitchforkTomlDaemon {
-                run: "echo ready".to_string(),
+                run: "echo ready".into(),
                 ready_http: Some(ReadyHttp::new("http://localhost/health")),
                 ..PitchforkTomlDaemon::default()
             },
             PitchforkTomlDaemon {
-                run: "echo ready".to_string(),
+                run: "echo ready".into(),
                 ready_port: Some(ReadyPort::new(3000)),
                 ..PitchforkTomlDaemon::default()
             },
             PitchforkTomlDaemon {
-                run: "echo ready".to_string(),
+                run: "echo ready".into(),
                 ready_cmd: Some(ReadyCmd::new("true")),
                 ..PitchforkTomlDaemon::default()
             },
@@ -1617,7 +1619,7 @@ mod tests {
     async fn build_run_options_skips_default_delay_for_cli_ready_check_overrides() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             ..PitchforkTomlDaemon::default()
         };
         let cli_overrides = [
@@ -1694,7 +1696,7 @@ mod tests {
 
         let id = DaemonId::try_new("other-project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             path: Some(config_path),
             ..PitchforkTomlDaemon::default()
         };
@@ -1757,7 +1759,7 @@ mod tests {
 
         let id = DaemonId::try_new("other-project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             path: Some(config_path),
             ..PitchforkTomlDaemon::default()
         };
@@ -1775,7 +1777,7 @@ mod tests {
     async fn build_run_options_preserves_ready_port_timeout_for_cli_port_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             ready_port: Some(ReadyPort {
                 port: Some(3000),
                 template: None,
@@ -1801,7 +1803,7 @@ mod tests {
     async fn build_run_options_preserves_ready_output_timeout_for_cli_output_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
+            run: "echo ready".into(),
             ready_output: Some(ReadyOutput {
                 pattern: "READY".to_string(),
                 timeout: Some(Duration::from_secs(45)),

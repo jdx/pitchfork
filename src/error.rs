@@ -226,6 +226,27 @@ pub enum ConfigParseError {
     )]
     PassthroughWithoutPort { daemon: String, path: PathBuf },
 
+    #[error("daemon '{daemon}' in {} has an empty run array", path.display())]
+    #[diagnostic(
+        code(pitchfork::config::empty_run),
+        url("https://pitchfork.jdx.dev/reference/configuration#run-required"),
+        help("the first element of `run` is the program to start; give it one, or use a string")
+    )]
+    EmptyRunArgv { daemon: String, path: PathBuf },
+
+    #[error(
+        "daemon '{daemon}' in {} starts its run array with \"exec\"",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::exec_in_run_array),
+        url("https://pitchfork.jdx.dev/reference/configuration#run-required"),
+        help(
+            "a run array starts the program directly, without a shell, so there is no shell for `exec` to replace; remove \"exec\" and start the array with the program"
+        )
+    )]
+    ExecInRunArgv { daemon: String, path: PathBuf },
+
     #[error(
         "daemon '{daemon}' in {} sets proxy_tls_port = {port}, which is not one of its ports {declared:?}",
         path.display()

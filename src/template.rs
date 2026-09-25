@@ -310,7 +310,9 @@ pub fn render_daemon_templates(
 
     let mut renderer = TemplateRenderer::new(context);
 
-    config.run = renderer.render(&config.run)?;
+    // In the argv form each argument is rendered on its own, so a rendered
+    // value with spaces stays one argument.
+    config.run = config.run.try_map(|arg| renderer.render(arg))?;
 
     if let Some(ref hooks) = config.hooks {
         let rendered = crate::config_types::PitchforkTomlHooks {
@@ -527,7 +529,7 @@ mod tests {
 
     fn make_daemon_config(run: &str) -> PitchforkTomlDaemon {
         PitchforkTomlDaemon {
-            run: run.to_string(),
+            run: run.into(),
             ..Default::default()
         }
     }
@@ -659,7 +661,7 @@ mod tests {
     fn test_self_and_referenced_hosts_agree() {
         let id = DaemonId::try_new("myproj", "api").unwrap();
         let config = PitchforkTomlDaemon {
-            run: "server".to_string(),
+            run: "server".into(),
             port: Some(crate::config_types::PortConfig {
                 expect: vec![3000],
                 ..Default::default()
@@ -691,7 +693,7 @@ mod tests {
     fn test_render_daemon_templates_run() {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "redis-cli -p {{ daemons.redis.port }}".to_string(),
+            run: "redis-cli -p {{ daemons.redis.port }}".into(),
             ..Default::default()
         };
         render_daemon_templates(&mut config, &mut ctx, None).unwrap();
@@ -699,10 +701,35 @@ mod tests {
     }
 
     #[test]
+    fn test_render_daemon_templates_run_array() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: crate::pitchfork_toml::RunCommand::Argv(vec![
+                "redis-cli".into(),
+                "-p".into(),
+                "{{ daemons.redis.port }}".into(),
+                "a b".into(),
+            ]),
+            ..Default::default()
+        };
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+        // Each argument is rendered on its own and stays one argument.
+        assert_eq!(
+            config.run,
+            crate::pitchfork_toml::RunCommand::Argv(vec![
+                "redis-cli".into(),
+                "-p".into(),
+                "6379".into(),
+                "a b".into(),
+            ])
+        );
+    }
+
+    #[test]
     fn test_render_daemon_templates_env() {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             env: Some(IndexMap::from([
                 (
                     "DATABASE_URL".to_string(),
@@ -729,7 +756,7 @@ mod tests {
             ),
         ]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             env: Some(IndexMap::from([(
                 "GRAM_HOST".to_string(),
                 "0.0.0.0".to_string(),
@@ -749,7 +776,7 @@ mod tests {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let top_env = IndexMap::from([("GRAM_HOST".to_string(), "localhost".to_string())]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo {{ env.GRAM_HOST }}".to_string(),
+            run: "echo {{ env.GRAM_HOST }}".into(),
             ..Default::default()
         };
         render_daemon_templates(&mut config, &mut ctx, Some(&top_env)).unwrap();
@@ -765,7 +792,7 @@ mod tests {
             ("B".to_string(), "{{ env.A }}".to_string()),
         ]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             ..Default::default()
         };
         // Rendering env.B references {{ env.A }} which is undefined during
@@ -777,7 +804,7 @@ mod tests {
     fn test_render_daemon_templates_on_output_run() {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             hooks: Some(crate::config_types::PitchforkTomlHooks {
                 on_ready: None,
                 on_fail: None,
@@ -785,7 +812,7 @@ mod tests {
                 on_stop: None,
                 on_exit: None,
                 on_output: Some(crate::config_types::OnOutputHook {
-                    run: "curl http://localhost:{{ daemons.redis.port }}".to_string(),
+                    run: "curl http://localhost:{{ daemons.redis.port }}".into(),
                     filter: Some("ready".to_string()),
                     regex: None,
                     debounce: None,
@@ -808,7 +835,7 @@ mod tests {
 
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             ready_cmd: Some(ReadyCmd::new("redis-cli -p {{ daemons.redis.port }} ping")),
             ready_output: Some(ReadyOutput::new("listening on {{ daemons.redis.port }}")),
             ready_http: Some(ReadyHttp {
@@ -843,9 +870,9 @@ mod tests {
 
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             health_cmd: Some(HealthCmd {
-                run: "redis-cli -p {{ daemons.redis.port }} ping".to_string(),
+                run: "redis-cli -p {{ daemons.redis.port }} ping".into(),
                 interval: Some(Duration::from_secs(10)),
                 timeout: None,
                 retries: Some(3),
@@ -878,7 +905,7 @@ mod tests {
 
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             ready_port: Some(ReadyPort::from_template("{{ name }}")),
             ..Default::default()
         };
@@ -893,7 +920,7 @@ mod tests {
 
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             ready_port: Some(ReadyPort::new(8080)),
             ..Default::default()
         };
@@ -909,7 +936,7 @@ mod tests {
 
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             health_port: Some(HealthPort {
                 port: None,
                 template: Some("{{ daemons.redis.port }}".to_string()),
@@ -935,7 +962,7 @@ mod tests {
 
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             health_port: Some(HealthPort::from_template("{{ name }}")),
             ..Default::default()
         };
@@ -950,7 +977,7 @@ mod tests {
 
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             health_port: Some(HealthPort::new(8080)),
             ..Default::default()
         };
@@ -963,7 +990,7 @@ mod tests {
     fn test_render_daemon_templates_hook_error_does_not_fail() {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "echo".to_string(),
+            run: "echo".into(),
             hooks: Some(crate::config_types::PitchforkTomlHooks {
                 on_ready: Some("{{ nonexistent }}".to_string()),
                 on_fail: None,
@@ -985,7 +1012,7 @@ mod tests {
     fn test_render_daemon_templates_run_error_still_fails() {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
-            run: "{{ nonexistent }}".to_string(),
+            run: "{{ nonexistent }}".into(),
             ..Default::default()
         };
 

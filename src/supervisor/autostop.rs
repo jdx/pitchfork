@@ -269,7 +269,7 @@ impl Supervisor {
         for (id, daemon) in boot_daemons {
             info!("Starting boot daemon: {id}");
 
-            let cmd = match shell_words::split(&daemon.run) {
+            let cmd = match daemon.run.argv() {
                 Ok(cmd) => cmd,
                 Err(e) => {
                     error!("failed to parse command for boot daemon {id}: {e}");

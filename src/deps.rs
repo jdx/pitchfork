@@ -252,7 +252,7 @@ mod tests {
 
     fn make_daemon(depends: Vec<&str>) -> PitchforkTomlDaemon {
         PitchforkTomlDaemon {
-            run: "echo test".to_string(),
+            run: "echo test".into(),
             depends: depends
                 .into_iter()
                 .map(|s| DaemonId::new("global", s))

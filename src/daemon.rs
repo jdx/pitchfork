@@ -182,6 +182,11 @@ pub struct Daemon {
     /// Appended after `proxy_idle_timeout_ms` for the positional IPC encoding.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_cron_run: Option<chrono::DateTime<chrono::Local>>,
+    /// Start `cmd` directly, without a shell. See `RunOptions::no_shell`.
+    ///
+    /// Appended after `last_cron_run` for the positional IPC encoding.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_shell: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -300,6 +305,12 @@ pub struct RunOptions {
     /// encoding.
     #[serde(default)]
     pub cron_started: bool,
+    /// Start `cmd` directly, without a shell: the config's `run` was an
+    /// array. `run` is `None` then, since there is no command line.
+    ///
+    /// Appended after `cron_started` for the positional IPC encoding.
+    #[serde(default)]
+    pub no_shell: bool,
 }
 
 impl Daemon {
@@ -368,6 +379,7 @@ impl Daemon {
             // A restart of a scheduled daemon is not the schedule starting a
             // run; only the cron watcher's own call sets this.
             cron_started: false,
+            no_shell: self.no_shell,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,

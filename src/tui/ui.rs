@@ -1604,7 +1604,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
 
         lines.push(Line::from(vec![
             Span::styled("Command: ", Style::default().fg(GRAY)),
-            Span::styled(cfg.run.clone(), Style::default().fg(Color::White)),
+            Span::styled(cfg.run.to_string(), Style::default().fg(Color::White)),
         ]));
 
         // Show ports - use daemon's resolved ports if running, otherwise config ports
