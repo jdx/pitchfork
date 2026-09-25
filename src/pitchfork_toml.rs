@@ -171,7 +171,7 @@ pub struct PitchforkTomlDaemonLogs {
 /// in `read()` and `write()`.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PitchforkTomlDaemonRaw {
-    pub run: String,
+    pub run: RunCommand,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub auto: Vec<PitchforkTomlAuto>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1439,6 +1439,28 @@ impl PitchforkToml {
                 .into());
             }
 
+            if let RunCommand::Argv(argv) = &raw_daemon.run {
+                match argv.first().map(String::as_str) {
+                    None => {
+                        return Err(ConfigParseError::EmptyRunArgv {
+                            daemon: short_name.clone(),
+                            path: path.to_path_buf(),
+                        }
+                        .into());
+                    }
+                    // Almost certainly a shell command line carried over: in
+                    // an array it would look for a program called `exec`.
+                    Some("exec") => {
+                        return Err(ConfigParseError::ExecInRunArgv {
+                            daemon: short_name.clone(),
+                            path: path.to_path_buf(),
+                        }
+                        .into());
+                    }
+                    Some(_) => {}
+                }
+            }
+
             let daemon = PitchforkTomlDaemon {
                 run: raw_daemon.run,
                 auto: raw_daemon.auto,
@@ -2046,9 +2068,11 @@ impl PitchforkToml {
 /// Configuration for a single daemon (internal representation with DaemonId)
 #[derive(Debug, Clone, JsonSchema, Default)]
 pub struct PitchforkTomlDaemon {
-    /// The command to run. Prepend with 'exec' to avoid shell process overhead.
+    /// The command to run: a command line for the shell, or an array of a
+    /// program and its arguments to start without a shell. In the string
+    /// form, prepend 'exec' to avoid shell process overhead.
     #[schemars(example = example_run_command())]
-    pub run: String,
+    pub run: RunCommand,
     /// Automatic start/stop behavior based on shell hooks
     #[schemars(default)]
     pub auto: Vec<PitchforkTomlAuto>,
@@ -2252,7 +2276,8 @@ impl PitchforkTomlDaemon {
         RunOptions {
             id: id.clone(),
             cmd,
-            run: Some(self.run.clone()),
+            run: self.run.shell_script().map(str::to_string),
+            no_shell: self.run.is_argv(),
             force: false,
             shell_pid: None,
             dir: Dir(dir),
@@ -2312,6 +2337,105 @@ fn example_run_command() -> &'static str {
     "exec node server.js"
 }
 
+/// A daemon's `run`: a command line for the shell, or a program and its
+/// arguments to start without one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum RunCommand {
+    /// A command line, passed verbatim to the shell (`general.shell`, or
+    /// `general.windows_shell` on Windows).
+    Shell(String),
+    /// A program and its arguments, started directly. No shell interprets
+    /// them, so each argument reaches the program exactly as written, on
+    /// every platform.
+    Argv(Vec<String>),
+}
+
+impl Default for RunCommand {
+    fn default() -> Self {
+        Self::Shell(String::new())
+    }
+}
+
+impl From<String> for RunCommand {
+    fn from(run: String) -> Self {
+        Self::Shell(run)
+    }
+}
+
+impl From<&str> for RunCommand {
+    fn from(run: &str) -> Self {
+        Self::Shell(run.to_string())
+    }
+}
+
+impl From<Vec<String>> for RunCommand {
+    fn from(argv: Vec<String>) -> Self {
+        Self::Argv(argv)
+    }
+}
+
+impl PartialEq<str> for RunCommand {
+    fn eq(&self, other: &str) -> bool {
+        matches!(self, Self::Shell(run) if run == other)
+    }
+}
+
+impl PartialEq<&str> for RunCommand {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
+    }
+}
+
+/// The command as a user would read it: the shell form as written, the argv
+/// form quoted for a POSIX shell.
+impl std::fmt::Display for RunCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shell(run) => f.write_str(run),
+            Self::Argv(argv) => f.write_str(&shell_words::join(argv)),
+        }
+    }
+}
+
+impl RunCommand {
+    /// The command as separate words: the argv form as it is, the shell form
+    /// split the way a POSIX shell would.
+    pub fn argv(&self) -> std::result::Result<Vec<String>, shell_words::ParseError> {
+        match self {
+            Self::Shell(run) => shell_words::split(run),
+            Self::Argv(argv) => Ok(argv.clone()),
+        }
+    }
+
+    /// The command line for the shell, or `None` for the argv form.
+    pub fn shell_script(&self) -> Option<&str> {
+        match self {
+            Self::Shell(run) => Some(run),
+            Self::Argv(_) => None,
+        }
+    }
+
+    pub fn is_argv(&self) -> bool {
+        matches!(self, Self::Argv(_))
+    }
+
+    /// Apply `f` to the command line, or to each argument of the argv form.
+    pub fn try_map<E>(
+        &self,
+        mut f: impl FnMut(&str) -> std::result::Result<String, E>,
+    ) -> std::result::Result<Self, E> {
+        Ok(match self {
+            Self::Shell(run) => Self::Shell(f(run)?),
+            Self::Argv(argv) => Self::Argv(
+                argv.iter()
+                    .map(|arg| f(arg))
+                    .collect::<std::result::Result<_, _>>()?,
+            ),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2346,7 +2470,7 @@ user = "postgres"
         pt.daemons.insert(
             DaemonId::new("test-project", "api"),
             PitchforkTomlDaemon {
-                run: "node server.js".to_string(),
+                run: "node server.js".into(),
                 user: Some("postgres".to_string()),
                 ..PitchforkTomlDaemon::default()
             },
@@ -2363,6 +2487,118 @@ user = "postgres"
             .get(&DaemonId::new("test-project", "api"))
             .unwrap();
         assert_eq!(daemon.user.as_deref(), Some("postgres"));
+    }
+
+    /// Arguments a shell would reinterpret, which the argv form must not.
+    fn awkward_argv() -> Vec<String> {
+        [
+            "node",
+            "my server.js",
+            "--name=\"a b\"",
+            "it's",
+            "a&b",
+            "%PATH%",
+            "$HOME",
+        ]
+        .map(str::to_string)
+        .to_vec()
+    }
+
+    #[test]
+    fn test_run_array_parses_and_starts_without_a_shell() {
+        let pt = PitchforkToml::parse_str(
+            r#"
+[daemons.api]
+run = ["node", "my server.js", "--name=\"a b\"", "it's", "a&b", "%PATH%", "$HOME"]
+"#,
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap();
+
+        let id = DaemonId::new("my-project", "api");
+        let daemon = pt.daemons.get(&id).unwrap();
+        assert_eq!(daemon.run, RunCommand::Argv(awkward_argv()));
+
+        let opts = daemon.to_run_options(&id, daemon.run.argv().unwrap());
+        assert_eq!(opts.cmd, awkward_argv());
+        assert!(opts.no_shell);
+        assert_eq!(opts.run, None);
+    }
+
+    #[test]
+    fn test_run_string_still_goes_through_the_shell() {
+        let pt = PitchforkToml::parse_str(
+            "[daemons.api]\nrun = \"exec node server.js\"\n",
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap();
+
+        let id = DaemonId::new("my-project", "api");
+        let daemon = pt.daemons.get(&id).unwrap();
+        let opts = daemon.to_run_options(&id, daemon.run.argv().unwrap());
+        assert!(!opts.no_shell);
+        assert_eq!(opts.run.as_deref(), Some("exec node server.js"));
+    }
+
+    #[test]
+    fn test_run_array_write_roundtrip() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        let mut pt = PitchforkToml::new(path.clone());
+        pt.namespace = Some("test-project".to_string());
+        let id = DaemonId::new("test-project", "api");
+        pt.daemons.insert(
+            id.clone(),
+            PitchforkTomlDaemon {
+                run: RunCommand::Argv(awkward_argv()),
+                ..PitchforkTomlDaemon::default()
+            },
+        );
+        pt.daemons.insert(
+            DaemonId::new("test-project", "worker"),
+            PitchforkTomlDaemon {
+                run: "exec ./worker --queue \"a b\"".into(),
+                ..PitchforkTomlDaemon::default()
+            },
+        );
+
+        pt.write().unwrap();
+
+        let parsed = PitchforkToml::read(&path).unwrap();
+        assert_eq!(parsed.daemons[&id].run, RunCommand::Argv(awkward_argv()));
+        assert_eq!(
+            parsed.daemons[&DaemonId::new("test-project", "worker")].run,
+            "exec ./worker --queue \"a b\""
+        );
+    }
+
+    #[test]
+    fn test_run_array_must_name_a_program() {
+        let err = PitchforkToml::parse_str(
+            "[daemons.api]\nrun = []\n",
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap_err();
+        assert!(
+            err.chain()
+                .any(|cause| cause.to_string().contains("empty run array")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_run_array_rejects_exec() {
+        let err = PitchforkToml::parse_str(
+            "[daemons.api]\nrun = [\"exec\", \"node\", \"server.js\"]\n",
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap_err();
+        assert!(
+            err.chain().any(|cause| cause
+                .to_string()
+                .contains("starts its run array with \"exec\"")),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -2591,7 +2827,7 @@ dir = "~/projects/web"
 
         // Write via PitchforkToml::write() — should invalidate cache.
         let mut pt = PitchforkToml::read(&config_path).unwrap();
-        pt.daemons.get_mut(&daemon_id).unwrap().run = "echo v3".to_string();
+        pt.daemons.get_mut(&daemon_id).unwrap().run = "echo v3".into();
         // write() needs the path set and namespace match
         let _ = pt.write();
 

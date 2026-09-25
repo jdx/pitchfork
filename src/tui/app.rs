@@ -8,7 +8,7 @@ use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{
     CronRetrigger, HealthCmd, HealthHttp, HealthPort, PitchforkToml, PitchforkTomlAuto,
     PitchforkTomlCron, PitchforkTomlDaemon, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry,
-    namespace_from_path,
+    RunCommand, namespace_from_path,
 };
 use crate::procs::{PROCS, ProcessStats};
 use crate::settings::settings;
@@ -354,6 +354,10 @@ pub struct EditorState {
     /// oneshot daemon through the editor would silently turn it back into a
     /// long-running service.
     preserved_oneshot: Option<bool>,
+    /// The argv form of `run`, which the single-line field cannot hold. Saving
+    /// with the field unchanged keeps it; editing the text makes it a shell
+    /// command line.
+    preserved_run_argv: Option<RunCommand>,
     /// Preserved ready_http statuses (no form UI yet)
     preserved_ready_http_status: Option<Vec<u16>>,
     /// Preserved ready_http timeout (no form UI yet)
@@ -383,6 +387,7 @@ impl EditorState {
             scroll_offset: 0,
             preserved_ready_cmd: None,
             preserved_oneshot: None,
+            preserved_run_argv: None,
             preserved_ready_http_status: None,
             preserved_ready_http_timeout: None,
             preserved_ready_output_timeout: None,
@@ -408,6 +413,7 @@ impl EditorState {
             scroll_offset: 0,
             preserved_ready_cmd: config.ready_cmd.clone(),
             preserved_oneshot: config.oneshot,
+            preserved_run_argv: config.run.is_argv().then(|| config.run.clone()),
             preserved_ready_http_status: config
                 .ready_http
                 .as_ref()
@@ -522,7 +528,7 @@ impl EditorState {
 
         for field in &mut fields {
             match field.name {
-                "run" => field.value = FormFieldValue::Text(config.run.clone()),
+                "run" => field.value = FormFieldValue::Text(config.run.to_string()),
                 "dir" => field.value = FormFieldValue::OptionalText(config.dir.clone()),
                 "env" => {
                     field.value = FormFieldValue::StringList(
@@ -619,7 +625,12 @@ impl EditorState {
 
         for field in &self.fields {
             match (field.name, &field.value) {
-                ("run", FormFieldValue::Text(s)) => config.run = s.clone(),
+                ("run", FormFieldValue::Text(s)) => {
+                    config.run = match &self.preserved_run_argv {
+                        Some(argv) if argv.to_string() == *s => argv.clone(),
+                        _ => s.clone().into(),
+                    };
+                }
                 ("dir", FormFieldValue::OptionalText(s)) => config.dir = s.clone(),
                 ("env", FormFieldValue::StringList(v)) => {
                     if v.is_empty() {

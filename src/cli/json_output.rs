@@ -112,7 +112,8 @@ impl From<LogEntry> for JsonLogEntry {
 #[derive(Serialize)]
 pub struct JsonDaemonConfigEntry {
     pub id: String,
-    pub run: String,
+    /// As written in the config: a string, or an array for the argv form.
+    pub run: crate::pitchfork_toml::RunCommand,
 }
 
 #[derive(Serialize)]

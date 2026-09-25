@@ -66,6 +66,9 @@ pub(crate) struct UpsertDaemonOpts {
     pub dir: Option<PathBuf>,
     pub cmd: Option<Vec<String>>,
     pub run: Option<String>,
+    /// Start `cmd` directly, without a shell. `None` inherits the existing
+    /// record's value, like `oneshot`.
+    pub no_shell: Option<bool>,
     pub autostop: bool,
     /// Run-to-completion task rather than a long-running service.
     /// `None` inherits the existing record's value, so a status-only upsert
@@ -165,6 +168,7 @@ impl UpsertDaemonOpts {
             o.dir = Some(opts.dir.0.clone());
             o.cmd = Some(opts.cmd.clone());
             o.run = opts.run.clone();
+            o.no_shell = Some(opts.no_shell);
             o.autostop = opts.autostop;
             o.oneshot = Some(opts.oneshot);
             o.cron_schedule = opts.cron_schedule.clone();
@@ -333,7 +337,16 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.is_some_and(|d| d.oneshot)),
             dir: opts.dir.or(existing.and_then(|d| d.dir.clone())),
             cmd: opts.cmd.or(existing.and_then(|d| d.cmd.clone())),
-            run: opts.run.or(existing.and_then(|d| d.run.clone())),
+            // A start in the argv form has no command line, and must not
+            // inherit the one a shell-form run left behind.
+            run: if opts.no_shell == Some(true) {
+                None
+            } else {
+                opts.run.or(existing.and_then(|d| d.run.clone()))
+            },
+            no_shell: opts
+                .no_shell
+                .unwrap_or_else(|| existing.is_some_and(|d| d.no_shell)),
             cron_schedule: opts
                 .cron_schedule
                 .or(existing.and_then(|d| d.cron_schedule.clone())),

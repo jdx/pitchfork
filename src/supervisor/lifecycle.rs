@@ -289,6 +289,28 @@ fn terminal_exit_state(
 /// failure to anyone waiting on it. Anything else — a failure above all — is
 /// replaced by the stop, so the retry checker does not carry on with a task
 /// the user has stopped.
+/// Program and arguments to spawn for `words` — the daemon's program followed
+/// by its arguments — run through `mise x` when `mise_bin` is given.
+///
+/// Each word stays one argument: mise hands everything after `--` to the
+/// program as it received it.
+fn launch_command(words: Vec<String>, mise_bin: Option<&std::path::Path>) -> (String, Vec<String>) {
+    match mise_bin {
+        Some(mise_bin) => {
+            let mut args = vec!["x".to_string(), "--".to_string()];
+            args.extend(words);
+            (mise_bin.to_string_lossy().to_string(), args)
+        }
+        None => {
+            let mut words = words.into_iter();
+            // Never empty: a shell resolves to at least its program, and an
+            // empty argv is refused before this is reached.
+            let program = words.next().unwrap_or_default();
+            (program, words.collect())
+        }
+    }
+}
+
 fn stop_keeps_finalized_status(status: &DaemonStatus) -> bool {
     status.is_completed()
 }
@@ -917,47 +939,53 @@ impl Supervisor {
             )
         };
 
-        // Resolve the shell for this platform into program + args. The run
-        // script is passed verbatim as the final argument, avoiding the lossy
-        // split->join round-trip that previously mangled $VAR/glob expansion.
-        let shell_parts = match resolve_shell() {
-            Ok(parts) => parts,
-            Err(error) => return Ok(IpcResponse::DaemonFailed { error }),
-        };
-        let (shell_program, shell_args) = shell_parts.split_first().unwrap();
-
-        // Use the original run string verbatim; fall back to joining cmd for
-        // ad-hoc commands (e.g. `pitchfork run -- cmd args`) that have no run string.
-        // We don't prepend `exec` because it breaks compound commands (e.g. `exec a && b`
-        // silently drops `b`). Users can add `exec` themselves in the run string.
-        let run_script = opts
-            .run
-            .clone()
-            .unwrap_or_else(|| shell_words::join(&original_cmd));
-
-        let (program, args) = if opts.mise.unwrap_or(settings().general.mise) {
-            match settings().resolve_mise_bin() {
-                Some(mise_bin) => {
-                    let mise_bin_str = mise_bin.to_string_lossy().to_string();
-                    info!("daemon {id}: wrapping command with mise ({mise_bin_str})");
-                    let mut args = vec!["x".to_string(), "--".to_string()];
-                    args.push(shell_program.clone());
-                    args.extend(shell_args.iter().cloned());
-                    args.push(run_script);
-                    (mise_bin_str, args)
-                }
-                None => {
-                    warn!("daemon {id}: mise=true but mise binary not found, running without mise");
-                    let mut args: Vec<String> = shell_args.to_vec();
-                    args.push(run_script);
-                    (shell_program.clone(), args)
-                }
+        // The program and arguments that start the daemon, before any mise
+        // wrapping.
+        let words = if opts.no_shell {
+            // The argv form of `run`: started as written, with no shell to
+            // reinterpret quotes, `%`, `&` or anything else in the arguments.
+            if original_cmd.is_empty() {
+                return Ok(IpcResponse::DaemonFailed {
+                    error: format!("daemon {id} has an empty run command"),
+                });
             }
+            original_cmd.clone()
         } else {
-            let mut args: Vec<String> = shell_args.to_vec();
-            args.push(run_script);
-            (shell_program.clone(), args)
+            // Resolve the shell for this platform into program + args. The run
+            // script is passed verbatim as the final argument, avoiding the lossy
+            // split->join round-trip that previously mangled $VAR/glob expansion.
+            let mut words = match resolve_shell() {
+                Ok(parts) => parts,
+                Err(error) => return Ok(IpcResponse::DaemonFailed { error }),
+            };
+            // Use the original run string verbatim; fall back to joining cmd for
+            // ad-hoc commands (e.g. `pitchfork run -- cmd args`) that have no run string.
+            // We don't prepend `exec` because it breaks compound commands (e.g. `exec a && b`
+            // silently drops `b`). Users can add `exec` themselves in the run string.
+            words.push(
+                opts.run
+                    .clone()
+                    .unwrap_or_else(|| shell_words::join(&original_cmd)),
+            );
+            words
         };
+
+        let mise_bin = if opts.mise.unwrap_or(settings().general.mise) {
+            let mise_bin = settings().resolve_mise_bin();
+            if mise_bin.is_none() {
+                warn!("daemon {id}: mise=true but mise binary not found, running without mise");
+            }
+            mise_bin
+        } else {
+            None
+        };
+        if let Some(mise_bin) = &mise_bin {
+            info!(
+                "daemon {id}: wrapping command with mise ({})",
+                mise_bin.display()
+            );
+        }
+        let (program, args) = launch_command(words, mise_bin.as_deref());
         #[cfg(unix)]
         let run_identity = match resolve_effective_run_identity(opts.user.as_deref()) {
             Ok(identity) => identity,
@@ -3650,7 +3678,7 @@ mod ready_check_tests {
             timeout: Some(Duration::from_secs(5)),
         };
         let cmd = ReadyCmd {
-            run: "true".to_string(),
+            run: "true".into(),
             timeout: Some(Duration::from_secs(5)),
         };
 
@@ -3721,5 +3749,38 @@ mod ready_check_tests {
             4003
         );
         assert_eq!(resolve_configured_ready_port(8080, &[3000], &[3004]), 8080);
+    }
+}
+
+#[cfg(test)]
+mod launch_command_tests {
+    use super::launch_command;
+
+    fn words(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn starts_the_first_word_with_the_rest_as_arguments() {
+        let argv = words(&["node", "my server.js", "--name=\"a b\"", "&", "%PATH%"]);
+        assert_eq!(
+            launch_command(argv, None),
+            (
+                "node".to_string(),
+                words(&["my server.js", "--name=\"a b\"", "&", "%PATH%"])
+            )
+        );
+    }
+
+    #[test]
+    fn mise_receives_every_word_after_the_separator() {
+        let argv = words(&["node", "my server.js", "'single'"]);
+        let mise = std::path::Path::new("/opt/mise/bin/mise");
+        let (program, args) = launch_command(argv, Some(mise));
+        assert_eq!(program, mise.to_string_lossy());
+        assert_eq!(
+            args,
+            words(&["x", "--", "node", "my server.js", "'single'"])
+        );
     }
 }

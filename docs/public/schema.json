@@ -640,8 +640,8 @@
           "default": 0
         },
         "run": {
-          "description": "The command to run. Prepend with 'exec' to avoid shell process overhead.",
-          "type": "string",
+          "description": "The command to run: a command line for the shell, or an array of a\nprogram and its arguments to start without a shell. In the string\nform, prepend 'exec' to avoid shell process overhead.",
+          "$ref": "#/$defs/RunCommand",
           "examples": [
             "exec node server.js"
           ]
@@ -1001,6 +1001,22 @@
         {
           "type": "integer",
           "minimum": 0
+        }
+      ]
+    },
+    "RunCommand": {
+      "description": "A daemon's `run`: a command line for the shell, or a program and its\narguments to start without one.",
+      "anyOf": [
+        {
+          "description": "A command line, passed verbatim to the shell (`general.shell`, or\n`general.windows_shell` on Windows).",
+          "type": "string"
+        },
+        {
+          "description": "A program and its arguments, started directly. No shell interprets\nthem, so each argument reaches the program exactly as written, on\nevery platform.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       ]
     },

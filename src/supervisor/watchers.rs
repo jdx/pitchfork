@@ -557,7 +557,7 @@ impl Supervisor {
         };
 
         for (id, d) in to_register {
-            let cmd = match shell_words::split(&d.run) {
+            let cmd = match d.run.argv() {
                 Ok(cmd) => cmd,
                 Err(e) => {
                     error!("failed to parse command for cron daemon {id}: {e}");

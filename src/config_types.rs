@@ -2235,7 +2235,7 @@ health_http = { url = "http://localhost:3000/health", status = [200, 401], inter
     fn test_health_serialize_roundtrip() {
         let daemon = TestDaemon {
             health_cmd: Some(HealthCmd {
-                run: "curl -f http://localhost:3000/health".to_string(),
+                run: "curl -f http://localhost:3000/health".into(),
                 interval: Some(Duration::from_secs(5)),
                 timeout: None,
                 retries: Some(2),

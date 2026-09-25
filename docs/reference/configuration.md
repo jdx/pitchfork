@@ -182,6 +182,19 @@ run = "cd /app && exec node server.js"
 ```
 :::
 
+`run` can also be an array: the program to start, followed by its arguments. Pitchfork starts the program directly, with no shell, so each argument reaches it exactly as written. Quotes, spaces, `$`, `%`, and `&` are not interpreted, and this works the same way on every platform, whichever shell is configured.
+
+```toml
+[daemons.api]
+run = ["node", "my server.js", "--title", "API \"v2\""]
+```
+
+With no shell in between, the tracked PID is the program itself, so no `exec` is needed. An array that starts with `"exec"` is rejected, because there is no shell for `exec` to replace. Templates are rendered in each argument separately, and a rendered value stays a single argument. With `mise = true`, the program runs under `mise x --`.
+
+Shell features such as `&&`, pipes, redirection, and `$VAR` expansion are not available in the array form. Use the string form when you need them.
+
+On Windows, a program named without an extension is found only as an `.exe`. Name a batch script with its extension, such as `["npm.cmd", "run", "server"]`, or use the string form.
+
 ### `dir`
 
 Working directory for the daemon. Relative paths are resolved from the config's project directory, which is also the default working directory. Configs in `.config/` use its parent as the project directory. A value of `~` or a path beginning with `~/` is resolved from the user's home directory; other shell-style expansions are left unchanged.

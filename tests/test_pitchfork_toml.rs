@@ -88,7 +88,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
     daemons.insert(
         DaemonId::try_new(&toml_ns, "test_daemon").unwrap(),
         pitchfork_toml::PitchforkTomlDaemon {
-            run: "echo 'test'".to_string(),
+            run: "echo 'test'".into(),
             retry: pitchfork_toml::Retry(5),
             path: Some(toml_path.clone()),
             ..pitchfork_toml::PitchforkTomlDaemon::default()
@@ -1454,7 +1454,7 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
     daemons.insert(
         DaemonId::try_new(&ns, "test").unwrap(),
         pitchfork_toml::PitchforkTomlDaemon {
-            run: "echo test".to_string(),
+            run: "echo test".into(),
             ..pitchfork_toml::PitchforkTomlDaemon::default()
         },
     );
@@ -2597,12 +2597,12 @@ fn test_resolve_daemon_id_prefer_local_errors_on_global_ambiguity() -> Result<()
         .cloned()
         .expect("expected at least one daemon in merged config");
 
-    template.run = "echo global-worker".to_string();
+    template.run = "echo global-worker".into();
     merged
         .daemons
         .insert(DaemonId::try_new("global", "worker")?, template.clone());
 
-    template.run = "echo project-b-worker".to_string();
+    template.run = "echo project-b-worker".into();
     merged
         .daemons
         .insert(DaemonId::try_new("project-b", "worker")?, template);
@@ -2631,7 +2631,7 @@ fn test_resolve_daemon_id_prefer_local_errors_on_global_ambiguity() -> Result<()
         .next()
         .cloned()
         .expect("expected at least one daemon in merged config");
-    global_template.run = "echo global-adhoc-worker".to_string();
+    global_template.run = "echo global-adhoc-worker".into();
     merged.daemons.insert(
         DaemonId::try_new("global", "adhoc-worker")?,
         global_template,
