@@ -22,7 +22,7 @@ use crate::{Result, env};
 use notify::RecursiveMode;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time;
 
 type WatchConfig = (DaemonId, Vec<String>, PathBuf, WatchMode);
@@ -120,19 +120,45 @@ fn route_to_poll(
     target_poll_dirs.insert(dir);
 }
 
+/// Delay before the first retry of a failed watch registration. It doubles
+/// with each further failure, up to `WATCH_RETRY_MAX`.
+const WATCH_RETRY_BASE: Duration = Duration::from_secs(10);
+const WATCH_RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// A directory whose watch registration failed, e.g. from an exhausted inotify
+/// limit or a directory that briefly did not exist. It is retried with
+/// exponential backoff rather than on every pass: a recursive watch walks the
+/// whole tree on each attempt, which would spin on a large tree.
+#[derive(Debug)]
+struct FailedWatch {
+    mode: RecursiveMode,
+    failures: u32,
+    retry_at: Instant,
+}
+
+fn watch_retry_delay(failures: u32) -> Duration {
+    let exp = failures.saturating_sub(1).min(16);
+    WATCH_RETRY_BASE
+        .saturating_mul(1 << exp)
+        .min(WATCH_RETRY_MAX)
+}
+
 /// Unwatch directories that are no longer targeted, or whose recursive mode
-/// changed and so must be re-registered.
+/// changed and so must be re-registered. Failed registrations are dropped the
+/// same way, releasing any part of a recursive watch that was added before
+/// the failure.
 fn unwatch_removed_dirs(
     wf: &mut Option<WatchFiles>,
-    watched: &HashMap<PathBuf, RecursiveMode>,
+    watched: &mut HashMap<PathBuf, RecursiveMode>,
+    failed: &mut HashMap<PathBuf, FailedWatch>,
     target: &HashSet<PathBuf>,
     dir_modes: &HashMap<PathBuf, RecursiveMode>,
     backend: &str,
 ) {
     let Some(wf) = wf.as_mut() else { return };
-    for (dir, mode) in watched {
+    watched.retain(|dir, mode| {
         if target.contains(dir) && watch_mode_of(dir, dir_modes) == *mode {
-            continue;
+            return true;
         }
         debug!("Unwatching directory {} ({backend})", dir.display());
         if let Err(e) = wf.unwatch(dir) {
@@ -142,19 +168,37 @@ fn unwatch_removed_dirs(
                 e
             );
         }
-    }
+        false
+    });
+    failed.retain(|dir, failure| {
+        let targeted = target.contains(dir);
+        if targeted && watch_mode_of(dir, dir_modes) == failure.mode {
+            return true;
+        }
+        // Usually nothing was registered, so an error here is expected.
+        if let Err(e) = wf.unwatch(dir) {
+            trace!(
+                "No partial watch to remove for {} ({backend}): {e}",
+                dir.display()
+            );
+        }
+        // A directory whose mode changed keeps its entry so a failure of the
+        // new watch is not reported again, but is retried right away.
+        targeted
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
 fn watch_new_dirs(
     wf: &mut Option<WatchFiles>,
-    watched: &HashMap<PathBuf, RecursiveMode>,
+    watched: &mut HashMap<PathBuf, RecursiveMode>,
+    failed: &mut HashMap<PathBuf, FailedWatch>,
     target: &HashSet<PathBuf>,
     dir_modes: &HashMap<PathBuf, RecursiveMode>,
     backend: &str,
     dir_to_daemons: &HashMap<PathBuf, Vec<DaemonId>>,
     auto_dirs: Option<&HashSet<PathBuf>>,
-    failed_dirs: &mut HashSet<PathBuf>,
+    now: Instant,
 ) -> HashSet<PathBuf> {
     let Some(wf) = wf.as_mut() else {
         return HashSet::new();
@@ -166,35 +210,68 @@ fn watch_new_dirs(
         if watched.get(dir) == Some(&mode) {
             continue;
         }
+        if failed
+            .get(dir)
+            .is_some_and(|f| f.mode == mode && now < f.retry_at)
+        {
+            continue;
+        }
         let daemon_ids = daemon_ids_for_dir(dir, dir_to_daemons);
         debug!(
             "Watching {} ({mode:?}) for daemon(s) ({backend}): {}",
             dir.display(),
             daemon_ids
         );
-        if let Err(e) = wf.watch(dir, mode) {
-            let should_fallback = auto_dirs.is_some_and(|dirs| dirs.contains(dir));
-            if should_fallback {
+        match wf.watch(dir, mode) {
+            Ok(()) => {
+                if let Some(f) = failed.remove(dir) {
+                    info!(
+                        "Watching directory {} ({backend}) after {} failed attempt(s)",
+                        dir.display(),
+                        f.failures
+                    );
+                }
+                watched.insert(dir.clone(), mode);
+            }
+            Err(e) if auto_dirs.is_some_and(|dirs| dirs.contains(dir)) => {
                 warn!(
                     "{backend} watch failed for {} in auto mode, falling back to poll: {}",
                     dir.display(),
                     e
                 );
                 fallback_dirs.insert(dir.clone());
-            } else if failed_dirs.insert(dir.clone()) {
-                // Only log the first time; subsequent iterations are silenced.
-                warn!(
-                    "Failed to watch directory {} ({backend}): {}",
-                    dir.display(),
-                    e
+            }
+            Err(e) => {
+                let failures = failed.get(dir).map_or(0, |f| f.failures) + 1;
+                let delay = watch_retry_delay(failures);
+                if failures == 1 {
+                    // Only warn the first time; retries log at debug level.
+                    warn!(
+                        "Failed to watch directory {} ({backend}), retrying in {}: {}",
+                        dir.display(),
+                        humantime::format_duration(delay),
+                        e
+                    );
+                } else {
+                    debug!(
+                        "Failed to watch directory {} ({backend}) after {failures} attempts, \
+                         retrying in {}: {}",
+                        dir.display(),
+                        humantime::format_duration(delay),
+                        e
+                    );
+                }
+                failed.insert(
+                    dir.clone(),
+                    FailedWatch {
+                        mode,
+                        failures,
+                        retry_at: now + delay,
+                    },
                 );
             }
         }
     }
-
-    // Clear dirs that are no longer in target (they were unwatched) so they
-    // get a fresh log if they reappear and fail again.
-    failed_dirs.retain(|d| target.contains(d));
 
     fallback_dirs
 }
@@ -861,6 +938,8 @@ impl Supervisor {
             let mut poll_wf: Option<WatchFiles> = None;
             let mut native_creation_failed = false;
             let mut poll_creation_failed = false;
+            // Directories registered with each watcher. Only successful
+            // registrations are recorded, so failed ones are retried.
             let mut watched_native_dirs: HashMap<PathBuf, RecursiveMode> = HashMap::new();
             let mut watched_poll_dirs: HashMap<PathBuf, RecursiveMode> = HashMap::new();
             // Directories that previously failed native watch in auto mode and
@@ -875,10 +954,10 @@ impl Supervisor {
                 DaemonId,
                 (Vec<String>, HashMap<PathBuf, RecursiveMode>),
             > = HashMap::new();
-            // Dirs for which wf.watch() has already failed; suppresses repeated
-            // warn-level logs on every loop iteration.
-            let mut failed_native_watch_dirs: HashSet<PathBuf> = HashSet::new();
-            let mut failed_poll_watch_dirs: HashSet<PathBuf> = HashSet::new();
+            // Dirs for which wf.watch() failed, retried with backoff. Also
+            // suppresses repeated warn-level logs while the failure persists.
+            let mut failed_native_watch_dirs: HashMap<PathBuf, FailedWatch> = HashMap::new();
+            let mut failed_poll_watch_dirs: HashMap<PathBuf, FailedWatch> = HashMap::new();
 
             info!("File watcher started");
 
@@ -1009,7 +1088,8 @@ impl Supervisor {
 
                 unwatch_removed_dirs(
                     &mut native_wf,
-                    &watched_native_dirs,
+                    &mut watched_native_dirs,
+                    &mut failed_native_watch_dirs,
                     &target_native_dirs,
                     &native_modes,
                     "native",
@@ -1037,13 +1117,14 @@ impl Supervisor {
                     if native_wf.is_some() {
                         new_fallback_dirs = watch_new_dirs(
                             &mut native_wf,
-                            &watched_native_dirs,
+                            &mut watched_native_dirs,
+                            &mut failed_native_watch_dirs,
                             &target_native_dirs,
                             &native_modes,
                             "native",
                             &dir_to_daemons,
                             Some(&auto_fallback_candidates),
-                            &mut failed_native_watch_dirs,
+                            Instant::now(),
                         );
                     } else {
                         for dir in target_native_dirs.drain() {
@@ -1054,7 +1135,6 @@ impl Supervisor {
                 }
 
                 if !new_fallback_dirs.is_empty() {
-                    target_native_dirs.retain(|d| !new_fallback_dirs.contains(d));
                     for dir in &new_fallback_dirs {
                         let mode = watch_mode_of(dir, &native_modes);
                         route_to_poll(dir.clone(), mode, &mut target_poll_dirs, &mut poll_modes);
@@ -1067,7 +1147,8 @@ impl Supervisor {
 
                 unwatch_removed_dirs(
                     &mut poll_wf,
-                    &watched_poll_dirs,
+                    &mut watched_poll_dirs,
+                    &mut failed_poll_watch_dirs,
                     &target_poll_dirs,
                     &poll_modes,
                     "poll",
@@ -1092,37 +1173,18 @@ impl Supervisor {
                         }
                     }
 
-                    if poll_wf.is_some() {
-                        let _ = watch_new_dirs(
-                            &mut poll_wf,
-                            &watched_poll_dirs,
-                            &target_poll_dirs,
-                            &poll_modes,
-                            "poll",
-                            &dir_to_daemons,
-                            None,
-                            &mut failed_poll_watch_dirs,
-                        );
-                    } else {
-                        target_poll_dirs.clear();
-                    }
+                    watch_new_dirs(
+                        &mut poll_wf,
+                        &mut watched_poll_dirs,
+                        &mut failed_poll_watch_dirs,
+                        &target_poll_dirs,
+                        &poll_modes,
+                        "poll",
+                        &dir_to_daemons,
+                        None,
+                        Instant::now(),
+                    );
                 }
-
-                // Only record dirs that were actually registered with an active watcher.
-                // If native_wf is None, nothing was registered natively — clearing
-                // target_native_dirs above ensures watched_native_dirs stays empty,
-                // so the next iteration won't skip re-registration if native recovers.
-                let with_modes =
-                    |dirs: HashSet<PathBuf>, modes: &HashMap<PathBuf, RecursiveMode>| {
-                        dirs.into_iter()
-                            .map(|d| {
-                                let mode = watch_mode_of(&d, modes);
-                                (d, mode)
-                            })
-                            .collect::<HashMap<_, _>>()
-                    };
-                watched_native_dirs = with_modes(target_native_dirs, &native_modes);
-                watched_poll_dirs = with_modes(target_poll_dirs, &poll_modes);
 
                 // Prune stale auto-fallback entries: keep a dir only if at least
                 // one of the daemon IDs that originally triggered the fallback is
@@ -1303,6 +1365,122 @@ mod tests {
                 root.join("moved/nested"),
                 root.join("moved/nested/lib.rs"),
             ]
+        );
+    }
+
+    #[test]
+    fn test_watch_retry_delay() {
+        let delays = (1..=7).map(watch_retry_delay).collect::<Vec<_>>();
+        assert_eq!(
+            delays,
+            [10, 20, 40, 80, 160, 300, 300].map(Duration::from_secs)
+        );
+        assert_eq!(watch_retry_delay(u32::MAX), WATCH_RETRY_MAX);
+    }
+
+    /// A native watch on a missing directory fails, is retried only once its
+    /// backoff has elapsed, and is recorded as watched once it succeeds.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn test_failed_watch_is_retried_with_backoff() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let dir = temp_dir.path().join("later");
+        let target = HashSet::from([dir.clone()]);
+        let modes = HashMap::new();
+        let dir_to_daemons = HashMap::new();
+        let mut wf = Some(
+            WatchFiles::new(
+                Duration::from_millis(50),
+                WatchMode::Native,
+                Duration::from_millis(50),
+            )
+            .unwrap(),
+        );
+        let mut watched = HashMap::new();
+        let mut failed = HashMap::new();
+        let mut pass = |now, watched: &mut _, failed: &mut _| {
+            watch_new_dirs(
+                &mut wf,
+                watched,
+                failed,
+                &target,
+                &modes,
+                "native",
+                &dir_to_daemons,
+                None,
+                now,
+            )
+        };
+
+        let start = Instant::now();
+        pass(start, &mut watched, &mut failed);
+        assert!(watched.is_empty());
+        assert_eq!(failed[&dir].failures, 1);
+        assert_eq!(failed[&dir].retry_at, start + WATCH_RETRY_BASE);
+
+        // Still failing: the next attempt waits twice as long.
+        pass(start + WATCH_RETRY_BASE, &mut watched, &mut failed);
+        assert_eq!(failed[&dir].failures, 2);
+        let retry_at = failed[&dir].retry_at;
+        assert_eq!(retry_at, start + WATCH_RETRY_BASE * 3);
+
+        // Not retried before the backoff elapses, even once it would succeed.
+        std::fs::create_dir(&dir).unwrap();
+        pass(retry_at - Duration::from_secs(1), &mut watched, &mut failed);
+        assert!(watched.is_empty());
+        assert_eq!(failed[&dir].failures, 2);
+
+        pass(retry_at, &mut watched, &mut failed);
+        assert_eq!(watched, HashMap::from([(dir, RecursiveMode::NonRecursive)]));
+        assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn test_unwatch_removed_dirs_drops_failed_watches() {
+        let targeted = PathBuf::from("/p/targeted");
+        let changed_mode = PathBuf::from("/p/changed");
+        let removed = PathBuf::from("/p/removed");
+        let failed_watch = |mode| FailedWatch {
+            mode,
+            failures: 3,
+            retry_at: Instant::now(),
+        };
+        let mut failed = HashMap::from([
+            (targeted.clone(), failed_watch(RecursiveMode::NonRecursive)),
+            (
+                changed_mode.clone(),
+                failed_watch(RecursiveMode::NonRecursive),
+            ),
+            (removed.clone(), failed_watch(RecursiveMode::NonRecursive)),
+        ]);
+        let target = HashSet::from([targeted.clone(), changed_mode.clone()]);
+        let modes = HashMap::from([(changed_mode.clone(), RecursiveMode::Recursive)]);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let mut wf = Some(
+            WatchFiles::new(
+                Duration::from_millis(50),
+                WatchMode::Poll,
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+
+        unwatch_removed_dirs(
+            &mut wf,
+            &mut HashMap::new(),
+            &mut failed,
+            &target,
+            &modes,
+            "poll",
+        );
+
+        // Removed targets are forgotten, so they warn again if they fail after
+        // coming back. A mode change keeps the entry for the watch_new_dirs
+        // mode check to retry at once.
+        assert_eq!(
+            failed.keys().collect::<HashSet<_>>(),
+            target.iter().collect()
         );
     }
 
