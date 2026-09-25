@@ -208,12 +208,28 @@ pub fn expand_watch_patterns(
     base_dir: &Path,
 ) -> HashMap<PathBuf, RecursiveMode> {
     let mut targets = HashMap::new();
-    for pattern in patterns.iter().flat_map(|p| expand_braces(p)) {
-        for (dir, mode) in watch_targets_for_pattern(&pattern, base_dir) {
-            insert_watch_target(&mut targets, normalize_watch_path(&dir), mode);
+    for pattern in patterns {
+        for alt in relative_alternatives(pattern) {
+            for (dir, mode) in watch_targets_for_pattern(&alt, base_dir) {
+                insert_watch_target(&mut targets, normalize_watch_path(&dir), mode);
+            }
         }
     }
     targets
+}
+
+/// Brace alternatives of `pattern`, kept relative to the base directory when
+/// `pattern` is: `{a,}/**/*.rs` must not become `/**/*.rs` and watch `/`.
+fn relative_alternatives(pattern: &str) -> Vec<String> {
+    if Path::new(pattern).is_absolute() {
+        return expand_braces(pattern);
+    }
+    expand_braces(pattern)
+        .into_iter()
+        .map(|alt| alt.trim_start_matches(['/', '\\']).to_string())
+        // e.g. a drive-prefixed alternative on Windows
+        .filter(|alt| !Path::new(alt).is_absolute())
+        .collect()
 }
 
 /// Expand `{a,b}` alternatives into separate patterns, so each is watched
@@ -672,6 +688,25 @@ mod tests {
         // Too many alternatives are left for the recursive fallback
         let many = "{a,b,c,d,e}/{a,b,c,d,e}/{a,b,c}/*.rs";
         assert_eq!(expand_braces(many), [many]);
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_alternatives_stay_relative() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir_all(base_dir.join("src/x")).unwrap();
+
+        // An empty or `/`-leading alternative must not escape to `/`
+        let dirs = expand(&["{src,}/**/*.rs", "{/src/x,lib}/*.rs"], base_dir);
+
+        assert_eq!(
+            dirs,
+            HashMap::from([
+                (canon(base_dir), RecursiveMode::Recursive),
+                (canon(&base_dir.join("src")), RecursiveMode::Recursive),
+                (canon(&base_dir.join("src/x")), RecursiveMode::NonRecursive),
+            ])
+        );
     }
 
     #[test]
