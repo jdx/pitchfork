@@ -3,6 +3,7 @@ use crate::pitchfork_toml::WatchMode;
 use globset::{GlobBuilder, GlobMatcher};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
+use notify::event::ModifyKind;
 use notify::{Config, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
 use std::collections::HashMap;
@@ -31,27 +32,35 @@ impl WatchFiles {
         let make_callback = |tx: tokio::sync::mpsc::Sender<Vec<PathBuf>>,
                              h: tokio::runtime::Handle| {
             move |res: DebounceEventResult| {
-                let tx = tx.clone();
-                h.spawn(async move {
-                    if let Ok(ev) = res {
-                        let paths = ev
-                            .into_iter()
-                            .filter(|e| {
-                                matches!(
-                                    e.kind,
-                                    EventKind::Modify(_)
-                                        | EventKind::Create(_)
-                                        | EventKind::Remove(_)
-                                )
-                            })
-                            .flat_map(|e| e.paths.clone())
-                            .unique()
-                            .collect_vec();
-                        if !paths.is_empty() {
-                            // Ignore send errors - receiver may be dropped during shutdown
-                            let _ = tx.send(paths).await;
+                let Ok(ev) = res else { return };
+                let mut paths = vec![];
+                for e in ev.iter().filter(|e| {
+                    matches!(
+                        e.kind,
+                        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                    )
+                }) {
+                    for path in &e.paths {
+                        paths.push(path.clone());
+                        // Entries created inside a new directory before it was
+                        // watched produce no events of their own, so report them.
+                        if matches!(
+                            e.kind,
+                            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+                        ) && path.is_dir()
+                        {
+                            collect_dir_entries(path, &mut paths);
                         }
                     }
+                }
+                let paths = paths.into_iter().unique().collect_vec();
+                if paths.is_empty() {
+                    return;
+                }
+                let tx = tx.clone();
+                h.spawn(async move {
+                    // Ignore send errors - receiver may be dropped during shutdown
+                    let _ = tx.send(paths).await;
                 });
             }
         };
@@ -104,6 +113,20 @@ impl WatchFiles {
             WatchFilesBackend::Native(debouncer) => debouncer.unwatch(path).into_diagnostic(),
             WatchFilesBackend::Poll(debouncer) => debouncer.unwatch(path).into_diagnostic(),
         }
+    }
+}
+
+/// Recursively collect every entry below `dir`, without following symlinks.
+fn collect_dir_entries(dir: &Path, paths: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_dir_entries(&path, paths);
+        }
+        paths.push(path);
     }
 }
 
@@ -515,6 +538,28 @@ mod tests {
                 (canon(base_dir), RecursiveMode::NonRecursive),
                 (canon(&base_dir.join("config")), RecursiveMode::NonRecursive),
             ])
+        );
+    }
+
+    #[test]
+    fn test_collect_dir_entries() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().join("new");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("a.toml"), "").unwrap();
+        fs::write(dir.join("nested/b.toml"), "").unwrap();
+
+        let mut paths = vec![];
+        collect_dir_entries(&dir, &mut paths);
+        paths.sort();
+
+        assert_eq!(
+            paths,
+            vec![
+                dir.join("a.toml"),
+                dir.join("nested"),
+                dir.join("nested/b.toml"),
+            ]
         );
     }
 

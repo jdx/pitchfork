@@ -185,6 +185,49 @@ EOF
   pitchfork stop glob_watch_test
 }
 
+@test "file created with a new matching directory triggers restart" {
+  local http_script port
+  http_script="$(script_path http_server.py)"
+  port=19196
+  kill_port "$port"
+
+  create_pitchfork_toml <<EOF
+[daemons.new_dir_watch_test]
+run = "python3 -u $http_script 0 $port"
+watch = ["crates/*/Cargo.toml"]
+watch_mode = "native"
+ready_port = $port
+EOF
+
+  mkdir -p crates
+
+  run pitchfork start new_dir_watch_test
+  assert_success
+  wait_for_status new_dir_watch_test running
+
+  sleep 2
+  local original_pid new_pid current_pid
+  original_pid="$(get_daemon_pid new_dir_watch_test)"
+  [[ -n "$original_pid" ]]
+
+  # Only crates/ is watched, so the file must be found via its new directory
+  mkdir crates/new && touch crates/new/Cargo.toml
+
+  new_pid="$original_pid"
+  for _ in $(seq 1 20); do
+    current_pid="$(get_daemon_pid new_dir_watch_test)"
+    if [[ -n "$current_pid" && "$current_pid" != "$original_pid" ]]; then
+      new_pid="$current_pid"
+      break
+    fi
+    sleep 2
+  done
+  [[ "$new_pid" != "$original_pid" ]]
+  wait_for_status new_dir_watch_test running
+
+  pitchfork stop new_dir_watch_test
+}
+
 # ============================================================================
 # Relative watch paths
 # ============================================================================
