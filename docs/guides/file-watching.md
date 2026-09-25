@@ -45,6 +45,12 @@ watch = ["api/server.js", "api/src/**/*.js"]
 Keep patterns narrow enough to avoid build output, log files, `node_modules`,
 and `target`. A daemon that writes to its own watched files can restart repeatedly.
 
+Only `**` needs a recursive watch, which covers every directory below the part
+of the pattern before it. `src/**/*.js` watches the `src` tree, while `**/*.js`
+watches the whole project, including `.git` and `node_modules`. Other patterns
+watch only the directories they can match, so `package.json` watches the project
+directory alone.
+
 ## Native notifications or polling
 
 ```toml
@@ -82,6 +88,10 @@ Restart the supervisor after changing its settings.
 2. Check the path relative to the config's project directory, especially with `dir`.
 3. On a remote mount, try `watch_mode = "poll"` and restart the daemon.
 4. Inspect [supervisor logs](/troubleshooting#enable-debug-logging) for watch registration errors.
+   A directory that cannot be watched, for example after hitting the Linux
+   `fs.inotify.max_user_watches` limit, is logged once and retried with a
+   growing delay of up to 5 minutes, so raising the limit takes effect without
+   restarting the daemon.
 
 Combine watching with [ready checks](/guides/ready-checks) to verify each restart,
 and [retries](/guides/auto-restart) to recover from a failed attempt.
