@@ -139,7 +139,7 @@ Individual daemons can override this with `mise = true` or `mise = false` in the
 
 Explicit path to the mise binary
 
-By default, pitchfork searches well-known locations for the mise binary: - `~/.local/bin/mise` - `~/.cargo/bin/mise` - `/usr/local/bin/mise` - `/opt/homebrew/bin/mise`
+By default, pitchfork searches well-known locations for the mise binary: - `~/.local/bin/mise` - `~/.cargo/bin/mise` - `/usr/local/bin/mise` - `/opt/homebrew/bin/mise` - on Windows, `mise.exe` on `PATH`
 
 Set this to an absolute path if mise is installed elsewhere.
 

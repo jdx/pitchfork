@@ -177,6 +177,7 @@ pub struct SettingsGeneral {
     /// - `~/.cargo/bin/mise`
     /// - `/usr/local/bin/mise`
     /// - `/opt/homebrew/bin/mise`
+    /// - on Windows, `mise.exe` on `PATH`
     ///
     /// Set this to an absolute path if mise is installed elsewhere.
     #[usage(env = "PITCHFORK_MISE_BIN", default = "")]
@@ -1434,6 +1435,7 @@ impl Settings {
     /// - `~/.cargo/bin/mise`
     /// - `/usr/local/bin/mise`
     /// - `/opt/homebrew/bin/mise`
+    /// - on Windows, `mise.exe` on `PATH`
     ///
     /// Returns `None` if mise cannot be found.
     pub fn resolve_mise_bin(&self) -> Option<std::path::PathBuf> {
@@ -1459,7 +1461,15 @@ impl Settings {
             PathBuf::from("/opt/homebrew/bin/mise"),
         ];
 
-        candidates.into_iter().find(|p| p.is_file())
+        candidates.into_iter().find(|p| p.is_file()).or_else(|| {
+            // Windows package managers install mise to locations of their
+            // own, none of them above, so look for it on PATH instead.
+            if cfg!(windows) {
+                find_in_path("mise.exe", std::env::var_os("PATH").as_deref())
+            } else {
+                None
+            }
+        })
     }
 
     /// Resolve the shell used for daemon `run` scripts, `ready_cmd` /
@@ -1659,6 +1669,14 @@ fn shell_is_explicit(resolved: &Resolved) -> bool {
     resolved
         .origin_key("general.shell")
         .is_some_and(|origin| origin.kind != SourceKind::DEFAULTS)
+}
+
+/// The first directory of `path` (a `PATH`-style list) that holds a file
+/// called `name`.
+fn find_in_path(name: &str, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    std::env::split_paths(path?)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Resolve the shell for daemon `run` scripts, command probes and hooks from
@@ -2021,6 +2039,25 @@ impl SettingsPartial {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn find_in_path_takes_the_first_directory_that_has_the_file() {
+        let empty = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(first.path().join("mise.exe"), "").unwrap();
+        std::fs::write(second.path().join("mise.exe"), "").unwrap();
+        // A directory with the name, not a file, does not count.
+        std::fs::create_dir(empty.path().join("mise.exe")).unwrap();
+
+        let path = std::env::join_paths([empty.path(), first.path(), second.path()]).unwrap();
+        assert_eq!(
+            find_in_path("mise.exe", Some(&path)),
+            Some(first.path().join("mise.exe"))
+        );
+        assert_eq!(find_in_path("missing.exe", Some(&path)), None);
+        assert_eq!(find_in_path("mise.exe", None), None);
+    }
 
     #[test]
     fn shell_defaults() {

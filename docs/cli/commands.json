@@ -5455,7 +5455,7 @@
         "cli": [],
         "bindings": {},
         "help": "Explicit path to the mise binary",
-        "long_help": "Explicit path to the mise binary\n\nBy default, pitchfork searches well-known locations for the mise binary: - `~/.local/bin/mise` - `~/.cargo/bin/mise` - `/usr/local/bin/mise` - `/opt/homebrew/bin/mise`\n\nSet this to an absolute path if mise is installed elsewhere.",
+        "long_help": "Explicit path to the mise binary\n\nBy default, pitchfork searches well-known locations for the mise binary: - `~/.local/bin/mise` - `~/.cargo/bin/mise` - `/usr/local/bin/mise` - `/opt/homebrew/bin/mise` - on Windows, `mise.exe` on `PATH`\n\nSet this to an absolute path if mise is installed elsewhere.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
