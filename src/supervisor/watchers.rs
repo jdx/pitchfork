@@ -83,7 +83,8 @@ async fn changed_paths_with_new_subtrees(
     let found = tokio::task::spawn_blocking(move || {
         new_subdirs
             .iter()
-            .filter(|dir| dir.is_dir())
+            // A symlink moved in is not walked into its target
+            .filter(|dir| dir.symlink_metadata().is_ok_and(|m| m.is_dir()))
             .flat_map(|dir| watched_entries(dir, RecursiveMode::Recursive))
             .collect::<Vec<_>>()
     })
@@ -1264,6 +1265,41 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_changed_paths_with_new_subtrees() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let root = temp_dir.path().join("src");
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir_all(root.join("moved/nested")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(root.join("moved/nested/lib.rs"), "").unwrap();
+        std::fs::write(outside.join("other.rs"), "").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+        let watched = HashMap::from([(root.clone(), RecursiveMode::Recursive)]);
+        let events = WatchEvents {
+            paths: vec![root.join("moved"), root.join("link")],
+            created: vec![
+                root.join("moved"),
+                root.join("moved/nested"),
+                root.join("link"),
+            ],
+        };
+        let mut paths = changed_paths_with_new_subtrees(events, &watched).await;
+        paths.sort();
+
+        assert_eq!(
+            paths,
+            vec![
+                root.join("link"),
+                root.join("moved"),
+                root.join("moved/nested"),
+                root.join("moved/nested/lib.rs"),
+            ]
+        );
+    }
 
     #[test]
     fn test_outermost_paths() {
