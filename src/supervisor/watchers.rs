@@ -14,7 +14,9 @@ use crate::log_store::{ArchiveHook, LogStore, RetentionPolicy};
 use crate::pitchfork_toml::{PitchforkToml, WatchMode};
 use crate::procs::PROCS;
 use crate::settings::settings;
-use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
+use crate::watch_files::{
+    WatchFiles, expand_watch_patterns, insert_watch_target, path_matches_patterns,
+};
 use crate::{Result, env};
 use notify::RecursiveMode;
 use std::collections::{HashMap, HashSet};
@@ -48,14 +50,27 @@ fn daemon_ids_for_dir(dir: &Path, dir_to_daemons: &HashMap<PathBuf, Vec<DaemonId
         .unwrap_or_default()
 }
 
+fn watch_mode_of(dir: &Path, dir_modes: &HashMap<PathBuf, RecursiveMode>) -> RecursiveMode {
+    dir_modes
+        .get(dir)
+        .copied()
+        .unwrap_or(RecursiveMode::NonRecursive)
+}
+
+/// Unwatch directories that are no longer targeted, or whose recursive mode
+/// changed and so must be re-registered.
 fn unwatch_removed_dirs(
     wf: &mut Option<WatchFiles>,
-    watched: &HashSet<PathBuf>,
+    watched: &HashMap<PathBuf, RecursiveMode>,
     target: &HashSet<PathBuf>,
+    dir_modes: &HashMap<PathBuf, RecursiveMode>,
     backend: &str,
 ) {
     let Some(wf) = wf.as_mut() else { return };
-    for dir in watched.difference(target) {
+    for (dir, mode) in watched {
+        if target.contains(dir) && watch_mode_of(dir, dir_modes) == *mode {
+            continue;
+        }
         debug!("Unwatching directory {} ({backend})", dir.display());
         if let Err(e) = wf.unwatch(dir) {
             warn!(
@@ -67,10 +82,12 @@ fn unwatch_removed_dirs(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn watch_new_dirs(
     wf: &mut Option<WatchFiles>,
-    watched: &HashSet<PathBuf>,
+    watched: &HashMap<PathBuf, RecursiveMode>,
     target: &HashSet<PathBuf>,
+    dir_modes: &HashMap<PathBuf, RecursiveMode>,
     backend: &str,
     dir_to_daemons: &HashMap<PathBuf, Vec<DaemonId>>,
     auto_dirs: Option<&HashSet<PathBuf>>,
@@ -81,14 +98,18 @@ fn watch_new_dirs(
     };
 
     let mut fallback_dirs = HashSet::new();
-    for dir in target.difference(watched) {
+    for dir in target {
+        let mode = watch_mode_of(dir, dir_modes);
+        if watched.get(dir) == Some(&mode) {
+            continue;
+        }
         let daemon_ids = daemon_ids_for_dir(dir, dir_to_daemons);
         debug!(
-            "Watching {} for daemon(s) ({backend}): {}",
+            "Watching {} ({mode:?}) for daemon(s) ({backend}): {}",
             dir.display(),
             daemon_ids
         );
-        if let Err(e) = wf.watch(dir, RecursiveMode::Recursive) {
+        if let Err(e) = wf.watch(dir, mode) {
             let should_fallback = auto_dirs.is_some_and(|dirs| dirs.contains(dir));
             if should_fallback {
                 warn!(
@@ -116,13 +137,17 @@ fn watch_new_dirs(
 }
 
 impl Supervisor {
-    /// Get all watch configurations from the current state of daemons.
+    /// Get the watch configurations of running daemons.
+    ///
+    /// Stopped daemons are skipped: a file change would not restart them, and
+    /// their state records keep the `watch` patterns they were last started
+    /// with even after those are removed from the config.
     pub(crate) async fn get_all_watch_configs(&self) -> Vec<WatchConfig> {
         let state = self.state_file.lock().await;
         state
             .daemons
             .values()
-            .filter(|d| !d.watch.is_empty())
+            .filter(|d| !d.watch.is_empty() && d.pid.is_some() && d.status.is_running())
             .map(|d| {
                 let base_dir = d.watch_base_dir.clone().unwrap_or_else(|| env::CWD.clone());
                 (d.id.clone(), d.watch.clone(), base_dir, d.watch_mode)
@@ -767,16 +792,9 @@ impl Supervisor {
         // Collect all directories to watch
         let mut all_dirs = std::collections::HashSet::new();
         for (id, patterns, base_dir, _watch_mode) in &watch_configs {
-            match expand_watch_patterns(patterns, base_dir) {
-                Ok(dirs) => {
-                    for dir in &dirs {
-                        debug!("Watching {} for daemon {}", dir.display(), id);
-                    }
-                    all_dirs.extend(dirs);
-                }
-                Err(e) => {
-                    warn!("Failed to expand watch patterns for {id}: {e}");
-                }
+            for dir in expand_watch_patterns(patterns, base_dir).into_keys() {
+                debug!("Watching {} for daemon {}", dir.display(), id);
+                all_dirs.insert(dir);
             }
         }
 
@@ -793,8 +811,8 @@ impl Supervisor {
             let mut poll_wf: Option<WatchFiles> = None;
             let mut native_creation_failed = false;
             let mut poll_creation_failed = false;
-            let mut watched_native_dirs = HashSet::new();
-            let mut watched_poll_dirs = HashSet::new();
+            let mut watched_native_dirs: HashMap<PathBuf, RecursiveMode> = HashMap::new();
+            let mut watched_poll_dirs: HashMap<PathBuf, RecursiveMode> = HashMap::new();
             // Directories that previously failed native watch in auto mode and
             // are permanently tracked by the poll watcher. Maps dir → set of
             // daemon IDs that originally triggered the fallback, so entries for
@@ -817,30 +835,26 @@ impl Supervisor {
                 let mut required_poll_dirs = HashSet::new();
                 let mut required_auto_dirs = HashSet::new();
                 let mut dir_to_daemons: HashMap<PathBuf, Vec<DaemonId>> = HashMap::new();
+                // A directory needed recursively by any daemon is watched recursively.
+                let mut dir_modes: HashMap<PathBuf, RecursiveMode> = HashMap::new();
 
                 for (id, patterns, base_dir, watch_mode) in &watch_configs {
-                    match expand_watch_patterns(patterns, base_dir) {
-                        Ok(dirs) => {
-                            for dir in dirs {
-                                dir_to_daemons
-                                    .entry(dir.clone())
-                                    .or_default()
-                                    .push(id.clone());
-                                match watch_mode {
-                                    WatchMode::Native => {
-                                        required_native_dirs.insert(dir);
-                                    }
-                                    WatchMode::Poll => {
-                                        required_poll_dirs.insert(dir);
-                                    }
-                                    WatchMode::Auto => {
-                                        required_auto_dirs.insert(dir);
-                                    }
-                                }
+                    for (dir, mode) in expand_watch_patterns(patterns, base_dir) {
+                        insert_watch_target(&mut dir_modes, dir.clone(), mode);
+                        dir_to_daemons
+                            .entry(dir.clone())
+                            .or_default()
+                            .push(id.clone());
+                        match watch_mode {
+                            WatchMode::Native => {
+                                required_native_dirs.insert(dir);
                             }
-                        }
-                        Err(e) => {
-                            warn!("Failed to expand watch patterns for {id}: {e}");
+                            WatchMode::Poll => {
+                                required_poll_dirs.insert(dir);
+                            }
+                            WatchMode::Auto => {
+                                required_auto_dirs.insert(dir);
+                            }
                         }
                     }
                 }
@@ -879,6 +893,7 @@ impl Supervisor {
                     &mut native_wf,
                     &watched_native_dirs,
                     &target_native_dirs,
+                    &dir_modes,
                     "native",
                 );
 
@@ -906,6 +921,7 @@ impl Supervisor {
                             &mut native_wf,
                             &watched_native_dirs,
                             &target_native_dirs,
+                            &dir_modes,
                             "native",
                             &dir_to_daemons,
                             Some(&auto_only_dirs),
@@ -931,7 +947,13 @@ impl Supervisor {
                     }
                 }
 
-                unwatch_removed_dirs(&mut poll_wf, &watched_poll_dirs, &target_poll_dirs, "poll");
+                unwatch_removed_dirs(
+                    &mut poll_wf,
+                    &watched_poll_dirs,
+                    &target_poll_dirs,
+                    &dir_modes,
+                    "poll",
+                );
 
                 // Watch new poll directories
                 if !target_poll_dirs.is_empty() {
@@ -957,6 +979,7 @@ impl Supervisor {
                             &mut poll_wf,
                             &watched_poll_dirs,
                             &target_poll_dirs,
+                            &dir_modes,
                             "poll",
                             &dir_to_daemons,
                             None,
@@ -971,8 +994,16 @@ impl Supervisor {
                 // If native_wf is None, nothing was registered natively — clearing
                 // target_native_dirs above ensures watched_native_dirs stays empty,
                 // so the next iteration won't skip re-registration if native recovers.
-                watched_native_dirs = target_native_dirs;
-                watched_poll_dirs = target_poll_dirs;
+                let with_modes = |dirs: HashSet<PathBuf>| {
+                    dirs.into_iter()
+                        .map(|d| {
+                            let mode = watch_mode_of(&d, &dir_modes);
+                            (d, mode)
+                        })
+                        .collect::<HashMap<_, _>>()
+                };
+                watched_native_dirs = with_modes(target_native_dirs);
+                watched_poll_dirs = with_modes(target_poll_dirs);
 
                 // Prune stale auto-fallback entries: keep a dir only if at least
                 // one of the daemon IDs that originally triggered the fallback is

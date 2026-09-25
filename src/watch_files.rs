@@ -1,12 +1,12 @@
 use crate::Result;
 use crate::pitchfork_toml::WatchMode;
-use glob::glob;
+use globset::{GlobBuilder, GlobMatcher};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
 use notify::{Config, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap, new_debouncer_opt};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
+use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 pub struct WatchFiles {
@@ -14,9 +14,14 @@ pub struct WatchFiles {
     backend: WatchFilesBackend,
 }
 
+// `NoCache` rather than `FileIdMap`: only changed paths are needed, not rename
+// tracking, and `FileIdMap` re-walks every recursive root on each rescan. On
+// Linux that walk opens every directory, and the resulting inotify `IN_OPEN`
+// events can overflow the event queue, which triggers another rescan and spins
+// the watcher thread indefinitely on large trees.
 enum WatchFilesBackend {
-    Native(Debouncer<RecommendedWatcher, FileIdMap>),
-    Poll(Debouncer<PollWatcher, FileIdMap>),
+    Native(Debouncer<RecommendedWatcher, NoCache>),
+    Poll(Debouncer<PollWatcher, NoCache>),
 }
 
 impl WatchFiles {
@@ -57,7 +62,7 @@ impl WatchFiles {
                     duration,
                     None,
                     make_callback(tx.clone(), h.clone()),
-                    FileIdMap::new(),
+                    NoCache::new(),
                     Config::default(),
                 )
                 .into_diagnostic()?,
@@ -67,7 +72,7 @@ impl WatchFiles {
                     duration,
                     None,
                     make_callback(tx.clone(), h.clone()),
-                    FileIdMap::new(),
+                    NoCache::new(),
                     Config::default().with_poll_interval(poll_interval),
                 )
                 .into_diagnostic()?,
@@ -150,83 +155,130 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     }
 }
 
-/// Expand glob patterns to actual file paths.
+/// Expand watch patterns to the directories that must be watched to see every
+/// change they can match, and how each directory must be watched.
 /// Patterns are resolved relative to base_dir.
-/// Returns unique directories that need to be watched.
-pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<HashSet<PathBuf>> {
-    let mut dirs_to_watch = HashSet::new();
-
+///
+/// Recursive watches are only used where a `**` component requires one, since
+/// they register a watch on every directory below the root. Otherwise each
+/// directory level the pattern spans is watched non-recursively, which also
+/// notices newly created directories that match; the supervisor re-expands the
+/// patterns after every batch of events so new directories get watched.
+pub fn expand_watch_patterns(
+    patterns: &[String],
+    base_dir: &Path,
+) -> HashMap<PathBuf, RecursiveMode> {
+    let mut targets = HashMap::new();
     for pattern in patterns {
-        // Strip leading "./" from patterns to handle relative path prefixes
-        let normalized_pattern = pattern.strip_prefix("./").unwrap_or(pattern);
-
-        // Make the pattern absolute by joining with base_dir
-        let full_pattern = if Path::new(normalized_pattern).is_absolute() {
-            normalize_path_for_glob(normalized_pattern)
-        } else {
-            normalize_path_for_glob(&base_dir.join(normalized_pattern).to_string_lossy())
-        };
-
-        // Expand the glob pattern
-        match glob(&full_pattern) {
-            Ok(paths) => {
-                for entry in paths.flatten() {
-                    // Watch the parent directory of each matched file
-                    // This allows us to detect new files that match the pattern
-                    if let Some(parent) = entry.parent() {
-                        dirs_to_watch.insert(normalize_watch_path(parent));
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("Invalid glob pattern '{pattern}': {e}");
-            }
-        }
-
-        // For patterns with wildcards, watch the base directory (before the wildcard)
-        // For non-wildcard patterns, watch the parent directory of the specific file
-        // This ensures we catch new files even if they don't exist at startup
-        if normalized_pattern.contains('*') {
-            // Find the first directory without wildcards
-            // Normalize to use forward slashes for cross-platform compatibility
-            let normalized_pattern_str = normalize_path_for_glob(normalized_pattern);
-            let parts: Vec<&str> = normalized_pattern_str.split('/').collect();
-            let mut base = base_dir.to_path_buf();
-            for part in parts {
-                if part.contains('*') {
-                    break;
-                }
-                base = base.join(part);
-            }
-            // Watch the base directory if it exists, otherwise fall back to base_dir
-            // This ensures we can detect when the directory is created
-            let dir_to_watch = if base.is_dir() {
-                base
-            } else {
-                base_dir.to_path_buf()
-            };
-            dirs_to_watch.insert(normalize_watch_path(&dir_to_watch));
-        } else {
-            // Non-wildcard pattern (specific file like "package.json")
-            // Always watch the parent directory, even if file doesn't exist yet
-            let full_path = if Path::new(normalized_pattern).is_absolute() {
-                PathBuf::from(normalized_pattern)
-            } else {
-                base_dir.join(normalized_pattern)
-            };
-            if let Some(parent) = full_path.parent() {
-                // Watch the parent if it exists (or base_dir as fallback)
-                let dir_to_watch = if parent.is_dir() {
-                    parent.to_path_buf()
-                } else {
-                    base_dir.to_path_buf()
-                };
-                dirs_to_watch.insert(normalize_watch_path(&dir_to_watch));
-            }
+        for (dir, mode) in watch_targets_for_pattern(pattern, base_dir) {
+            insert_watch_target(&mut targets, normalize_watch_path(&dir), mode);
         }
     }
+    targets
+}
 
-    Ok(dirs_to_watch)
+/// Add a watch target, upgrading an existing entry to recursive if needed.
+pub fn insert_watch_target(
+    targets: &mut HashMap<PathBuf, RecursiveMode>,
+    dir: PathBuf,
+    mode: RecursiveMode,
+) {
+    let entry = targets.entry(dir).or_insert(mode);
+    if mode == RecursiveMode::Recursive {
+        *entry = RecursiveMode::Recursive;
+    }
+}
+
+fn watch_targets_for_pattern(pattern: &str, base_dir: &Path) -> Vec<(PathBuf, RecursiveMode)> {
+    // Strip leading "./" from patterns to handle relative path prefixes
+    let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+    let full_path = base_dir.join(pattern);
+    let mut components = full_path.components().collect_vec();
+    let Some(file_part) = components.pop() else {
+        return vec![];
+    };
+
+    // Directories before the first glob component are fixed.
+    let mut dir_parts = components.into_iter().peekable();
+    let mut literal_dir = PathBuf::new();
+    while let Some(part) = dir_parts.next_if(|c| !is_glob_component(c)) {
+        literal_dir.push(part);
+    }
+    if !literal_dir.is_dir() {
+        // Watch the nearest existing ancestor so creating the missing
+        // directory wakes the watcher, which then re-expands the pattern.
+        return literal_dir
+            .ancestors()
+            .find(|p| p.is_dir())
+            .map(|p| vec![(p.to_path_buf(), RecursiveMode::NonRecursive)])
+            .unwrap_or_default();
+    }
+
+    let mut targets = vec![];
+    let mut current = vec![literal_dir];
+    for part in dir_parts {
+        let part = part.as_os_str().to_string_lossy();
+        if part.contains("**") {
+            targets.extend(current.into_iter().map(|d| (d, RecursiveMode::Recursive)));
+            return targets;
+        }
+        let Some(matcher) = component_matcher(&part, pattern) else {
+            return targets;
+        };
+        // Watch this level too, so a newly created matching directory is seen.
+        targets.extend(
+            current
+                .iter()
+                .map(|d| (d.clone(), RecursiveMode::NonRecursive)),
+        );
+        current = current
+            .iter()
+            .flat_map(|d| matching_subdirs(d, &matcher))
+            .collect();
+    }
+
+    let mode = if file_part.as_os_str().to_string_lossy().contains("**") {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    targets.extend(current.into_iter().map(|d| (d, mode)));
+    targets
+}
+
+fn is_glob_component(component: &Component) -> bool {
+    component
+        .as_os_str()
+        .to_string_lossy()
+        .contains(['*', '?', '[', '{'])
+}
+
+/// Build a matcher for a single path component, with the same glob semantics
+/// as `path_matches_patterns`.
+fn component_matcher(component: &str, pattern: &str) -> Option<GlobMatcher> {
+    match GlobBuilder::new(component)
+        .case_insensitive(cfg!(target_os = "windows"))
+        .literal_separator(true)
+        .build()
+    {
+        Ok(glob) => Some(glob.compile_matcher()),
+        Err(e) => {
+            log::warn!("Invalid glob pattern '{pattern}': {e}");
+            None
+        }
+    }
+}
+
+fn matching_subdirs(dir: &Path, matcher: &GlobMatcher) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+    entries
+        .flatten()
+        .filter(|e| matcher.is_match(e.file_name()))
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect()
 }
 
 /// Normalize a path string to use forward slashes for glob pattern matching.
@@ -337,45 +389,101 @@ mod tests {
         assert_eq!(normalized1, normalized2);
     }
 
+    fn canon(path: &Path) -> PathBuf {
+        normalize_watch_path(path)
+    }
+
+    fn expand(patterns: &[&str], base_dir: &Path) -> HashMap<PathBuf, RecursiveMode> {
+        let patterns = patterns.iter().map(|p| p.to_string()).collect_vec();
+        expand_watch_patterns(&patterns, base_dir)
+    }
+
     #[test]
     fn test_expand_watch_patterns_specific_file() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
+        fs::write(base_dir.join("package.json"), "{}").unwrap();
+        // A large sibling tree must not make the watch recursive
+        fs::create_dir_all(base_dir.join("node_modules/a/b")).unwrap();
 
-        // Create a test file
-        let test_file = base_dir.join("package.json");
-        fs::write(&test_file, "{}").unwrap();
+        let dirs = expand(&["package.json"], base_dir);
 
-        // Expand pattern for a specific file
-        let patterns = vec!["package.json".to_string()];
-        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
-
-        // Should watch the parent directory
-        assert_eq!(dirs.len(), 1);
-        let dir = dirs.iter().next().unwrap();
-        assert!(dir.is_absolute());
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(base_dir), RecursiveMode::NonRecursive)])
+        );
     }
 
     #[test]
-    fn test_expand_watch_patterns_glob() {
+    fn test_expand_watch_patterns_recursive_glob() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
         let subdir = base_dir.join("src");
-        fs::create_dir(&subdir).unwrap();
-
-        // Create test files in src directory
+        fs::create_dir_all(subdir.join("nested")).unwrap();
         fs::write(subdir.join("file1.rs"), "").unwrap();
-        fs::write(subdir.join("file2.rs"), "").unwrap();
+        fs::write(subdir.join("nested/file2.rs"), "").unwrap();
 
-        // Expand glob pattern
-        let patterns = vec!["src/**/*.rs".to_string()];
-        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
+        let dirs = expand(&["src/**/*.rs"], base_dir);
 
-        // Should watch the src directory
-        assert!(!dirs.is_empty());
-        for dir in &dirs {
-            assert!(dir.is_absolute());
-        }
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(&subdir), RecursiveMode::Recursive)])
+        );
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_single_level_glob() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir_all(base_dir.join("config/nested")).unwrap();
+
+        let dirs = expand(&["config/*.toml"], base_dir);
+
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(&base_dir.join("config")), RecursiveMode::NonRecursive)])
+        );
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_glob_directory_component() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir_all(base_dir.join("crates/a/deep")).unwrap();
+        fs::create_dir_all(base_dir.join("crates/b")).unwrap();
+        fs::write(base_dir.join("crates/file.toml"), "").unwrap();
+
+        let dirs = expand(&["crates/*/Cargo.toml"], base_dir);
+
+        // The glob level is watched to notice new crates, plus each match
+        assert_eq!(
+            dirs,
+            HashMap::from([
+                (canon(&base_dir.join("crates")), RecursiveMode::NonRecursive),
+                (
+                    canon(&base_dir.join("crates/a")),
+                    RecursiveMode::NonRecursive
+                ),
+                (
+                    canon(&base_dir.join("crates/b")),
+                    RecursiveMode::NonRecursive
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_recursive_wins() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir(base_dir.join("src")).unwrap();
+
+        let dirs = expand(&["src/main.rs", "src/**/*.rs"], base_dir);
+
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(&base_dir.join("src")), RecursiveMode::Recursive)])
+        );
     }
 
     #[test]
@@ -384,11 +492,30 @@ mod tests {
         let base_dir = temp_dir.path();
 
         // Pattern for a file that doesn't exist yet
-        let patterns = vec!["config.toml".to_string()];
-        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
+        let dirs = expand(&["config.toml"], base_dir);
 
-        // Should still watch the parent directory (base_dir in this case)
-        assert_eq!(dirs.len(), 1);
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(base_dir), RecursiveMode::NonRecursive)])
+        );
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_nonexistent_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir(base_dir.join("config")).unwrap();
+
+        // The nearest existing ancestor is watched until the directory appears
+        let dirs = expand(&["config/app/*.toml", "lib/**/*.ts"], base_dir);
+
+        assert_eq!(
+            dirs,
+            HashMap::from([
+                (canon(base_dir), RecursiveMode::NonRecursive),
+                (canon(&base_dir.join("config")), RecursiveMode::NonRecursive),
+            ])
+        );
     }
 
     #[test]
@@ -500,12 +627,11 @@ mod tests {
         fs::write(&test_file, "{}").unwrap();
 
         // Pattern with "./" prefix should expand correctly
-        let patterns = vec!["./config.json".to_string()];
-        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
+        let dirs = expand(&["./config.json"], base_dir);
 
-        // Should watch the parent directory
-        assert_eq!(dirs.len(), 1);
-        let dir = dirs.iter().next().unwrap();
-        assert!(dir.is_absolute());
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(base_dir), RecursiveMode::NonRecursive)])
+        );
     }
 }

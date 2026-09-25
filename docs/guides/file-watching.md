@@ -45,6 +45,12 @@ watch = ["api/server.js", "api/src/**/*.js"]
 Keep patterns narrow enough to avoid build output, log files, `node_modules`,
 and `target`. A daemon that writes to its own watched files can restart repeatedly.
 
+Only `**` needs a recursive watch, which covers every directory below the part
+of the pattern before it. `src/**/*.js` watches the `src` tree, while `**/*.js`
+watches the whole project, including `.git` and `node_modules`. Other patterns
+watch only the directories they can match, so `package.json` watches the project
+directory alone.
+
 ## Native notifications or polling
 
 ```toml
