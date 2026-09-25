@@ -220,8 +220,11 @@ pub fn expand_watch_patterns(
 
 /// Brace alternatives of `pattern`, kept relative to the base directory when
 /// `pattern` is: `{a,}/**/*.rs` must not become `/**/*.rs` and watch `/`.
+/// Patterns that start at a root (including Windows' drive-relative `\src`)
+/// are left as they are.
 fn relative_alternatives(pattern: &str) -> Vec<String> {
-    if Path::new(pattern).is_absolute() {
+    let path = Path::new(pattern);
+    if path.is_absolute() || path.has_root() {
         return expand_braces(pattern);
     }
     expand_braces(pattern)
@@ -707,6 +710,15 @@ mod tests {
                 (canon(&base_dir.join("src/x")), RecursiveMode::NonRecursive),
             ])
         );
+    }
+
+    #[test]
+    fn test_relative_alternatives() {
+        assert_eq!(relative_alternatives("{src,}/*.rs"), ["*.rs", "src/*.rs"]);
+        // Patterns starting at a root keep it
+        assert_eq!(relative_alternatives("/{a,b}.rs"), ["/b.rs", "/a.rs"]);
+        #[cfg(windows)]
+        assert_eq!(relative_alternatives(r"\src\main.rs"), [r"\src\main.rs"]);
     }
 
     #[test]
