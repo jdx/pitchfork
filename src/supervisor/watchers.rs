@@ -15,7 +15,8 @@ use crate::pitchfork_toml::{PitchforkToml, WatchMode};
 use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::watch_files::{
-    WatchFiles, expand_watch_patterns, insert_watch_target, path_matches_patterns, watched_entries,
+    WatchEvents, WatchFiles, expand_watch_patterns, insert_watch_target, path_matches_patterns,
+    watched_entries,
 };
 use crate::{Result, env};
 use notify::RecursiveMode;
@@ -55,6 +56,39 @@ fn watch_mode_of(dir: &Path, dir_modes: &HashMap<PathBuf, RecursiveMode>) -> Rec
         .get(dir)
         .copied()
         .unwrap_or(RecursiveMode::NonRecursive)
+}
+
+/// The changed paths of a batch, plus the entries of directories created or
+/// moved in below a recursive watch. Those entries produce no events of their
+/// own, and the watch target (the recursive root) stays the same, so the
+/// new-target scan does not see them either.
+async fn changed_paths_with_new_subtrees(
+    events: WatchEvents,
+    watched: &HashMap<PathBuf, RecursiveMode>,
+) -> Vec<PathBuf> {
+    let WatchEvents { mut paths, created } = events;
+    let new_subdirs = created
+        .into_iter()
+        .filter(|p| {
+            watched.iter().any(|(root, mode)| {
+                *mode == RecursiveMode::Recursive && p != root && p.starts_with(root)
+            })
+        })
+        .collect::<Vec<_>>();
+    if new_subdirs.is_empty() {
+        return paths;
+    }
+    let found = tokio::task::spawn_blocking(move || {
+        new_subdirs
+            .iter()
+            .filter(|dir| dir.is_dir())
+            .flat_map(|dir| watched_entries(dir, RecursiveMode::Recursive))
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    paths.extend(found);
+    paths
 }
 
 /// Route a directory to the poll backend, keeping the recursion it needs there.
@@ -1109,10 +1143,12 @@ impl Supervisor {
                     native_changes = async {
                         match native_wf.as_mut() {
                             Some(wf) => wf.rx.recv().await,
-                            None => std::future::pending::<Option<Vec<PathBuf>>>().await,
+                            None => std::future::pending::<Option<WatchEvents>>().await,
                         }
                     } => {
-                        if let Some(changed_paths) = native_changes {
+                        if let Some(events) = native_changes {
+                            let changed_paths =
+                                changed_paths_with_new_subtrees(events, &watched_native_dirs).await;
                             debug!("File changes detected (native): {changed_paths:?}");
                             SUPERVISOR
                                 .restart_for_changed_paths(changed_paths, &watch_configs)
@@ -1122,10 +1158,12 @@ impl Supervisor {
                     poll_changes = async {
                         match poll_wf.as_mut() {
                             Some(wf) => wf.rx.recv().await,
-                            None => std::future::pending::<Option<Vec<PathBuf>>>().await,
+                            None => std::future::pending::<Option<WatchEvents>>().await,
                         }
                     } => {
-                        if let Some(changed_paths) = poll_changes {
+                        if let Some(events) = poll_changes {
+                            let changed_paths =
+                                changed_paths_with_new_subtrees(events, &watched_poll_dirs).await;
                             debug!("File changes detected (poll): {changed_paths:?}");
                             SUPERVISOR
                                 .restart_for_changed_paths(changed_paths, &watch_configs)

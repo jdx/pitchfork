@@ -3,14 +3,25 @@ use crate::pitchfork_toml::WatchMode;
 use globset::{GlobBuilder, GlobMatcher};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
+use notify::event::ModifyKind;
 use notify::{Config, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+/// A debounced batch of file changes.
+#[derive(Debug)]
+pub struct WatchEvents {
+    /// Every path that was created, modified, or removed.
+    pub paths: Vec<PathBuf>,
+    /// Paths that were created or moved in; their contents produce no events
+    /// of their own.
+    pub created: Vec<PathBuf>,
+}
+
 pub struct WatchFiles {
-    pub rx: tokio::sync::mpsc::Receiver<Vec<PathBuf>>,
+    pub rx: tokio::sync::mpsc::Receiver<WatchEvents>,
     backend: WatchFilesBackend,
 }
 
@@ -28,11 +39,12 @@ impl WatchFiles {
     pub fn new(duration: Duration, mode: WatchMode, poll_interval: Duration) -> Result<Self> {
         let h = tokio::runtime::Handle::current();
         let (tx, rx) = tokio::sync::mpsc::channel(256);
-        let make_callback = |tx: tokio::sync::mpsc::Sender<Vec<PathBuf>>,
+        let make_callback = |tx: tokio::sync::mpsc::Sender<WatchEvents>,
                              h: tokio::runtime::Handle| {
             move |res: DebounceEventResult| {
                 let Ok(ev) = res else { return };
                 let mut paths = vec![];
+                let mut created = vec![];
                 for e in ev.iter().filter(|e| {
                     matches!(
                         e.kind,
@@ -40,15 +52,24 @@ impl WatchFiles {
                     )
                 }) {
                     paths.extend(e.paths.iter().cloned());
+                    if matches!(
+                        e.kind,
+                        EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+                    ) {
+                        created.extend(e.paths.iter().cloned());
+                    }
                 }
-                let paths = paths.into_iter().unique().collect_vec();
                 if paths.is_empty() {
                     return;
                 }
+                let events = WatchEvents {
+                    paths: paths.into_iter().unique().collect(),
+                    created: created.into_iter().unique().collect(),
+                };
                 let tx = tx.clone();
                 h.spawn(async move {
                     // Ignore send errors - receiver may be dropped during shutdown
-                    let _ = tx.send(paths).await;
+                    let _ = tx.send(events).await;
                 });
             }
         };
