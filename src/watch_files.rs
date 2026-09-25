@@ -262,7 +262,15 @@ fn watch_targets_for_pattern(pattern: &str, base_dir: &Path) -> Vec<(PathBuf, Re
             targets.extend(current.into_iter().map(|d| (d, RecursiveMode::Recursive)));
             return targets;
         }
-        let Some(matcher) = component_matcher(&part, pattern) else {
+        let Some(matcher) = component_matcher(&part) else {
+            let full_pattern = normalize_path_for_glob(&full_path.to_string_lossy());
+            match GlobBuilder::new(&full_pattern).build() {
+                // A brace or class containing `/` spans components and cannot
+                // be expanded level by level, so watch all it could match.
+                Ok(_) => targets.extend(current.into_iter().map(|d| (d, RecursiveMode::Recursive))),
+                // An invalid pattern never matches, so it needs no watch.
+                Err(e) => log::warn!("Invalid glob pattern '{pattern}': {e}"),
+            }
             return targets;
         };
         // Watch this level too, so a newly created matching directory is seen.
@@ -295,18 +303,13 @@ fn is_glob_component(component: &Component) -> bool {
 
 /// Build a matcher for a single path component, with the same glob semantics
 /// as `path_matches_patterns`.
-fn component_matcher(component: &str, pattern: &str) -> Option<GlobMatcher> {
-    match GlobBuilder::new(component)
+fn component_matcher(component: &str) -> Option<GlobMatcher> {
+    GlobBuilder::new(component)
         .case_insensitive(cfg!(target_os = "windows"))
         .literal_separator(true)
         .build()
-    {
-        Ok(glob) => Some(glob.compile_matcher()),
-        Err(e) => {
-            log::warn!("Invalid glob pattern '{pattern}': {e}");
-            None
-        }
-    }
+        .ok()
+        .map(|glob| glob.compile_matcher())
 }
 
 fn matching_subdirs(dir: &Path, matcher: &GlobMatcher) -> Vec<PathBuf> {
@@ -543,6 +546,29 @@ mod tests {
             dirs,
             HashMap::from([(canon(&base_dir.join("src")), RecursiveMode::Recursive)])
         );
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_alternatives_with_separator() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir_all(base_dir.join("src/api")).unwrap();
+        fs::create_dir(base_dir.join("lib")).unwrap();
+
+        // `{src/api,lib}` spans components, so everything below is watched
+        let dirs = expand(&["{src/api,lib}/*.rs"], base_dir);
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(base_dir), RecursiveMode::Recursive)])
+        );
+        assert!(path_matches_patterns(
+            &base_dir.join("src/api/main.rs"),
+            &["{src/api,lib}/*.rs".to_string()],
+            base_dir
+        ));
+
+        // An invalid pattern never matches, so it is not watched
+        assert!(expand(&["[z-a]/*.rs"], base_dir).is_empty());
     }
 
     #[test]
