@@ -384,10 +384,22 @@ async fn queue_piece(
 /// Length to cut `bytes` at so no character is left half-written, in whichever
 /// encoding [`decode_line`] will read the piece in.
 fn split_before_incomplete_char(bytes: &[u8]) -> usize {
-    let split = split_before_incomplete_utf8(bytes);
     #[cfg(windows)]
+    return split_before_incomplete_char_in(bytes, console_code_page());
+    #[cfg(not(windows))]
+    split_before_incomplete_utf8(bytes)
+}
+
+/// [`split_before_incomplete_char`] for a console using `code_page`.
+#[cfg(windows)]
+fn split_before_incomplete_char_in(bytes: &[u8], code_page: u32) -> usize {
+    let split = split_before_incomplete_utf8(bytes);
     if uses_code_page(&bytes[..split]) {
-        return split_before_incomplete_dbcs(bytes, console_code_page());
+        // Hold back whatever either encoding would leave unfinished. A line
+        // read in the code page can still carry UTF-8 — a stray byte decides
+        // how it is read, not what it contains — and a byte carried over to
+        // the next piece is decoded there, so holding one back loses nothing.
+        return split.min(split_before_incomplete_dbcs(bytes, code_page));
     }
     split
 }
@@ -845,6 +857,22 @@ mod tests {
         let first = super::decode_in_code_page(&line[..split], 932).unwrap();
         let rest = super::decode_in_code_page(&line[split..], 932).unwrap();
         assert_eq!(first + &rest, "aaaあ");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_line_read_in_the_code_page_keeps_an_unfinished_utf8_character() {
+        // A stray byte sends the piece to the code page, but the line ends in
+        // the first byte of "é" (0xC3 0xA9), which is a whole character in
+        // CP932. Cutting there would still split the UTF-8 character.
+        let line = b"ab\xffcd\xc3";
+        assert!(super::uses_code_page(&line[..5]));
+        assert_eq!(super::split_before_incomplete_char_in(line, 932), 5);
+        // A double-byte character left unfinished is still held back too.
+        assert_eq!(
+            super::split_before_incomplete_char_in(b"ab\xffcd\x82", 932),
+            5
+        );
     }
 
     #[cfg(windows)]
