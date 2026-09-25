@@ -208,12 +208,75 @@ pub fn expand_watch_patterns(
     base_dir: &Path,
 ) -> HashMap<PathBuf, RecursiveMode> {
     let mut targets = HashMap::new();
-    for pattern in patterns {
-        for (dir, mode) in watch_targets_for_pattern(pattern, base_dir) {
+    for pattern in patterns.iter().flat_map(|p| expand_braces(p)) {
+        for (dir, mode) in watch_targets_for_pattern(&pattern, base_dir) {
             insert_watch_target(&mut targets, normalize_watch_path(&dir), mode);
         }
     }
     targets
+}
+
+/// Expand `{a,b}` alternatives into separate patterns, so each is watched
+/// narrowly even when an alternative contains `/` (`{src/api,lib}/*.rs`).
+/// Patterns with more alternatives than is reasonable are returned as is.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    const MAX_ALTERNATIVES: usize = 64;
+    let mut expanded = vec![];
+    let mut pending = vec![pattern.to_string()];
+    while let Some(p) = pending.pop() {
+        match first_brace_group(&p) {
+            Some((start, end, alternatives)) => {
+                for alt in alternatives {
+                    pending.push(format!("{}{alt}{}", &p[..start], &p[end + 1..]));
+                }
+            }
+            None => expanded.push(p),
+        }
+        if expanded.len() + pending.len() > MAX_ALTERNATIVES {
+            return vec![pattern.to_string()];
+        }
+    }
+    expanded
+}
+
+/// Find the first top-level `{...}` group, returning the byte offsets of its
+/// braces and its comma-separated alternatives.
+fn first_brace_group(pattern: &str) -> Option<(usize, usize, Vec<&str>)> {
+    let bytes = pattern.as_bytes();
+    let (mut start, mut alt_start, mut depth) = (0, 0, 0);
+    let mut in_class = false;
+    let mut alternatives = vec![];
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            // globset treats `\` as an escape except on Windows
+            b'\\' if cfg!(not(windows)) => i += 1,
+            b']' if in_class => in_class = false,
+            _ if in_class => {}
+            b'[' => in_class = true,
+            b'{' => {
+                if depth == 0 {
+                    start = i;
+                    alt_start = i + 1;
+                }
+                depth += 1;
+            }
+            b',' if depth == 1 => {
+                alternatives.push(&pattern[alt_start..i]);
+                alt_start = i + 1;
+            }
+            b'}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    alternatives.push(&pattern[alt_start..i]);
+                    return Some((start, i, alternatives));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Add a watch target, upgrading an existing entry to recursive if needed.
@@ -555,11 +618,17 @@ mod tests {
         fs::create_dir_all(base_dir.join("src/api")).unwrap();
         fs::create_dir(base_dir.join("lib")).unwrap();
 
-        // `{src/api,lib}` spans components, so everything below is watched
+        // Each alternative is watched on its own, even across components
         let dirs = expand(&["{src/api,lib}/*.rs"], base_dir);
         assert_eq!(
             dirs,
-            HashMap::from([(canon(base_dir), RecursiveMode::Recursive)])
+            HashMap::from([
+                (
+                    canon(&base_dir.join("src/api")),
+                    RecursiveMode::NonRecursive
+                ),
+                (canon(&base_dir.join("lib")), RecursiveMode::NonRecursive),
+            ])
         );
         assert!(path_matches_patterns(
             &base_dir.join("src/api/main.rs"),
@@ -567,8 +636,42 @@ mod tests {
             base_dir
         ));
 
+        // A class spanning components can't be expanded level by level, so
+        // everything below it is watched
+        let dirs = expand(&["[a/b]/*.rs"], base_dir);
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(base_dir), RecursiveMode::Recursive)])
+        );
+
         // An invalid pattern never matches, so it is not watched
         assert!(expand(&["[z-a]/*.rs"], base_dir).is_empty());
+    }
+
+    #[test]
+    fn test_expand_braces() {
+        let mut expanded = expand_braces("{src/{a,b},lib}/*.{rs,toml}");
+        expanded.sort();
+        assert_eq!(
+            expanded,
+            [
+                "lib/*.rs",
+                "lib/*.toml",
+                "src/a/*.rs",
+                "src/a/*.toml",
+                "src/b/*.rs",
+                "src/b/*.toml",
+            ]
+        );
+
+        // Braces inside a class or escaped are literal
+        assert_eq!(expand_braces("[{]x}/*.rs"), ["[{]x}/*.rs"]);
+        #[cfg(unix)]
+        assert_eq!(expand_braces(r"\{a,b}.rs"), [r"\{a,b}.rs"]);
+
+        // Too many alternatives are left for the recursive fallback
+        let many = "{a,b,c,d,e}/{a,b,c,d,e}/{a,b,c}/*.rs";
+        assert_eq!(expand_braces(many), [many]);
     }
 
     #[test]
