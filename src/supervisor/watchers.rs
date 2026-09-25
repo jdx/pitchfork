@@ -965,14 +965,13 @@ impl Supervisor {
                     }
                 }
 
-                // Directories that are ONLY referenced by auto-mode daemons.
-                // Shared directories (also referenced by native/poll daemons) must
+                // Auto-mode directories that may fall back to polling when a native
+                // watch fails. Directories also referenced by native daemons must
                 // not be silently downgraded — the explicit mode takes precedence.
-                let auto_only_dirs: HashSet<PathBuf> = required_auto_dirs
+                // Directories shared with poll daemons may: polling them already,
+                // the fallback only adds the recursion auto daemons need there.
+                let auto_fallback_candidates: HashSet<PathBuf> = required_auto_dirs
                     .difference(&required_native_dirs)
-                    .cloned()
-                    .collect::<HashSet<_>>()
-                    .difference(&required_poll_dirs)
                     .cloned()
                     .collect();
 
@@ -1035,7 +1034,7 @@ impl Supervisor {
                             &native_modes,
                             "native",
                             &dir_to_daemons,
-                            Some(&auto_only_dirs),
+                            Some(&auto_fallback_candidates),
                             &mut failed_native_watch_dirs,
                         );
                     } else {
