@@ -15,7 +15,7 @@ use crate::pitchfork_toml::{PitchforkToml, WatchMode};
 use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::watch_files::{
-    WatchFiles, expand_watch_patterns, insert_watch_target, path_matches_patterns,
+    WatchFiles, expand_watch_patterns, insert_watch_target, path_matches_patterns, watched_entries,
 };
 use crate::{Result, env};
 use notify::RecursiveMode;
@@ -817,6 +817,12 @@ impl Supervisor {
             // removed daemons are pruned even when a different daemon uses the
             // same dir (which should get a fresh native-watch attempt).
             let mut auto_fallback_dirs: HashMap<PathBuf, HashSet<DaemonId>> = HashMap::new();
+            // Each daemon's patterns and watch targets from the previous pass,
+            // used to recognize directories created since then.
+            let mut prev_expansions: HashMap<
+                DaemonId,
+                (Vec<String>, HashMap<PathBuf, RecursiveMode>),
+            > = HashMap::new();
             // Dirs for which wf.watch() has already failed; suppresses repeated
             // warn-level logs on every loop iteration.
             let mut failed_native_watch_dirs: HashSet<PathBuf> = HashSet::new();
@@ -852,6 +858,38 @@ impl Supervisor {
                     error!("Failed to expand watch patterns: {e}");
                     vec![]
                 });
+
+                // A target that newly appears for a daemon whose patterns did not
+                // change is a directory created since the last pass. Entries created
+                // inside it before its watch was added produced no events.
+                let mut new_dirs: HashMap<PathBuf, RecursiveMode> = HashMap::new();
+                let mut new_dir_configs: Vec<WatchConfig> = vec![];
+                for (config, dirs) in watch_configs.iter().zip(&expanded) {
+                    let (id, patterns, _, _) = config;
+                    let Some((prev_patterns, prev_dirs)) = prev_expansions.get(id) else {
+                        continue;
+                    };
+                    if prev_patterns != patterns {
+                        continue;
+                    }
+                    let mut has_new = false;
+                    for (dir, mode) in dirs {
+                        if !prev_dirs.contains_key(dir) {
+                            insert_watch_target(&mut new_dirs, dir.clone(), *mode);
+                            has_new = true;
+                        }
+                    }
+                    if has_new {
+                        new_dir_configs.push(config.clone());
+                    }
+                }
+                prev_expansions = watch_configs
+                    .iter()
+                    .zip(&expanded)
+                    .map(|((id, patterns, _, _), dirs)| {
+                        (id.clone(), (patterns.clone(), dirs.clone()))
+                    })
+                    .collect();
 
                 for ((id, _, _, watch_mode), dirs) in watch_configs.iter().zip(expanded) {
                     for (dir, mode) in dirs {
@@ -1043,6 +1081,27 @@ impl Supervisor {
                     });
                     !daemon_ids.is_empty()
                 });
+
+                // Check what already exists in new directories now that they are
+                // watched, then re-expand right away in case they contain
+                // directories that are new targets too.
+                if !new_dirs.is_empty() {
+                    let found = tokio::task::spawn_blocking(move || {
+                        new_dirs
+                            .iter()
+                            .flat_map(|(dir, mode)| watched_entries(dir, *mode))
+                            .collect::<Vec<_>>()
+                    })
+                    .await
+                    .unwrap_or_default();
+                    if !found.is_empty() {
+                        debug!("Entries found in new watched directories: {found:?}");
+                        SUPERVISOR
+                            .restart_for_changed_paths(found, &new_dir_configs)
+                            .await;
+                    }
+                    continue;
+                }
 
                 // Wait for file changes or a refresh interval
                 let watch_interval = settings().supervisor_watch_interval();

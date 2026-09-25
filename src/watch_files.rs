@@ -3,7 +3,6 @@ use crate::pitchfork_toml::WatchMode;
 use globset::{GlobBuilder, GlobMatcher};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
-use notify::event::ModifyKind;
 use notify::{Config, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache, new_debouncer_opt};
 use std::collections::HashMap;
@@ -40,18 +39,7 @@ impl WatchFiles {
                         EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
                     )
                 }) {
-                    for path in &e.paths {
-                        paths.push(path.clone());
-                        // Entries created inside a new directory before it was
-                        // watched produce no events of their own, so report them.
-                        if matches!(
-                            e.kind,
-                            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
-                        ) && path.is_dir()
-                        {
-                            collect_dir_entries(path, &mut paths);
-                        }
-                    }
+                    paths.extend(e.paths.iter().cloned());
                 }
                 let paths = paths.into_iter().unique().collect_vec();
                 if paths.is_empty() {
@@ -116,15 +104,22 @@ impl WatchFiles {
     }
 }
 
-/// Recursively collect every entry below `dir`, without following symlinks.
-fn collect_dir_entries(dir: &Path, paths: &mut Vec<PathBuf>) {
+/// List the entries a watch on `dir` covers: its direct entries, or with
+/// `Recursive` every entry below it. Symlinked directories are not followed.
+pub fn watched_entries(dir: &Path, mode: RecursiveMode) -> Vec<PathBuf> {
+    let mut paths = vec![];
+    collect_entries(dir, mode, &mut paths);
+    paths
+}
+
+fn collect_entries(dir: &Path, mode: RecursiveMode, paths: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if entry.file_type().is_ok_and(|t| t.is_dir()) {
-            collect_dir_entries(&path, paths);
+        if mode == RecursiveMode::Recursive && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_entries(&path, mode, paths);
         }
         paths.push(path);
     }
@@ -576,17 +571,19 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_dir_entries() {
+    fn test_watched_entries() {
         let temp_dir = TempDir::new().unwrap();
         let dir = temp_dir.path().join("new");
         fs::create_dir_all(dir.join("nested")).unwrap();
         fs::write(dir.join("a.toml"), "").unwrap();
         fs::write(dir.join("nested/b.toml"), "").unwrap();
 
-        let mut paths = vec![];
-        collect_dir_entries(&dir, &mut paths);
+        let mut paths = watched_entries(&dir, RecursiveMode::NonRecursive);
         paths.sort();
+        assert_eq!(paths, vec![dir.join("a.toml"), dir.join("nested")]);
 
+        let mut paths = watched_entries(&dir, RecursiveMode::Recursive);
+        paths.sort();
         assert_eq!(
             paths,
             vec![
