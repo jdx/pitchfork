@@ -264,7 +264,7 @@ impl SqliteLogStore {
         daemon_id: &DaemonId,
         reason: &str,
     ) -> Result<()> {
-        use crate::shell::HideConsoleWindow;
+        use crate::shell::{HideConsoleWindow, ShellScript};
         use std::process::{Command, Stdio};
 
         if entries.is_empty() {
@@ -283,8 +283,7 @@ impl SqliteLogStore {
 
         for chunk in entries.chunks(archive_hook.batch_size.max(1)) {
             let mut child = Command::new(shell_program)
-                .args(shell_args)
-                .arg(&archive_hook.command)
+                .shell_script(shell_program, shell_args, &archive_hook.command)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())

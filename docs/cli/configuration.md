@@ -200,6 +200,8 @@ The default is `cmd /C`, which is always available, so `run` strings are read by
 
 The split follows POSIX rules, so a path with spaces or backslashes has to be quoted: `"'C:\Program Files\Git\bin\sh.exe' -c"`.
 
+When the shell is cmd.exe with `/C` last, the `run` string is handed to it as `/S /C "<run>"`, so double quotes in it reach cmd as written, e.g. `run = '"C:\Program Files\app\app.exe" --name "a b"'`. A daemon with `mise = true` is the exception: mise starts cmd itself and quotes the string again, so a `run` containing `"` may not reach cmd intact there.
+
 **Common configurations:** - `"cmd /C"` — Default - `"powershell -Command"` / `"pwsh -Command"` — PowerShell - `"sh -c"` — Git for Windows' sh, when `Git\bin` is on `PATH`
 
 ## `general.worktree`
