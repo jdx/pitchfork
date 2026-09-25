@@ -432,9 +432,10 @@ pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir:
     // Normalize the changed path to use forward slashes for consistent matching
     let changed_path_str = normalize_path_for_glob(&changed_path.to_string_lossy());
 
-    for pattern in patterns {
+    // Match the same brace alternatives that are watched
+    for pattern in patterns.iter().flat_map(|p| relative_alternatives(p)) {
         // Strip leading "./" from patterns to handle relative path prefixes
-        let normalized_pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+        let normalized_pattern = pattern.strip_prefix("./").unwrap_or(&pattern);
 
         // Build the full pattern and normalize to use forward slashes
         let full_pattern = if Path::new(normalized_pattern).is_absolute() {
@@ -719,6 +720,30 @@ mod tests {
         assert_eq!(relative_alternatives("/{a,b}.rs"), ["/b.rs", "/a.rs"]);
         #[cfg(windows)]
         assert_eq!(relative_alternatives(r"\src\main.rs"), [r"\src\main.rs"]);
+    }
+
+    #[test]
+    fn test_path_matches_patterns_alternatives_stay_relative() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        let patterns = ["{/src/x,lib}/*.rs".to_string()];
+
+        // The watched `src/x` and `lib` are the ones matched
+        assert!(path_matches_patterns(
+            &base_dir.join("src/x/main.rs"),
+            &patterns,
+            base_dir
+        ));
+        assert!(path_matches_patterns(
+            &base_dir.join("lib/main.rs"),
+            &patterns,
+            base_dir
+        ));
+        assert!(!path_matches_patterns(
+            &base_dir.join("src/main.rs"),
+            &patterns,
+            base_dir
+        ));
     }
 
     #[test]
