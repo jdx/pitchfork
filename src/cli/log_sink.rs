@@ -395,11 +395,18 @@ fn split_before_incomplete_char(bytes: &[u8]) -> usize {
 fn split_before_incomplete_char_in(bytes: &[u8], code_page: u32) -> usize {
     let split = split_before_incomplete_utf8(bytes);
     if uses_code_page(&bytes[..split]) {
-        // Hold back whatever either encoding would leave unfinished. A line
-        // read in the code page can still carry UTF-8 — a stray byte decides
-        // how it is read, not what it contains — and a byte carried over to
-        // the next piece is decoded there, so holding one back loses nothing.
-        return split.min(split_before_incomplete_dbcs(bytes, code_page));
+        // The piece is read in the code page, so the cut must fall between
+        // its characters. Within that, also hold back an unfinished UTF-8
+        // character: a line read in the code page can still carry UTF-8 — a
+        // stray byte decides how it is read, not what it contains — and a
+        // byte carried over to the next piece is decoded there, so holding
+        // one back loses nothing. A UTF-8 cut inside a double-byte character
+        // the code page reads as whole is not taken.
+        let dbcs_split = split_before_incomplete_dbcs(bytes, code_page);
+        if split < dbcs_split && is_dbcs_boundary(bytes, split, code_page) {
+            return split;
+        }
+        return dbcs_split;
     }
     split
 }
@@ -544,6 +551,21 @@ fn split_before_incomplete_dbcs(bytes: &[u8], code_page: u32) -> usize {
     } else {
         bytes.len()
     }
+}
+
+/// Whether `at` falls between two characters of `bytes` read in `code_page`,
+/// rather than inside a double-byte one. Walks from the start, for the same
+/// reason as [`split_before_incomplete_dbcs`].
+#[cfg(windows)]
+fn is_dbcs_boundary(bytes: &[u8], at: usize, code_page: u32) -> bool {
+    use windows_sys::Win32::Globalization::IsDBCSLeadByteEx;
+
+    let mut i = 0;
+    while i < at {
+        let lead = unsafe { IsDBCSLeadByteEx(code_page, bytes[i]) } != 0;
+        i += if lead { 2 } else { 1 };
+    }
+    i == at
 }
 
 /// Parse `line` and hand it to the writer, clearing it either way.
@@ -873,6 +895,18 @@ mod tests {
             super::split_before_incomplete_char_in(b"ab\xffcd\x82", 932),
             5
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_complete_double_byte_character_is_not_cut_for_utf8() {
+        // "づ" is 0x82 0xC3 in CP932. Its second byte looks like the start of
+        // a UTF-8 character, but cutting before it would split a character
+        // the code page reads as whole.
+        let line = b"ab\xffcd\x82\xc3";
+        assert_eq!(super::split_before_incomplete_char_in(line, 932), 7);
+        let line = b"aa\xe0\xc3";
+        assert_eq!(super::split_before_incomplete_char_in(line, 932), 4);
     }
 
     #[cfg(windows)]
