@@ -1,0 +1,2 @@
+{"v":1,"bench":"schema","tool":"self","runner":"jdx-perf-v1-ubuntu24.04-x64-pitchfork-rust1.97.1-img5263c143","ts":"2026-09-25T02:45:43Z","metrics":{"instructions":5048737.0,"wall_max_ms":4.191862,"wall_mean_ms":3.8674901,"wall_min_ms":3.744369,"wall_n":10.0,"wall_p50_ms":3.845311}}
+{"v":1,"bench":"usage","tool":"self","runner":"jdx-perf-v1-ubuntu24.04-x64-pitchfork-rust1.97.1-img5263c143","ts":"2026-09-25T02:45:47Z","metrics":{"instructions":6656892.0,"wall_max_ms":4.796577,"wall_mean_ms":4.4261215,"wall_min_ms":4.087393,"wall_n":20.0,"wall_p50_ms":4.398087}}
