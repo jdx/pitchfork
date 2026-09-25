@@ -891,6 +891,8 @@ impl Supervisor {
                 let mut required_poll_dirs = HashSet::new();
                 let mut required_auto_dirs = HashSet::new();
                 let mut dir_to_daemons: HashMap<PathBuf, Vec<DaemonId>> = HashMap::new();
+                // Auto-mode daemons per directory, which alone decide its fallback.
+                let mut auto_dir_daemons: HashMap<PathBuf, HashSet<DaemonId>> = HashMap::new();
                 // Recursion each backend needs per directory: a directory is
                 // watched recursively by a backend if any daemon it serves needs it.
                 let mut native_modes: HashMap<PathBuf, RecursiveMode> = HashMap::new();
@@ -949,6 +951,12 @@ impl Supervisor {
                             .entry(dir.clone())
                             .or_default()
                             .push(id.clone());
+                        if *watch_mode == WatchMode::Auto {
+                            auto_dir_daemons
+                                .entry(dir.clone())
+                                .or_default()
+                                .insert(id.clone());
+                        }
                         let (required, modes) = match watch_mode {
                             WatchMode::Native => (&mut required_native_dirs, &mut native_modes),
                             WatchMode::Poll => (&mut required_poll_dirs, &mut poll_modes),
@@ -1050,12 +1058,9 @@ impl Supervisor {
                     for dir in &new_fallback_dirs {
                         let mode = watch_mode_of(dir, &native_modes);
                         route_to_poll(dir.clone(), mode, &mut target_poll_dirs, &mut poll_modes);
-                        let daemon_ids = dir_to_daemons
-                            .get(dir)
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .collect::<HashSet<_>>();
+                        // Only auto daemons pin the fallback; a poll daemon sharing
+                        // the directory must not keep it after they are gone.
+                        let daemon_ids = auto_dir_daemons.get(dir).cloned().unwrap_or_default();
                         auto_fallback_dirs.insert(dir.clone(), daemon_ids);
                     }
                 }
@@ -1127,8 +1132,9 @@ impl Supervisor {
                 // the same directory.
                 auto_fallback_dirs.retain(|dir, daemon_ids| {
                     daemon_ids.retain(|id| {
-                        required_auto_dirs.contains(dir)
-                            && dir_to_daemons.get(dir).is_some_and(|ids| ids.contains(id))
+                        auto_dir_daemons
+                            .get(dir)
+                            .is_some_and(|ids| ids.contains(id))
                     });
                     !daemon_ids.is_empty()
                 });
