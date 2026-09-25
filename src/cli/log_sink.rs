@@ -364,7 +364,7 @@ async fn queue_piece(
     log_format: &str,
     matcher: &mut ReadyMatcher,
 ) -> std::io::Result<()> {
-    let text = String::from_utf8_lossy(line);
+    let text = decode_line(line);
     let text = text.trim_end_matches('\r');
     let parsed = crate::log_parse::parse(text, log_format);
     let report = matcher.consider(text, true);
@@ -409,6 +409,81 @@ fn split_before_incomplete_char(bytes: &[u8]) -> usize {
     len
 }
 
+/// Text of one line of daemon output.
+///
+/// UTF-8 is taken as it is. Anything else is not assumed to be damaged UTF-8:
+/// on Windows, console programs — `cmd` among them — write in the console's
+/// code page, so a Japanese system hands over Shift_JIS, and reading that as
+/// UTF-8 would store nothing but replacement characters.
+fn decode_line(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) => decode_non_utf8(bytes),
+    }
+}
+
+#[cfg(windows)]
+fn decode_non_utf8(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    match decode_in_code_page(bytes, console_code_page()) {
+        Some(text) => std::borrow::Cow::Owned(text),
+        None => String::from_utf8_lossy(bytes),
+    }
+}
+
+#[cfg(not(windows))]
+fn decode_non_utf8(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    String::from_utf8_lossy(bytes)
+}
+
+/// Code page the daemon's console programs write in.
+///
+/// This process is started the same way as the daemon, so it shares the
+/// daemon's console or gets one set up alike. Without a console at all, the
+/// OEM code page is what a new console would have used.
+#[cfg(windows)]
+fn console_code_page() -> u32 {
+    match unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() } {
+        0 => unsafe { windows_sys::Win32::Globalization::GetOEMCP() },
+        code_page => code_page,
+    }
+}
+
+/// Decode `bytes` from `code_page`, or `None` when Windows cannot.
+///
+/// A UTF-8 code page gets `None` too: the bytes are already known not to be
+/// valid UTF-8, and the lossy conversion handles them just as well.
+#[cfg(windows)]
+fn decode_in_code_page(bytes: &[u8], code_page: u32) -> Option<String> {
+    use windows_sys::Win32::Globalization::{CP_UTF8, MultiByteToWideChar};
+
+    if code_page == CP_UTF8 {
+        return None;
+    }
+    let len = i32::try_from(bytes.len()).ok()?;
+    // The first call measures, the second converts.
+    let wide_len =
+        unsafe { MultiByteToWideChar(code_page, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
+    if wide_len <= 0 {
+        return None;
+    }
+    let mut wide = vec![0u16; wide_len as usize];
+    let written = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            0,
+            bytes.as_ptr(),
+            len,
+            wide.as_mut_ptr(),
+            wide_len,
+        )
+    };
+    if written <= 0 {
+        return None;
+    }
+    wide.truncate(written as usize);
+    Some(String::from_utf16_lossy(&wide))
+}
+
 /// Parse `line` and hand it to the writer, clearing it either way.
 ///
 /// A closed queue means the writer task is gone, which is a failure rather than
@@ -421,9 +496,9 @@ async fn queue(
     log_format: &str,
     matcher: &mut ReadyMatcher,
 ) -> std::io::Result<()> {
-    // Convert lossily: a daemon emitting a stray non-UTF-8 byte must not be able
-    // to stop its own logging.
-    let text = String::from_utf8_lossy(line);
+    // Never fails: a daemon emitting a stray non-UTF-8 byte must not be able to
+    // stop its own logging.
+    let text = decode_line(line);
     let text = text.trim_end_matches('\r');
     let parsed = crate::log_parse::parse(text, log_format);
     // Strip ANSI before matching so a pattern works whether or not the daemon
@@ -650,5 +725,44 @@ mod tests {
     fn strips_ansi_before_matching() {
         let mut m = matcher("^READY$");
         assert!(m.consider("\x1b[32mREADY\x1b[0m", false).is_some());
+    }
+
+    #[test]
+    fn decodes_utf8_unchanged() {
+        assert_eq!(
+            super::decode_line("起動しました".as_bytes()),
+            "起動しました"
+        );
+    }
+
+    /// What `cmd /C exec` writes on a Japanese system: "'exec' は、内部コマンド".
+    const CP932_CMD_ERROR: &[u8] =
+        b"'exec' \x82\xcd\x81\x41\x93\xe0\x95\x94\x83\x52\x83\x7d\x83\x93\x83\x68";
+
+    #[cfg(windows)]
+    #[test]
+    fn decodes_the_console_code_page() {
+        assert_eq!(
+            super::decode_in_code_page(CP932_CMD_ERROR, 932).as_deref(),
+            Some("'exec' は、内部コマンド")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn leaves_a_utf8_code_page_to_the_lossy_conversion() {
+        assert_eq!(super::decode_in_code_page(b"\xff", 65001), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn replaces_non_utf8_outside_windows() {
+        assert_eq!(super::decode_line(b"ok \xff"), "ok \u{fffd}");
+    }
+
+    #[test]
+    fn never_fails_on_non_utf8() {
+        // Whatever the code page, the line is still stored.
+        assert!(super::decode_line(CP932_CMD_ERROR).starts_with("'exec' "));
     }
 }
