@@ -767,7 +767,7 @@ impl Supervisor {
         let now = chrono::Local::now();
 
         // Collect only IDs of daemons with cron schedules (avoids cloning entire HashMap)
-        let cron_daemon_ids: Vec<DaemonId> = {
+        let mut cron_daemon_ids: Vec<DaemonId> = {
             let state_file = self.state_file.lock().await;
             state_file
                 .daemons
@@ -776,6 +776,33 @@ impl Supervisor {
                 .map(|(id, _d)| id.clone())
                 .collect()
         };
+
+        // A schedule in state comes from config — ad-hoc runs have none — but
+        // outlives it: a daemon started by hand keeps the schedule it was
+        // started with. Once config no longer schedules the daemon, the
+        // schedule is dropped rather than kept firing. A process that is
+        // running is left alone; it just is not started again.
+        if let Some(scheduled_in_config) = self.cron_ids_in_config().await {
+            let unscheduled: Vec<DaemonId> = cron_daemon_ids
+                .iter()
+                .filter(|id| !scheduled_in_config.contains(*id))
+                .cloned()
+                .collect();
+            if !unscheduled.is_empty() {
+                let mut state_file = self.state_file.lock().await;
+                for id in &unscheduled {
+                    if let Some(daemon) = state_file.daemons.get_mut(id) {
+                        daemon.cron_schedule = None;
+                        daemon.cron_retrigger = None;
+                        info!("cron: {id} is no longer scheduled in config; dropped its schedule");
+                    }
+                }
+                if let Err(e) = state_file.write() {
+                    error!("failed to persist dropped cron schedules: {e}");
+                }
+                cron_daemon_ids.retain(|id| !unscheduled.contains(id));
+            }
+        }
 
         for id in cron_daemon_ids {
             // Look up daemon when needed
@@ -952,6 +979,31 @@ impl Supervisor {
             )));
         };
         Some(self.run_options_from_config(id, config, &pt).await)
+    }
+
+    /// The daemons whose config has a `cron` schedule, or `None` if the config
+    /// could not be read — then nothing is known to be unscheduled, and no
+    /// schedule may be dropped on that account.
+    async fn cron_ids_in_config(&self) -> Option<HashSet<DaemonId>> {
+        // Reading config walks the filesystem, so it runs on a blocking worker
+        // rather than holding up the watcher.
+        match tokio::task::spawn_blocking(PitchforkToml::all_merged_all_namespaces).await {
+            Ok(Ok(pt)) => Some(
+                pt.daemons
+                    .iter()
+                    .filter(|(_, d)| d.cron.is_some())
+                    .map(|(id, _)| id.clone())
+                    .collect(),
+            ),
+            Ok(Err(e)) => {
+                warn!("cron: could not read config ({e}); keeping stored schedules");
+                None
+            }
+            Err(e) => {
+                warn!("cron: reading config panicked ({e}); keeping stored schedules");
+                None
+            }
+        }
     }
 
     /// Watch files for daemons that have `watch` patterns configured.
