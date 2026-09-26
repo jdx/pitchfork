@@ -86,9 +86,9 @@ run = "node server.js"
 and environment. Pitchfork waits for the health endpoint and then monitors the
 process. This example assumes your application exposes `/health` on port 3000.
 
-With a literal `mise run` command, the shell must be able to find `mise`; the
-`mise_bin` setting applies to pitchfork's built-in wrapper. Use `mise = true`
-or an absolute command path when the supervisor's `PATH` is limited.
+With a literal `mise run` command, the shell must be able to find `mise`;
+neither `mise = true` nor `mise_bin` puts it on `PATH`. Use an absolute command
+path when the supervisor's `PATH` is limited.
 
 See [boot registration](/guides/boot-start) and [cron scheduling](/guides/scheduling)
 for workflows that run outside your interactive shell.
