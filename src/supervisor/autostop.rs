@@ -266,17 +266,38 @@ impl Supervisor {
 
         info!("Found {} daemon(s) to start at boot", boot_daemons.len());
 
-        for (id, daemon) in boot_daemons {
+        // Dependencies first, so a template naming another boot daemon's port
+        // is rendered after that daemon has one. Only boot daemons are
+        // started; `depends` just orders them.
+        let boot_ids: Vec<DaemonId> = boot_daemons.iter().map(|(id, _)| (*id).clone()).collect();
+        let order: Vec<DaemonId> = match crate::deps::resolve_dependencies(&boot_ids, &pt.daemons) {
+            Ok(order) => order
+                .levels
+                .into_iter()
+                .flatten()
+                .filter(|id| boot_ids.contains(id))
+                .collect(),
+            Err(e) => {
+                warn!("cannot order boot daemons by their dependencies ({e}); using config order");
+                boot_ids
+            }
+        };
+
+        for id in &order {
+            let Some(daemon) = pt.daemons.get(id) else {
+                continue;
+            };
             info!("Starting boot daemon: {id}");
 
-            let cmd = match daemon.run.argv() {
-                Ok(cmd) => cmd,
+            // Built as `pitchfork start` would, just before starting, so
+            // templates and the top-level `[env]` apply at boot too.
+            let mut run_opts = match self.run_options_from_config(id, daemon, &pt).await {
+                Ok(opts) => opts,
                 Err(e) => {
-                    error!("failed to parse command for boot daemon {id}: {e}");
+                    error!("failed to start boot daemon {id}: {e}");
                     continue;
                 }
             };
-            let mut run_opts = daemon.to_run_options(id, cmd);
             run_opts.autostop = false; // Boot daemons should not autostop
             run_opts.wait_ready = false; // Don't block on boot daemons
 

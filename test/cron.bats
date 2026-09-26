@@ -604,3 +604,26 @@ EOF
   refute_output --partial "Last run:"
   refute_output --partial "Next run:"
 }
+
+# A cron daemon that has never been started is registered by the supervisor
+# straight from config, so it has to be rendered there as `pitchfork start`
+# would render it.
+@test "a config-only cron daemon gets its templates and the top-level env" {
+  create_pitchfork_toml <<'EOF2'
+[env]
+TOP = "top-level"
+
+[daemons.anchor]
+run = "sleep 30"
+
+[daemons.cron_rendered]
+run = 'echo "name={{ name }} top=$TOP"'
+cron = "* * * * * *"
+EOF2
+
+  # Starts the supervisor; `cron_rendered` itself is never started by hand.
+  run pitchfork start anchor
+  assert_success
+
+  wait_for_logs cron_rendered "name=cron_rendered top=top-level" 20
+}

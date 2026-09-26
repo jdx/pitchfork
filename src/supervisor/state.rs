@@ -69,6 +69,9 @@ pub(crate) struct UpsertDaemonOpts {
     /// Start `cmd` directly, without a shell. `None` inherits the existing
     /// record's value, like `oneshot`.
     pub no_shell: Option<bool>,
+    /// `None` inherits the existing record's value; see
+    /// `Daemon::scheduled_from_config`.
+    pub scheduled_from_config: Option<bool>,
     pub autostop: bool,
     /// Run-to-completion task rather than a long-running service.
     /// `None` inherits the existing record's value, so a status-only upsert
@@ -169,6 +172,9 @@ impl UpsertDaemonOpts {
             o.cmd = Some(opts.cmd.clone());
             o.run = opts.run.clone();
             o.no_shell = Some(opts.no_shell);
+            // Only a client clears it; the supervisor's own starts (the
+            // schedule, retries, file watching) leave it as it was.
+            o.scheduled_from_config = opts.requested_by_client.then_some(false);
             o.autostop = opts.autostop;
             o.oneshot = Some(opts.oneshot);
             o.cron_schedule = opts.cron_schedule.clone();
@@ -289,6 +295,45 @@ impl Supervisor {
         }
     }
 
+    /// Run options for starting `id` from its config, as `pitchfork start`
+    /// would build them: templates rendered and the top-level `[env]` merged.
+    ///
+    /// Other daemons' ports come from the state held here rather than the file
+    /// on disk, which can trail it — a daemon started a moment ago may not be
+    /// written out yet, and a template referring to its port would fail.
+    pub(crate) async fn run_options_from_config(
+        &self,
+        id: &DaemonId,
+        config: &crate::pitchfork_toml::PitchforkTomlDaemon,
+        pt: &PitchforkToml,
+    ) -> Result<RunOptions> {
+        let resolved_daemons: std::collections::HashMap<DaemonId, Vec<u16>> = {
+            let state = self.state_file.lock().await;
+            state
+                .daemons
+                .iter()
+                .filter(|(_, d)| !d.resolved_port.is_empty())
+                .map(|(id, d)| (id.clone(), d.resolved_port.clone()))
+                .collect()
+        };
+        // On a blocking worker, as for a client's start: building the context
+        // reads configuration and derives hostnames by walking the project's
+        // checkouts, which must not hold up the supervisor's other tasks.
+        let id = id.clone();
+        let mut config = config.clone();
+        let pt = pt.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::ipc::batch::render_daemon_config_with(&id, &mut config, &pt, &resolved_daemons)?;
+            let cmd = config
+                .run
+                .argv()
+                .map_err(|e| miette::miette!("failed to parse command for daemon {id}: {e}"))?;
+            Ok(config.to_run_options(&id, cmd))
+        })
+        .await
+        .map_err(|e| miette::miette!("rendering daemon config panicked: {e}"))?
+    }
+
     /// Upsert a daemon's state, merging with existing values
     pub(crate) async fn upsert_daemon(&self, opts: UpsertDaemonOpts) -> Result<Daemon> {
         info!(
@@ -347,6 +392,9 @@ impl Supervisor {
             no_shell: opts
                 .no_shell
                 .unwrap_or_else(|| existing.is_some_and(|d| d.no_shell)),
+            scheduled_from_config: opts
+                .scheduled_from_config
+                .unwrap_or_else(|| existing.is_some_and(|d| d.scheduled_from_config)),
             cron_schedule: opts
                 .cron_schedule
                 .or(existing.and_then(|d| d.cron_schedule.clone())),

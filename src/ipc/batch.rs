@@ -256,8 +256,22 @@ pub(crate) fn render_daemon_config(
         })
         .unwrap_or_default();
 
+    render_daemon_config_with(id, daemon_config, pt, &resolved_daemons)
+}
+
+/// [`render_daemon_config`] with the running daemons' resolved ports given
+/// rather than read from the state file.
+///
+/// The supervisor holds the current state in memory, and the copy on disk can
+/// trail it: a daemon it has just started may not be written out yet.
+pub(crate) fn render_daemon_config_with(
+    id: &DaemonId,
+    daemon_config: &mut PitchforkTomlDaemon,
+    pt: &PitchforkToml,
+    resolved_daemons: &HashMap<DaemonId, Vec<u16>>,
+) -> Result<()> {
     let mut ctx =
-        crate::template::TemplateContext::new(id, daemon_config, &resolved_daemons, &pt.daemons);
+        crate::template::TemplateContext::new(id, daemon_config, resolved_daemons, &pt.daemons);
     crate::template::render_daemon_templates(daemon_config, &mut ctx, pt.env_for(id))
         .map_err(|e| miette::miette!("Template render error for daemon {id}: {e}"))
 }

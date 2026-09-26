@@ -696,13 +696,20 @@ impl Supervisor {
             .map(|(id, _)| id)
             .collect();
 
-        // Remove stale config_registered entries no longer in config.
+        // Remove stale config_registered entries no longer in config. A
+        // daemon only the schedule has run no longer carries
+        // `config_registered`, but it came from config just the same, so it
+        // goes too once it is not running: left in state, its stored schedule
+        // would keep starting it.
         let stale_ids: Vec<DaemonId> = {
             let state = self.state_file.lock().await;
             state
                 .daemons
                 .iter()
-                .filter(|(id, d)| d.config_registered && !config_cron_ids.contains(*id))
+                .filter(|(id, d)| {
+                    (d.config_registered || (d.scheduled_from_config && d.pid.is_none()))
+                        && !config_cron_ids.contains(*id)
+                })
                 .map(|(id, _)| id.clone())
                 .collect()
         };
@@ -722,18 +729,20 @@ impl Supervisor {
         };
 
         for (id, d) in to_register {
-            let cmd = match d.run.argv() {
-                Ok(cmd) => cmd,
-                Err(e) => {
-                    error!("failed to parse command for cron daemon {id}: {e}");
-                    continue;
-                }
-            };
+            // Registered as written. Templates are rendered at each scheduled
+            // run instead (see `scheduled_from_config`), when the daemons
+            // whose ports they name are more likely to be running, and with
+            // those ports as they are then. The command is parsed there too,
+            // after rendering: a template can make it parse only once
+            // rendered, so failing to parse it here must not stop the
+            // daemon being scheduled. What is stored is only shown.
+            let cmd = d.run.argv().unwrap_or_default();
             let run_opts = d.to_run_options(id, cmd);
             self.upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&run_opts, DaemonStatus::Stopped)
                     .set(|o| {
                         o.config_registered = true;
+                        o.scheduled_from_config = Some(true);
                     })
                     .build(),
             )
@@ -863,20 +872,30 @@ impl Supervisor {
 
                     if should_run {
                         info!("cron: triggering daemon {id} (retrigger: {retrigger:?})");
-                        // Use the persisted command from daemon state
-                        let cmd = match daemon.cmd.clone() {
-                            Some(cmd) => cmd,
-                            None => {
-                                warn!("no run command found in state for cron daemon {id}");
+                        let mut opts = match self.scheduled_run_from_config(&id, &daemon).await {
+                            Some(Ok(opts)) => opts,
+                            Some(Err(e)) => {
+                                error!("failed to run cron daemon {id}: {e}");
                                 continue;
                             }
+                            None => {
+                                // Use the persisted command from daemon state
+                                let cmd = match daemon.cmd.clone() {
+                                    Some(cmd) => cmd,
+                                    None => {
+                                        warn!("no run command found in state for cron daemon {id}");
+                                        continue;
+                                    }
+                                };
+                                let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                                let mut opts = daemon.to_run_options(cmd);
+                                opts.dir = crate::config_types::Dir(dir);
+                                opts
+                            }
                         };
-                        let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                         // Use force: true for Always retrigger to ensure restart
                         let force =
                             matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
-                        let mut opts = daemon.to_run_options(cmd);
-                        opts.dir = crate::config_types::Dir(dir);
                         opts.force = force;
                         opts.wait_ready = false;
                         opts.cron_schedule = Some(schedule_str.clone());
@@ -899,6 +918,40 @@ impl Supervisor {
         }
 
         Ok(())
+    }
+
+    /// Run options for a scheduled run of a daemon only the schedule has
+    /// started, built from its current config with templates rendered.
+    ///
+    /// `None` when a client has started the daemon, so its stored options are
+    /// to be used instead. An error when its schedule is no longer in config:
+    /// it is not run from what was stored, and is removed from state once it
+    /// has stopped.
+    async fn scheduled_run_from_config(
+        &self,
+        id: &DaemonId,
+        daemon: &crate::daemon::Daemon,
+    ) -> Option<Result<crate::daemon::RunOptions>> {
+        if !daemon.scheduled_from_config {
+            return None;
+        }
+        // Reading config walks the filesystem, so it runs on a blocking
+        // worker rather than holding up the other daemons' cron checks.
+        let pt = match tokio::task::spawn_blocking(PitchforkToml::all_merged_all_namespaces).await {
+            Ok(Ok(pt)) => pt,
+            Ok(Err(e)) => return Some(Err(e)),
+            Err(e) => {
+                return Some(Err(miette::miette!(
+                    "reading config for cron daemon {id} panicked: {e}"
+                )));
+            }
+        };
+        let Some(config) = pt.daemons.get(id).filter(|d| d.cron.is_some()) else {
+            return Some(Err(miette::miette!(
+                "its cron schedule is no longer in config"
+            )));
+        };
+        Some(self.run_options_from_config(id, config, &pt).await)
     }
 
     /// Watch files for daemons that have `watch` patterns configured.

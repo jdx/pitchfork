@@ -84,8 +84,9 @@ impl Supervisor {
                 // id is already DaemonId, no validation needed
                 self.stop(&id).await?
             }
-            IpcRequest::Run(opts) => {
+            IpcRequest::Run(mut opts) => {
                 // opts.id is already DaemonId, no validation needed
+                opts.requested_by_client = true;
                 self.run(opts).await?
             }
             IpcRequest::Enable { id } => {
