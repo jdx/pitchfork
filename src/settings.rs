@@ -2089,8 +2089,9 @@ mod tests {
     fn find_in_path_returns_an_absolute_path_for_a_relative_entry() {
         // A relative entry is found against the supervisor's working
         // directory, but the path is used from the daemon's, so it has to be
-        // made absolute. `target` exists wherever the tests run from.
-        let dir = tempfile::tempdir_in("target").unwrap();
+        // made absolute. Created in the working directory itself, which
+        // always exists, unlike a build directory Cargo may put elsewhere.
+        let dir = tempfile::tempdir_in(".").unwrap();
         std::fs::write(dir.path().join("mise.exe"), "").unwrap();
         let relative = dir
             .path()
