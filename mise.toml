@@ -70,7 +70,7 @@ run = [
 
 [tasks."build:ui"]
 dir = "ui"
-run = "aube install && aube run build && touch ../src/web/static_files.rs"
+run = "aube install && aube run build"
 sources = ["src/**/*"]
 outputs = ["dist/**/*"]
 
