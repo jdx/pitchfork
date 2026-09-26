@@ -935,9 +935,16 @@ impl Supervisor {
         if !daemon.scheduled_from_config {
             return None;
         }
-        let pt = match PitchforkToml::all_merged_all_namespaces() {
-            Ok(pt) => pt,
-            Err(e) => return Some(Err(e)),
+        // Reading config walks the filesystem, so it runs on a blocking
+        // worker rather than holding up the other daemons' cron checks.
+        let pt = match tokio::task::spawn_blocking(PitchforkToml::all_merged_all_namespaces).await {
+            Ok(Ok(pt)) => pt,
+            Ok(Err(e)) => return Some(Err(e)),
+            Err(e) => {
+                return Some(Err(miette::miette!(
+                    "reading config for cron daemon {id} panicked: {e}"
+                )));
+            }
         };
         let Some(config) = pt.daemons.get(id).filter(|d| d.cron.is_some()) else {
             return Some(Err(miette::miette!(
