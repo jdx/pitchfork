@@ -157,18 +157,12 @@ pub struct Daemon {
     /// Run-to-completion task rather than a long-running service. Readiness is
     /// a zero exit code, and the terminal state is `completed` instead of
     /// `stopped`. See `DaemonStatus::Completed`.
-    ///
-    /// Appended rather than grouped with `status`: IPC encodes this struct
-    /// positionally, so a field inserted in the middle shifts every field
-    /// after it for a peer that does not have it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub oneshot: bool,
     /// Set when the proxy started this run and it may be stopped for
     /// inactivity: how long, in milliseconds, it may go without proxy
     /// activity. `None` for a daemon started any other way, or claimed since
     /// by an explicit start.
-    ///
-    /// Appended last for the positional IPC encoding, like `oneshot`.
     #[serde(default)]
     pub proxy_idle_timeout_ms: Option<u64>,
     /// When the cron watcher last actually started this daemon.
@@ -178,13 +172,9 @@ pub struct Daemon {
     /// `immediate = false` uses to skip the first window, and ticks where the
     /// `retrigger` policy declines to run. Only this field means "it ran",
     /// which is what `last_exit_success` describes the outcome of.
-    ///
-    /// Appended after `proxy_idle_timeout_ms` for the positional IPC encoding.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_cron_run: Option<chrono::DateTime<chrono::Local>>,
     /// Start `cmd` directly, without a shell. See `RunOptions::no_shell`.
-    ///
-    /// Appended after `last_cron_run` for the positional IPC encoding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_shell: bool,
     /// Registered from config by the cron watcher and only ever started by
@@ -272,11 +262,6 @@ pub struct RunOptions {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
     /// Run-to-completion task rather than a long-running service.
-    ///
-    /// Appended rather than grouped with `autostop`: IPC encodes this struct
-    /// positionally, so a field inserted in the middle shifts every field
-    /// after it for a CLI or supervisor that does not have it, and a version
-    /// mismatch is only warned about, not refused.
     #[serde(default)]
     pub oneshot: bool,
     /// How long to wait for a oneshot to finish, already resolved from the
@@ -299,8 +284,6 @@ pub struct RunOptions {
     /// many milliseconds without proxy activity. `None` for every other start,
     /// which is what makes such a start explicit. Carried over by restarts
     /// (retry, file watch), which continue the same ownership.
-    ///
-    /// Appended last for the positional IPC encoding.
     #[serde(default)]
     pub proxy_idle_timeout_ms: Option<u64>,
     /// The cron watcher is starting this run, so a successful spawn is what
@@ -309,15 +292,10 @@ pub struct RunOptions {
     /// Set only by the watcher's own call. A retry, file-watch or manual
     /// restart of a scheduled daemon carries the daemon's `cron_schedule` but
     /// not this, because the schedule did not ask for it.
-    ///
-    /// Appended after `proxy_idle_timeout_ms` for the positional IPC
-    /// encoding.
     #[serde(default)]
     pub cron_started: bool,
     /// Start `cmd` directly, without a shell: the config's `run` was an
     /// array. `run` is `None` then, since there is no command line.
-    ///
-    /// Appended after `cron_started` for the positional IPC encoding.
     #[serde(default)]
     pub no_shell: bool,
     /// Set by the supervisor on a start a client asked for over IPC; never

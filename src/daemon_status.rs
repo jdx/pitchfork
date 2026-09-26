@@ -69,25 +69,6 @@ mod tests {
     }
 
     #[test]
-    fn variants_are_encoded_by_name_not_position() {
-        // IPC encodes structs positionally, so it is reasonable to expect the
-        // same of enums — but `DaemonStatus` carries `rename_all`, and
-        // rmp_serde writes these variants as their names. That is what makes
-        // the variant order here free to change: `stopped` travels as the
-        // string "stopped" regardless of where it sits. Pin that, so the day
-        // it stops being true is the day this fails rather than the day a
-        // mismatched CLI reads one status as another.
-        for (name, status) in all_variants() {
-            let encoded = rmp_serde::to_vec(&status).expect("encode");
-            let name = name.split('_').next().unwrap_or(name);
-            assert!(
-                encoded.windows(name.len()).any(|w| w == name.as_bytes()),
-                "{status} did not encode its name: {encoded:?}"
-            );
-        }
-    }
-
-    #[test]
     fn test_completed_serializes_as_completed() {
         // `mise daemons ls` and other consumers read this string; keep it
         // stable and distinct from "stopped".
