@@ -187,6 +187,15 @@ pub struct Daemon {
     /// Appended after `last_cron_run` for the positional IPC encoding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_shell: bool,
+    /// Registered from config by the cron watcher and only ever started by
+    /// its schedule since, so each scheduled run is built from the current
+    /// config, templates rendered, rather than from what was stored at
+    /// registration. Cleared once a client starts the daemon: a run it asked
+    /// for carries its own options, which the schedule then keeps.
+    ///
+    /// Appended after `no_shell` for the positional IPC encoding.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scheduled_from_config: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -311,6 +320,10 @@ pub struct RunOptions {
     /// Appended after `cron_started` for the positional IPC encoding.
     #[serde(default)]
     pub no_shell: bool,
+    /// Set by the supervisor on a start a client asked for over IPC; never
+    /// sent. See `Daemon::scheduled_from_config`.
+    #[serde(skip)]
+    pub requested_by_client: bool,
 }
 
 impl Daemon {
@@ -380,6 +393,8 @@ impl Daemon {
             // run; only the cron watcher's own call sets this.
             cron_started: false,
             no_shell: self.no_shell,
+            // Set by the IPC handler for a client's own request.
+            requested_by_client: false,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,

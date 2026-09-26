@@ -2278,6 +2278,8 @@ impl PitchforkTomlDaemon {
             cmd,
             run: self.run.shell_script().map(str::to_string),
             no_shell: self.run.is_argv(),
+            // Set by the IPC handler for a client's own request.
+            requested_by_client: false,
             force: false,
             shell_pid: None,
             dir: Dir(dir),

@@ -39,6 +39,8 @@ depends = ["redis"]
 
 Template rendering follows the dependency order: daemons in later levels can reference values from daemons that completed successfully in earlier levels. If a daemon has `depends = ["redis"]`, it starts after `redis` and can use <code v-pre>{{ daemons.redis.port }}</code>.
 
+Daemons the supervisor starts on its own are rendered the same way. `boot_start` daemons start in `depends` order at boot. A cron daemon that only its schedule has started is rendered again from its config for every scheduled run, so it picks up the current ports of the daemons it names. Once you start it yourself, its scheduled runs reuse the options of that start.
+
 ## Template Fields
 
 Templates work in these configuration fields:
