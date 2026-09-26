@@ -1329,9 +1329,9 @@ impl JsonSchema for ReadyOutput {
 pub struct StopSignal(i32);
 
 // Signal numbers. On Unix we pull them from `libc` so they match the platform
-// (SIGUSR1/2 differ between Linux and BSD/macOS). On Windows the values are
-// only used for parsing and Display — `procs::kill` ignores `stop_signal` and
-// uses TerminateProcess via sysinfo — so POSIX-typical Linux values are fine.
+// (SIGUSR1/2 differ between Linux and BSD/macOS). On Windows only SIGINT means
+// anything to `procs::kill`, which sends it as Ctrl+C; the rest are only used
+// for parsing and Display, so POSIX-typical Linux values are fine.
 #[cfg(unix)]
 use libc::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2};
 #[cfg(windows)]
@@ -1357,6 +1357,10 @@ const SIGNAL_TABLE: &[(&str, i32)] = &[
 ];
 
 impl StopSignal {
+    /// The number of SIGINT, which Windows sends as Ctrl+C.
+    #[cfg(windows)]
+    pub const SIGINT: i32 = SIGINT;
+
     pub fn name(self) -> &'static str {
         SIGNAL_TABLE
             .iter()

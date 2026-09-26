@@ -624,6 +624,18 @@ impl Supervisor {
         #[cfg(unix)]
         fix_state_dir_permissions();
 
+        // Ignoring Ctrl+C is inherited, so a supervisor started from a process
+        // that ignores it would neither see Ctrl+C itself nor let its daemons
+        // see it: a daemon with `stop_signal = "SIGINT"` would never get the
+        // Ctrl+C sent to stop it. Handle it again before any daemon starts.
+        #[cfg(windows)]
+        if unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0) } == 0 {
+            warn!(
+                "failed to stop ignoring Ctrl+C: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
         // Refuse to run beside a supervisor that is already listening, and
         // do so before recording ourselves in the state file or starting any
         // daemons: taking over its socket would leave it running but

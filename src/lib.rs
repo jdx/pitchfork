@@ -4,6 +4,8 @@ extern crate log;
 pub mod boot_manager;
 pub mod cli;
 pub mod config_types;
+#[cfg(windows)]
+pub mod console_ctrl;
 pub mod daemon;
 pub mod daemon_id;
 pub mod daemon_list;

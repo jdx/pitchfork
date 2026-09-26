@@ -10,6 +10,8 @@ teardown() {
 }
 
 @test "stop_signal sends custom signal to daemon" {
+  # Windows is covered by the Ctrl+C test below: Git Bash's bash does not
+  # turn Ctrl+C into SIGINT when it runs as a daemon.
   skip_on_windows "POSIX signals are not supported on Windows"
   local sig_script
   sig_script="$TEST_TEMP_DIR/trap_sigint.sh"
@@ -37,6 +39,72 @@ EOF
   wait_for_file "$TEST_TEMP_DIR/signal_marker"
   run cat "$TEST_TEMP_DIR/signal_marker"
   assert_output --partial "got_sigint"
+}
+
+@test "stop_signal SIGINT sends Ctrl+C to the daemon on Windows" {
+  [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] || skip "Ctrl+C is how Windows delivers SIGINT"
+  local script marker
+  script="$(cygpath -w "$TEST_TEMP_DIR/wait_for_ctrl_c.ps1")"
+  marker="$(cygpath -w "$TEST_TEMP_DIR/signal_marker")"
+  # Ctrl+C stops the loop and runs the finally block; being killed would not.
+  cat > "$TEST_TEMP_DIR/wait_for_ctrl_c.ps1" <<EOF
+try { Write-Output 'waiting for ctrl+c'; while (\$true) { Start-Sleep -Milliseconds 200 } }
+finally { Set-Content -Path '$marker' -Value got_ctrl_c }
+EOF
+
+  create_pitchfork_toml <<EOF
+[daemons.ctrl_c_test]
+run = ["powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", '$script']
+stop_signal = "SIGINT"
+ready_output = "waiting for ctrl"
+EOF
+
+  run pitchfork start ctrl_c_test
+  assert_success
+
+  run pitchfork stop ctrl_c_test
+  assert_success
+
+  wait_for_file "$TEST_TEMP_DIR/signal_marker"
+  run cat "$TEST_TEMP_DIR/signal_marker"
+  assert_output --partial "got_ctrl_c"
+}
+
+# Whether Windows process $1 (a PID pitchfork reports, or one a daemon wrote
+# down) is still running.
+_windows_pid_running() {
+  tasklist //FI "PID eq $1" //NH 2>/dev/null | grep -q " $1 "
+}
+
+# A batch file answers Ctrl+C with "Terminate batch job (Y/N)?" and, with no
+# one to answer, carries on: it has to be terminated once the timeout is up.
+@test "stop_signal SIGINT terminates a daemon that ignores Ctrl+C on Windows" {
+  [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] || skip "Ctrl+C is how Windows delivers SIGINT"
+  # A forced stop on a loaded machine can take longer than the CLI waits by
+  # default: taskkill alone took 7s in one local run. Wait longer, so the test
+  # checks the stop and not the machine's load.
+  export PITCHFORK_IPC_REQUEST_TIMEOUT=30s
+  printf '@echo off\r\n:loop\r\nping -n 2 127.0.0.1 >nul\r\ngoto loop\r\n' >"$TEST_TEMP_DIR/loop.cmd"
+  local loop
+  loop="$(cygpath -w "$TEST_TEMP_DIR/loop.cmd")"
+
+  create_pitchfork_toml <<EOF
+[daemons.ignores_ctrl_c]
+run = ["cmd", "/c", '$loop']
+stop_signal = { signal = "SIGINT", timeout = "2s" }
+EOF
+
+  run pitchfork start ignores_ctrl_c
+  assert_success
+  wait_for_status ignores_ctrl_c running
+  local pid
+  pid=$(pitchfork status ignores_ctrl_c | awk '/^PID:/ {print $2}')
+
+  run pitchfork stop ignores_ctrl_c
+  assert_success
+  wait_for_status ignores_ctrl_c stopped
+  run _windows_pid_running "$pid"
+  assert_failure
 }
 
 @test "settings.general.mise loads the project mise environment" {
