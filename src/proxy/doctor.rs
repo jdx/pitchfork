@@ -1378,9 +1378,9 @@ mod tests {
     async fn responder_probe_reads_back_the_answer() {
         let cancel = tokio_util::sync::CancellationToken::new();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = probe.local_addr().unwrap();
-        drop(probe);
+        // The resolver binds UDP and TCP on one port; see the helper for why
+        // it cannot simply be probed with TCP.
+        let addr = super::super::dns::free_udp_and_tcp_addr();
         let task = tokio::spawn({
             let cancel = cancel.clone();
             async move {
