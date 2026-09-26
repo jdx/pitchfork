@@ -145,4 +145,8 @@ EOF2
   local after
   after=$(pitchfork logs pty_bad_bytes --raw -n 10000 2>/dev/null | grep -c "^after " || true)
   [[ "$after" -eq 2000 ]]
+
+  # The daemon wrote every line and exited cleanly: a reader that stopped
+  # would have left it blocked or failing on a write instead.
+  wait_for_status pty_bad_bytes stopped 10
 }

@@ -351,18 +351,23 @@ where
     let mut line = Vec::new();
     loop {
         line.clear();
-        match reader.read_until(b'\n', &mut line).await {
-            // End of output, or the PTY closing (EIO) once the daemon is gone.
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
+        // A read error ends the output too: a Linux PTY master reports the
+        // slave closing, once the daemon is gone, as EIO rather than end of
+        // file. Whatever of a last, unterminated line arrived before it is
+        // still sent.
+        let last = match reader.read_until(b'\n', &mut line).await {
+            Ok(0) => break,
+            Ok(_) => false,
+            Err(_) if line.is_empty() => break,
+            Err(_) => true,
+        };
         let sent = tx
             .send(super::OutputLine {
                 text: output_line_text(&line),
                 source: super::OutputSource::Local,
             })
             .await;
-        if sent.is_err() {
+        if sent.is_err() || last {
             break;
         }
     }
@@ -3849,5 +3854,45 @@ mod output_reader_tests {
         assert_eq!(lines[0], "before");
         assert!(lines[1].starts_with("bad "), "{:?}", lines[1]);
         assert_eq!(&lines[2..], ["after 1", "after 2", "last"]);
+    }
+}
+
+#[cfg(test)]
+mod output_reader_eio_tests {
+    use super::forward_output_lines;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    /// Output that ends as a Linux PTY master does once the slave closes:
+    /// the last bytes, with no newline, then `EIO` instead of end of file.
+    struct EndsWithEio(Option<&'static [u8]>);
+
+    impl tokio::io::AsyncRead for EndsWithEio {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match self.0.take() {
+                Some(bytes) => {
+                    buf.put_slice(bytes);
+                    Poll::Ready(Ok(()))
+                }
+                None => Poll::Ready(Err(std::io::Error::from_raw_os_error(5))),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_last_line_cut_off_by_eio_is_still_forwarded() {
+        let reader = tokio::io::BufReader::new(EndsWithEio(Some(b"first\nlast without newline")));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        forward_output_lines(reader, tx).await;
+
+        let mut lines = Vec::new();
+        while let Some(line) = rx.recv().await {
+            lines.push(line.text);
+        }
+        assert_eq!(lines, ["first", "last without newline"]);
     }
 }
