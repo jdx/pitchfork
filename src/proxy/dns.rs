@@ -656,9 +656,47 @@ pub fn dns_port(s: &crate::settings::Settings) -> u16 {
         })
 }
 
+/// A loopback address whose port both UDP and TCP can bind, for tests that
+/// start [`serve`], which needs one port for both.
+///
+/// Windows excludes different port ranges for each protocol, so a port that
+/// is free for TCP can be refused for UDP with `WSAEACCES` (10013). The port
+/// is therefore taken from a UDP bind — which the OS never gives out from a
+/// range excluded for UDP — and kept only if TCP can bind it as well.
+#[cfg(test)]
+pub(crate) async fn free_udp_and_tcp_addr() -> SocketAddr {
+    for _ in 0..50 {
+        let udp = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("bind UDP to an OS-chosen port");
+        let addr = udp.local_addr().expect("UDP local address");
+        if tokio::net::TcpListener::bind(addr).await.is_ok() {
+            return addr;
+        }
+    }
+    panic!("no loopback port free for both UDP and TCP after 50 tries");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn free_udp_and_tcp_addr_is_bindable_by_both() {
+        // Many picks, so a port from a range excluded for UDP would show up.
+        // The helper releases the port, so a test running alongside can take
+        // it before it is bound again here. That is `AddrInUse` and says
+        // nothing about the pick; an excluded port fails with
+        // `PermissionDenied` (WSAEACCES, 10013) instead.
+        let taken = |r: &std::io::Result<_>| matches!(r, Err(e) if e.kind() == std::io::ErrorKind::AddrInUse);
+        for _ in 0..100 {
+            let addr = free_udp_and_tcp_addr().await;
+            let udp = tokio::net::UdpSocket::bind(addr).await.map(drop);
+            assert!(udp.is_ok() || taken(&udp), "UDP {addr}: {udp:?}");
+            let tcp = tokio::net::TcpListener::bind(addr).await.map(drop);
+            assert!(tcp.is_ok() || taken(&tcp), "TCP {addr}: {tcp:?}");
+        }
+    }
 
     /// Encode a query for `name` of type `qtype`.
     fn query(id: u16, name: &str, qtype: u16) -> Vec<u8> {
@@ -928,11 +966,8 @@ mod tests {
     async fn serves_over_udp_and_tcp() {
         let cancel = tokio_util::sync::CancellationToken::new();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        // Port 0 lets the OS pick, but UDP and TCP must share a port, so probe
-        // for a free one by binding TCP first and reusing its number.
-        let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = probe.local_addr().unwrap();
-        drop(probe);
+        // UDP and TCP must share a port, so it is picked for both up front.
+        let addr = super::free_udp_and_tcp_addr().await;
 
         let task = tokio::spawn({
             let cancel = cancel.clone();
