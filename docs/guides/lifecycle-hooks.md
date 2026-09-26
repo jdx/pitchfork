@@ -171,6 +171,7 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 - Pitchfork sends the configured signal to the entire process group
 - If the process does not exit within the timeout, `SIGKILL` is sent as a last resort
 - The default signal is `SIGTERM`, and the default timeout comes from `settings.supervisor.stop_timeout`
+- On Windows, `SIGINT` is sent as Ctrl+C, which Node.js, PostgreSQL, and PowerShell handle for a graceful shutdown; other signals terminate the daemon immediately
 
 ### Compose-backed daemons
 

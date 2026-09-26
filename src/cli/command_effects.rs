@@ -42,6 +42,8 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     ("daemons remove", Destructive),
     ("disable", Write),
     ("enable", Write),
+    // Asks a daemon being stopped to exit, as `stop` does.
+    ("interrupt", Write),
     ("list", Read),
     ("log-sink", Write),
     // `logs` reads; `--clear` deletes the stored logs. See FLAG_EFFECTS.
