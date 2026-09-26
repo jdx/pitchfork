@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.28.0](https://github.com/jdx/pitchfork/compare/v2.27.0...v2.28.0) - 2026-09-26
+
+### Added
+
+- *(config)* accept an argv array for run to start a daemon without a shell ([#918](https://github.com/jdx/pitchfork/pull/918))
+- *(status)* show the last cron start and next scheduled time ([#902](https://github.com/jdx/pitchfork/pull/902))
+
+### Fixed
+
+- *(supervisor)* render templates and top-level env for boot and config-only cron daemons ([#923](https://github.com/jdx/pitchfork/pull/923))
+- *(supervisor)* find mise.exe on PATH on Windows so mise = true works ([#922](https://github.com/jdx/pitchfork/pull/922))
+- *(supervisor)* keep double quotes in run scripts under cmd.exe on Windows ([#920](https://github.com/jdx/pitchfork/pull/920))
+- *(supervisor)* stop file watching from spinning on large trees ([#921](https://github.com/jdx/pitchfork/pull/921))
+- *(logs)* decode non-UTF-8 daemon output with the Windows console code page ([#916](https://github.com/jdx/pitchfork/pull/916))
+
+### Other
+
+- *(logs)* stop the unused CP932 fixture warning on non-Windows builds ([#924](https://github.com/jdx/pitchfork/pull/924))
+- *(deps)* update rust crate demand to v2.3.0 ([#919](https://github.com/jdx/pitchfork/pull/919))
+- *(deps)* update rust crate demand to v2.2.0 ([#915](https://github.com/jdx/pitchfork/pull/915))
+- *(deps)* update rust crate usage_rs to v6.11.1 ([#912](https://github.com/jdx/pitchfork/pull/912))
+- *(deps)* lock file maintenance ([#899](https://github.com/jdx/pitchfork/pull/899))
+
 ## [2.27.0](https://github.com/jdx/pitchfork/compare/v2.26.0...v2.27.0) - 2026-09-19
 
 ### Added
