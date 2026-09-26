@@ -379,6 +379,24 @@ Examples:
     flag "-h --help" help="Print help" action=help builtin=#true
     arg <ID> help="Name of the daemon to enable"
 }
+cmd interrupt help="Sends Ctrl+C to the console of a daemon being stopped (Windows)" hide=#true effect=write {
+    long_help #"""
+Sends Ctrl+C to the console of a daemon being stopped (Windows)
+
+Run by the supervisor to stop a daemon whose `stop_signal` is SIGINT, since
+Windows interrupts console programs with Ctrl+C rather than a signal.
+Raising Ctrl+C means attaching to the daemon's console, which cannot be done
+from inside the supervisor, so it is done here. Exits with status 3, sending
+nothing, when the daemon shares the supervisor's console.
+"""#
+    flag --pid help="Process whose console receives Ctrl+C" required=#true {
+        arg <PID>
+    }
+    flag --supervisor-pid help="The supervisor's process, whose console is never interrupted" required=#true {
+        arg <SUPERVISOR_PID>
+    }
+    flag "-h --help" help="Print help" action=help builtin=#true
+}
 cmd list help="List all daemons" effect=read {
     alias ls
     long_help #"""

@@ -74,6 +74,9 @@ by hand.
 On Unix, stopping a daemon sends its configured signal to the process group
 (`SIGTERM` by default). Pitchfork waits for `stop_signal.timeout`, falling back
 to `supervisor.stop_timeout` (`5s`), then escalates to `SIGKILL` if necessary.
+On Windows, which has no signals, a daemon whose `stop_signal` is `SIGINT` is
+sent Ctrl+C and given the same timeout; every other daemon, and one still
+running after the timeout, is terminated with its process tree.
 Batch stops use reverse dependency order.
 
 See [contributing](/contributing) for the development and verification workflow.

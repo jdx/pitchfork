@@ -1,5 +1,4 @@
 use crate::Result;
-#[cfg(unix)]
 use crate::settings::settings;
 #[cfg(windows)]
 use crate::shell::HideConsoleWindow;
@@ -613,8 +612,8 @@ impl Procs {
     fn kill_process_group(
         &self,
         pid: u32,
-        _stop_signal: i32,
-        _stop_timeout: Option<std::time::Duration>,
+        stop_signal: i32,
+        stop_timeout: Option<std::time::Duration>,
         expected_start_time: Option<u64>,
     ) -> Result<bool> {
         // Keep the Windows process object alive through taskkill so its
@@ -645,7 +644,7 @@ impl Procs {
             return Ok(false);
         }
 
-        self.kill(pid, 0, None, expected_start_time)
+        self.kill(pid, stop_signal, stop_timeout, expected_start_time)
     }
 
     /// Kill a process with graceful shutdown strategy:
@@ -679,7 +678,19 @@ impl Procs {
         {
             // The caller holds an open process handle while this runs, which
             // keeps the PID from being recycled, so no re-check is needed.
-            let _ = (stop_signal, stop_timeout, expected_start_time);
+            let _ = expected_start_time;
+            // Windows has no signals. SIGINT is the one with a counterpart,
+            // Ctrl+C, so a daemon asking for it gets that first and until its
+            // stop timeout to exit; every other signal, and a daemon that is
+            // still running after the timeout, is terminated outright.
+            if stop_signal == crate::config_types::StopSignal::SIGINT {
+                let stop_timeout =
+                    stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
+                if interrupt_and_wait(pid, stop_timeout) {
+                    debug!("process {pid} exited after Ctrl+C");
+                    return Ok(true);
+                }
+            }
             // Use taskkill /F /T to kill the entire process tree.
             // sysinfo's process.kill() only kills the main process, leaving
             // child processes (e.g. python3 spawned by sh -c) orphaned and
@@ -1130,6 +1141,172 @@ fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(ProcessHandle(handle))
+}
+
+/// Send Ctrl+C to the console of `pid` and wait up to `timeout` for it to exit.
+///
+/// Returns whether it exited. `false` means the caller still has to terminate
+/// it, including when no Ctrl+C was sent: the daemon shares the supervisor's
+/// console, or the `pitchfork interrupt` process could not do it.
+///
+/// A descendant that outlives `pid` is terminated once `pid` has exited, as
+/// `taskkill /T` would have done: with `pid` gone, the tree can no longer be
+/// found from it.
+#[cfg(windows)]
+fn interrupt_and_wait(pid: u32, timeout: Duration) -> bool {
+    use crate::console_ctrl::EXIT_SHARED_CONSOLE;
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessId, PROCESS_SYNCHRONIZE, TerminateProcess, WaitForSingleObject,
+    };
+
+    // Opened before the interrupt, so the wait below is for this process
+    // even if it exits before the wait starts.
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        debug!(
+            "cannot wait for process {pid}: {}",
+            std::io::Error::last_os_error()
+        );
+        return false;
+    }
+    let handle = ProcessHandle(handle);
+    let Some(start) = process_start_token_from_handle(handle.0) else {
+        return false;
+    };
+    let descendants = pin_descendants(pid, start);
+
+    // The stop timeout covers sending Ctrl+C as well as the exit it asks for,
+    // so a `pitchfork interrupt` that hangs cannot hold up the forced stop.
+    let deadline = Instant::now() + timeout;
+    let millis_left = || {
+        let left = deadline.saturating_duration_since(Instant::now());
+        u32::try_from(left.as_millis()).unwrap_or(u32::MAX - 1)
+    };
+
+    let mut helper = match std::process::Command::new(&*crate::env::PITCHFORK_BIN)
+        .args(["interrupt", "--pid"])
+        .arg(pid.to_string())
+        .arg("--supervisor-pid")
+        .arg(std::process::id().to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .hide_console_window()
+        .spawn()
+    {
+        Ok(helper) => helper,
+        Err(e) => {
+            debug!("failed to spawn pitchfork interrupt for pid {pid}: {e}");
+            return false;
+        }
+    };
+    let helper_handle = std::os::windows::io::AsRawHandle::as_raw_handle(&helper);
+    if unsafe { WaitForSingleObject(helper_handle as HANDLE, millis_left()) } != WAIT_OBJECT_0 {
+        debug!("pitchfork interrupt for pid {pid} did not finish within {timeout:?}");
+        let _ = helper.kill();
+        let _ = helper.wait();
+        return false;
+    }
+    match helper.wait_with_output() {
+        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.code() == Some(EXIT_SHARED_CONSOLE) => {
+            debug!("process {pid} shares the supervisor's console; not sending Ctrl+C");
+            return false;
+        }
+        Ok(o) => {
+            debug!(
+                "pitchfork interrupt for pid {pid} exited with status {}: {}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            return false;
+        }
+        Err(e) => {
+            debug!("failed to wait for pitchfork interrupt for pid {pid}: {e}");
+            return false;
+        }
+    }
+
+    debug!("sent Ctrl+C to process {pid}, waiting up to {timeout:?} in all");
+    if unsafe { WaitForSingleObject(handle.0, millis_left()) } != WAIT_OBJECT_0 {
+        return false;
+    }
+    for descendant in &descendants {
+        if unsafe { WaitForSingleObject(descendant.0, 0) } != WAIT_TIMEOUT {
+            continue;
+        }
+        let child = unsafe { GetProcessId(descendant.0) };
+        debug!("terminating process {child}, left behind by {pid}");
+        // TerminateProcess only starts the termination, so it is not done
+        // until the handle is signalled. Failing that, taskkill gets a try;
+        // the open handle keeps the PID from naming anything else meanwhile.
+        let terminated = unsafe { TerminateProcess(descendant.0, 1) } != 0
+            && unsafe { WaitForSingleObject(descendant.0, LEFTOVER_EXIT_WAIT_MS) } == WAIT_OBJECT_0;
+        if !terminated {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID"])
+                .arg(child.to_string())
+                .hide_console_window()
+                .output();
+            if unsafe { WaitForSingleObject(descendant.0, LEFTOVER_EXIT_WAIT_MS) } != WAIT_OBJECT_0
+            {
+                warn!("process {child}, left behind by {pid}, is still running");
+            }
+        }
+    }
+    true
+}
+
+/// How long a descendant left behind by a daemon is given to finish
+/// terminating before the next attempt.
+#[cfg(windows)]
+const LEFTOVER_EXIT_WAIT_MS: u32 = 1000;
+
+/// Every descendant of `root`, held open so that none of their PIDs can be
+/// reused while they are.
+///
+/// Windows records a parent PID but not the parent's identity, and keeps
+/// recording it after the parent has exited and the PID has gone to a new
+/// process. A process that started before the process now holding its parent
+/// PID cannot be that process's child, so it is left out.
+#[cfg(windows)]
+fn pin_descendants(root: u32, root_start: u64) -> Vec<ProcessHandle> {
+    use windows_sys::Win32::System::Threading::{PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+
+    PROCS.refresh_processes();
+    let (parent_to_children, _) = PROCS.collect_process_tree_info();
+    let mut pinned = vec![];
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut frontier = vec![(root, root_start)];
+    while let Some((parent, parent_start)) = frontier.pop() {
+        for &child in parent_to_children.get(&parent).into_iter().flatten() {
+            if !seen.insert(child) {
+                continue;
+            }
+            let access =
+                PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION;
+            let handle = unsafe { OpenProcess(access, 0, child) };
+            if handle.is_null() {
+                continue;
+            }
+            let handle = ProcessHandle(handle);
+            match process_start_token_from_handle(handle.0) {
+                Some(start) if start >= parent_start => {
+                    frontier.push((child, start));
+                    pinned.push(handle);
+                }
+                _ => {}
+            }
+        }
+    }
+    pinned
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

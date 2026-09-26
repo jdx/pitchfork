@@ -898,6 +898,7 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 - When stopping a daemon, pitchfork sends the configured signal to the entire process group
 - If the process does not exit within the timeout, `SIGKILL` is sent as a last resort
 - Useful for daemons that handle `SIGINT` (Ctrl+C) for graceful termination but ignore `SIGTERM`
+- On Windows, which has no signals, `SIGINT` is sent as Ctrl+C to the daemon's console, and a daemon still running after the timeout is terminated with its process tree. Any other signal terminates the daemon immediately, as before. A program that does not handle Ctrl+C, such as a script run by Git Bash, waits out the timeout and is then terminated
 
 ### `pty`
 

@@ -1524,6 +1524,84 @@
         "examples": [],
         "headings": []
       },
+      "interrupt": {
+        "full_cmd": [
+          "interrupt"
+        ],
+        "usage": "interrupt <--pid <PID>> <--supervisor-pid <SUPERVISOR_PID>>",
+        "subcommands": {},
+        "args": [],
+        "flags": [
+          {
+            "name": "pid",
+            "usage": "--pid <PID>",
+            "help": "Process whose console receives Ctrl+C",
+            "help_first_line": "Process whose console receives Ctrl+C",
+            "short": [],
+            "long": [
+              "pid"
+            ],
+            "required": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "PID",
+              "usage": "<PID>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "supervisor-pid",
+            "usage": "--supervisor-pid <SUPERVISOR_PID>",
+            "help": "The supervisor's process, whose console is never interrupted",
+            "help_first_line": "The supervisor's process, whose console is never interrupted",
+            "short": [],
+            "long": [
+              "supervisor-pid"
+            ],
+            "required": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "SUPERVISOR_PID",
+              "usage": "<SUPERVISOR_PID>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "help",
+            "usage": "-h --help",
+            "help": "Print help",
+            "help_first_line": "Print help",
+            "short": [
+              "h"
+            ],
+            "long": [
+              "help"
+            ],
+            "hide": false,
+            "global": false,
+            "action": "help",
+            "builtin": true
+          }
+        ],
+        "mounts": [],
+        "effect": "write",
+        "unknown_flags": null,
+        "hide": true,
+        "args_override_self": true,
+        "help": "Sends Ctrl+C to the console of a daemon being stopped (Windows)",
+        "help_long": "Sends Ctrl+C to the console of a daemon being stopped (Windows)\n\nRun by the supervisor to stop a daemon whose `stop_signal` is SIGINT, since\nWindows interrupts console programs with Ctrl+C rather than a signal.\nRaising Ctrl+C means attaching to the daemon's console, which cannot be done\nfrom inside the supervisor, so it is done here. Exits with status 3, sending\nnothing, when the daemon shares the supervisor's console.",
+        "name": "interrupt",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": [],
+        "headings": []
+      },
       "list": {
         "full_cmd": [
           "list"

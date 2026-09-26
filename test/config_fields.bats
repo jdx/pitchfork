@@ -10,6 +10,8 @@ teardown() {
 }
 
 @test "stop_signal sends custom signal to daemon" {
+  # Windows is covered by the Ctrl+C test below: Git Bash's bash does not
+  # turn Ctrl+C into SIGINT when it runs as a daemon.
   skip_on_windows "POSIX signals are not supported on Windows"
   local sig_script
   sig_script="$TEST_TEMP_DIR/trap_sigint.sh"
@@ -37,6 +39,35 @@ EOF
   wait_for_file "$TEST_TEMP_DIR/signal_marker"
   run cat "$TEST_TEMP_DIR/signal_marker"
   assert_output --partial "got_sigint"
+}
+
+@test "stop_signal SIGINT sends Ctrl+C to the daemon on Windows" {
+  [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] || skip "Ctrl+C is how Windows delivers SIGINT"
+  local script marker
+  script="$(cygpath -w "$TEST_TEMP_DIR/wait_for_ctrl_c.ps1")"
+  marker="$(cygpath -w "$TEST_TEMP_DIR/signal_marker")"
+  # Ctrl+C stops the loop and runs the finally block; being killed would not.
+  cat > "$TEST_TEMP_DIR/wait_for_ctrl_c.ps1" <<EOF
+try { Write-Output 'waiting for ctrl+c'; while (\$true) { Start-Sleep -Milliseconds 200 } }
+finally { Set-Content -Path '$marker' -Value got_ctrl_c }
+EOF
+
+  create_pitchfork_toml <<EOF
+[daemons.ctrl_c_test]
+run = ["powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", '$script']
+stop_signal = "SIGINT"
+ready_output = "waiting for ctrl"
+EOF
+
+  run pitchfork start ctrl_c_test
+  assert_success
+
+  run pitchfork stop ctrl_c_test
+  assert_success
+
+  wait_for_file "$TEST_TEMP_DIR/signal_marker"
+  run cat "$TEST_TEMP_DIR/signal_marker"
+  assert_output --partial "got_ctrl_c"
 }
 
 @test "settings.general.mise loads the project mise environment" {
