@@ -321,7 +321,6 @@ pub static IPC_SOCK_MAIN: Lazy<PathBuf> = Lazy::new(|| IPC_SOCK_DIR.join("main.s
 
 // Capture the PATH at startup so daemons can find user tools
 pub static ORIGINAL_PATH: Lazy<Option<String>> = Lazy::new(|| var("PATH").ok());
-pub static IPC_JSON: Lazy<bool> = Lazy::new(|| !var_false("IPC_JSON"));
 
 /// Expand a leading `~` path component to the current Pitchfork user's home.
 ///
@@ -353,13 +352,6 @@ fn var_path(name: &str) -> Option<PathBuf> {
 
 fn var_log_level(name: &str) -> Option<log::LevelFilter> {
     var(name).ok().and_then(|level| level.parse().ok())
-}
-
-fn var_false(name: &str) -> bool {
-    var(name)
-        .map(|val| val.to_lowercase())
-        .map(|val| val == "false" || val == "0")
-        .unwrap_or(false)
 }
 
 // fn var_true(name: &str) -> bool {

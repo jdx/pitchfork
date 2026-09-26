@@ -274,16 +274,14 @@ pub(crate) async fn supervisor_listening() -> bool {
     }
 }
 
+/// Encode an IPC message as JSON.
+///
+/// Messages are framed by a trailing NUL byte, which JSON text never contains.
+/// A binary encoding would, so it cannot use this framing.
 fn serialize<T: serde::Serialize>(msg: &T) -> Result<Vec<u8>> {
-    if *env::IPC_JSON {
-        serde_json::to_vec(msg)
-            .into_diagnostic()
-            .wrap_err("failed to serialize IPC message as JSON")
-    } else {
-        rmp_serde::to_vec(msg)
-            .into_diagnostic()
-            .wrap_err("failed to serialize IPC message as MessagePack")
-    }
+    serde_json::to_vec(msg)
+        .into_diagnostic()
+        .wrap_err("failed to serialize IPC message as JSON")
 }
 
 fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
@@ -291,15 +289,9 @@ fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     bytes.pop();
     let preview = std::str::from_utf8(&bytes).unwrap_or("<binary>");
     trace!("msg: {preview:?}");
-    if *env::IPC_JSON {
-        serde_json::from_slice(&bytes)
-            .into_diagnostic()
-            .wrap_err("failed to deserialize IPC JSON response")
-    } else {
-        rmp_serde::from_slice(&bytes)
-            .into_diagnostic()
-            .wrap_err("failed to deserialize IPC MessagePack response")
-    }
+    serde_json::from_slice(&bytes)
+        .into_diagnostic()
+        .wrap_err("failed to deserialize IPC JSON response")
 }
 
 #[cfg(test)]
@@ -350,8 +342,8 @@ mod tests {
         }
     }
 
-    /// The idle-shutdown ownership rides at the end of both positionally
-    /// encoded structs, after fields that are skipped when empty.
+    /// The idle-shutdown ownership crosses IPC in both structs, alongside
+    /// fields that are skipped when empty.
     #[test]
     fn proxy_idle_timeout_survives_the_ipc_encoding() {
         let daemon = Daemon {
