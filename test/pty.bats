@@ -128,3 +128,21 @@ EOF
 
   pitchfork stop pty_ansi || true
 }
+
+# A line that is not UTF-8 used to end the in-process read that `pty = true`
+# uses: nothing after it was logged, and the daemon then blocked (PTY) or
+# failed (pipe) writing to output nobody read.
+@test "pty mode keeps reading after a line that is not UTF-8" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.pty_bad_bytes]
+run = "echo before; printf 'bad \\377\\376 bytes\\n'; i=0; while [ $i -lt 2000 ]; do i=$((i+1)); echo after $i; done; echo reached_end"
+pty = true
+EOF2
+
+  run pitchfork start pty_bad_bytes
+  wait_for_logs pty_bad_bytes "reached_end" 20
+
+  local after
+  after=$(pitchfork logs pty_bad_bytes --raw -n 10000 2>/dev/null | grep -c "^after " || true)
+  [[ "$after" -eq 2000 ]]
+}
