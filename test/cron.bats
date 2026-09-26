@@ -628,6 +628,36 @@ EOF2
   wait_for_logs cron_rendered "name=cron_rendered top=top-level" 20
 }
 
+# Wait until `pitchfork status` of $1 shows the cron schedule $2, or shows none
+# when $2 is empty: the watcher has applied the config.
+_wait_for_cron_schedule() {
+  local id="$1" schedule="$2" line
+  for _ in $(seq 1 50); do
+    line=$(pitchfork status "$id" 2>/dev/null | grep "^Cron:" || true)
+    if [[ -z "$schedule" && -z "$line" ]] || [[ -n "$schedule" && "$line" == "Cron: $schedule" ]]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for the cron schedule of $id to become '$schedule' (last: '$line')" >&2
+  return 1
+}
+
+# Wait until $1 is not running, so a run the old schedule started has ended,
+# then give its last output time to reach the log store.
+_wait_for_cron_run_to_end() {
+  local id="$1"
+  for _ in $(seq 1 50); do
+    if ! pitchfork status "$id" 2>/dev/null | grep "^Status:" | grep -q running; then
+      sleep 1
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for $id to stop running" >&2
+  return 1
+}
+
 # A daemon started by hand keeps the schedule it was started with in state,
 # so removing `cron` from config has to stop it being fired from there.
 @test "a started cron daemon stops firing once its schedule leaves config" {
@@ -646,11 +676,91 @@ EOF2
 run = "echo removed_tick"
 EOF2
 
-  # Give the watcher time to notice, then count; no run may follow.
-  sleep 3
+  # Count once the watcher has dropped the schedule and any run it had
+  # started is over; no run may follow.
+  _wait_for_cron_schedule cron_removed ""
+  _wait_for_cron_run_to_end cron_removed
   local before after
   before=$(pitchfork logs cron_removed --raw 2>/dev/null | grep -c "removed_tick" || true)
   sleep 4
   after=$(pitchfork logs cron_removed --raw 2>/dev/null | grep -c "removed_tick" || true)
   [[ "$after" -eq "$before" ]]
+}
+
+# The schedule stored at start follows config: a new expression takes effect
+# without restarting the daemon, and so does restoring the old one.
+@test "a started cron daemon follows its schedule as config changes" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_changed]
+run = "echo changed_tick"
+cron = "* * * * * *"
+EOF2
+
+  run pitchfork start cron_changed
+  assert_success
+  wait_for_logs cron_changed "changed_tick" 10
+
+  # Far in the future: no further run may follow.
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_changed]
+run = "echo changed_tick"
+cron = "0 0 0 1 1 *"
+EOF2
+  _wait_for_cron_schedule cron_changed "0 0 0 1 1 *"
+  _wait_for_cron_run_to_end cron_changed
+  local before after
+  before=$(pitchfork logs cron_changed --raw 2>/dev/null | grep -c "changed_tick" || true)
+  sleep 4
+  after=$(pitchfork logs cron_changed --raw 2>/dev/null | grep -c "changed_tick" || true)
+  [[ "$after" -eq "$before" ]]
+
+  # Back to every second: runs resume.
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_changed]
+run = "echo changed_tick"
+cron = "* * * * * *"
+EOF2
+  local resumed=0
+  for _ in $(seq 1 15); do
+    resumed=$(pitchfork logs cron_changed --raw 2>/dev/null | grep -c "changed_tick" || true)
+    [[ "$resumed" -gt "$after" ]] && break
+    sleep 1
+  done
+  [[ "$resumed" -gt "$after" ]]
+}
+
+# The `cron_immediate` line stored in state for the daemon `cron_immediate`.
+_stored_cron_immediate() {
+  awk '/^\[daemons\..*\/cron_immediate"\]$/ { found = 1; next } /^\[/ { found = 0 } found' \
+    "$PITCHFORK_STATE_DIR/state.toml" | grep "^cron_immediate ="
+}
+
+# `immediate` is part of the stored schedule too, and follows config even when
+# it is the only setting that changed.
+@test "a started cron daemon picks up a change to immediate alone" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_immediate]
+run = "echo immediate_tick"
+cron = { schedule = "0 0 0 1 1 *", immediate = false }
+EOF2
+
+  run pitchfork start cron_immediate
+  assert_success
+  _stored_cron_immediate | grep -q "^cron_immediate = false"
+
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_immediate]
+run = "echo immediate_tick"
+cron = { schedule = "0 0 0 1 1 *", immediate = true }
+EOF2
+
+  local synced=false
+  for _ in $(seq 1 50); do
+    if _stored_cron_immediate | grep -q "^cron_immediate = true"; then
+      synced=true
+      break
+    fi
+    sleep 0.2
+  done
+  [[ "$synced" == true ]]
 }
