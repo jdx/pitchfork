@@ -41,6 +41,7 @@ Pitchfork searches these well-known locations:
 - `~/.cargo/bin/mise`
 - `/usr/local/bin/mise`
 - `/opt/homebrew/bin/mise`
+- on Windows, `mise.exe` on `PATH`
 
 For another location, set an absolute path:
 
