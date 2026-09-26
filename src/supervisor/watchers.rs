@@ -779,7 +779,16 @@ impl Supervisor {
     /// Also removes stale `config_registered` entries for daemons whose cron
     /// config has been removed, so they stop firing.
     async fn register_config_cron_daemons(&self) -> Result<()> {
-        let config = PitchforkToml::all_merged_all_namespaces()?;
+        // Reading the config of every known project walks the filesystem and
+        // can start git or jj to find worktrees, so it runs on a blocking
+        // worker rather than holding up the async runtime every cron check.
+        let config =
+            match tokio::task::spawn_blocking(PitchforkToml::all_merged_all_namespaces).await {
+                Ok(config) => config?,
+                Err(e) => {
+                    miette::bail!("reading config for the cron check panicked: {e}");
+                }
+            };
 
         let config_cron_ids: HashSet<&DaemonId> = config
             .daemons
