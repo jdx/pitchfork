@@ -627,3 +627,30 @@ EOF2
 
   wait_for_logs cron_rendered "name=cron_rendered top=top-level" 20
 }
+
+# A daemon started by hand keeps the schedule it was started with in state,
+# so removing `cron` from config has to stop it being fired from there.
+@test "a started cron daemon stops firing once its schedule leaves config" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_removed]
+run = "echo removed_tick"
+cron = "* * * * * *"
+EOF2
+
+  run pitchfork start cron_removed
+  assert_success
+  wait_for_logs cron_removed "removed_tick" 10
+
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_removed]
+run = "echo removed_tick"
+EOF2
+
+  # Give the watcher time to notice, then count; no run may follow.
+  sleep 3
+  local before after
+  before=$(pitchfork logs cron_removed --raw 2>/dev/null | grep -c "removed_tick" || true)
+  sleep 4
+  after=$(pitchfork logs cron_removed --raw 2>/dev/null | grep -c "removed_tick" || true)
+  [[ "$after" -eq "$before" ]]
+}
