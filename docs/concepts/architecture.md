@@ -20,7 +20,7 @@ Web UI ─────── HTTP API ───┘       │
 | Module | Responsibility |
 | --- | --- |
 | `src/cli/` | Parse commands, load configuration, and make client requests |
-| `src/ipc/` | Serialize requests and responses with MessagePack |
+| `src/ipc/` | Serialize requests and responses as JSON |
 | `src/supervisor/lifecycle.rs` | Spawn, monitor, and terminate daemons |
 | `src/supervisor/watchers.rs` | Periodic work, cron schedules, and file watching |
 | `src/supervisor/hooks.rs` | Dispatch lifecycle hooks |

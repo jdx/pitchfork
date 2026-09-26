@@ -41,7 +41,7 @@ Pitchfork is a daemon supervisor CLI with a **client-server architecture**:
 
 1. **CLI (`src/cli/`)** - User-facing commands that communicate with the supervisor via IPC
 2. **Supervisor (`src/supervisor/`)** - Background daemon that manages all child processes
-3. **IPC (`src/ipc/`)** - Unix domain socket communication using MessagePack serialization
+3. **IPC (`src/ipc/`)** - Unix domain socket communication with NUL-delimited JSON messages
 
 ### How It Works
 
@@ -55,7 +55,7 @@ Pitchfork is a daemon supervisor CLI with a **client-server architecture**:
 | File | Purpose |
 |------|---------|
 | `src/supervisor/` | Supervisor module: `lifecycle.rs` (start/stop daemons), `ipc_handlers.rs`, `watchers.rs` (background watchers), `retry.rs`, `autostop.rs`, `state.rs`, `hooks.rs`, `pty.rs` |
-| `src/ipc/` | Client/server IPC with MessagePack over Unix sockets |
+| `src/ipc/` | Client/server IPC with JSON messages over Unix sockets |
 | `src/pitchfork_toml.rs` | Config file parsing and merging |
 | `src/state_file.rs` | Persistent state management |
 | `src/daemon.rs` | Daemon struct and state |
@@ -99,7 +99,7 @@ Configs merge in order (later overrides earlier):
 
 - **Async/Tokio**: All I/O is async; use `tokio::select!` for concurrent operations
 - **Error handling**: Use `miette::Result` for rich error messages
-- **Serialization**: Heavy use of serde with TOML for config/state, MessagePack for IPC
+- **Serialization**: Heavy use of serde with TOML for config/state, JSON for IPC
 - **File locking**: Always lock state file for concurrent access (`xx::fslock`)
 - **Daemon commands**: Run via the shell verbatim; do NOT prepend `exec` — it breaks compound commands (e.g. `exec a && b` silently drops `b`). Users can add `exec` themselves in the run string for single commands
 - **Idiomatic Rust**: Prefer standard Rust patterns and idioms
