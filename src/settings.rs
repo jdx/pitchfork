@@ -102,9 +102,10 @@ pub struct SettingsBoot {
     /// and be executable. No shell, PATH lookup, or tilde expansion is used.
     ///
     /// Used by boot enable, explicit refresh, and automatic stale-path repair.
-    /// Put this in the user or system config so boot-time repair sees it too.
+    /// Set this in the user or system config so boot-time repair sees it too.
+    /// Project config files cannot select a boot executable.
     /// Empty (default) uses the running binary's resolved path, as before.
-    #[usage(env = "PITCHFORK_BOOT_EXECUTABLE", default = "")]
+    #[usage(env = "PITCHFORK_BOOT_EXECUTABLE", default = "", scope = "global")]
     pub executable: String,
 }
 
@@ -2738,6 +2739,43 @@ user = "postgres"
             .id;
         let origin = resolved.origin(id).unwrap().describe();
         assert!(origin.contains("higher.toml"), "{origin}");
+    }
+
+    #[test]
+    fn boot_executable_rejects_project_config() {
+        let tree = Tree::new("boot-scope");
+        let project = tree.write(
+            "pitchfork.toml",
+            "[settings.boot]\nexecutable = \"/tmp/project/pitchfork\"\n",
+        );
+        let global = tree.write(
+            "config.toml",
+            "[settings.boot]\nexecutable = \"/opt/pitchfork/stable\"\n",
+        );
+        let project = FileLayer::at(&project, FileScope::Project).under("settings");
+        let global = FileLayer::at(&global, FileScope::Global).under("settings");
+
+        let resolved = resolve(
+            Settings::SETTINGS_REGISTRY,
+            Layers::new().then(&project).then(&global),
+        )
+        .unwrap();
+        assert_eq!(
+            Settings::read(&resolved).unwrap().boot.executable,
+            "/opt/pitchfork/stable"
+        );
+        assert!(resolved.warnings.iter().any(|warning| {
+            warning.message.contains("boot.executable") && warning.message.contains("cannot be set")
+        }));
+
+        let resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&project)).unwrap();
+        assert!(
+            Settings::read(&resolved)
+                .unwrap()
+                .boot
+                .executable
+                .is_empty()
+        );
     }
 
     #[test]

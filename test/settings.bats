@@ -74,6 +74,17 @@ teardown() {
   assert [ ! -e pitchfork.toml ]
 }
 
+@test "boot executable can only be set in global config" {
+  run pitchfork settings set boot.executable /bin/sh
+  assert_failure
+  assert_output --partial "pass --global"
+  assert [ ! -e pitchfork.toml ]
+
+  run pitchfork settings set boot.executable /bin/sh --global
+  assert_success
+  assert_file_contains "$HOME/.config/pitchfork/config.toml" 'executable = "/bin/sh"'
+}
+
 @test "settings set --local writes to pitchfork.local.toml" {
   run pitchfork settings set general.interval 5s --local
   assert_success

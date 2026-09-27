@@ -55,10 +55,11 @@ rejects quotes, backslashes, `%`, and `$` because of the systemd registration
 format.
 
 `PITCHFORK_BOOT_EXECUTABLE` overrides the setting for a process. Prefer persistent
-user or system configuration: a terminal-only variable or project-local setting
-might not be visible to the supervisor at boot, which would restore default
-repair behavior. An empty value keeps the original default behavior. This setting
-only affects boot registration, not other internal Pitchfork invocations.
+user or system configuration: a terminal-only variable might not be visible to
+the supervisor at boot, which would restore default repair behavior. Project
+config files cannot set this option, including for a system-level registration.
+An empty value keeps the original default behavior. This setting only affects
+boot registration, not other internal Pitchfork invocations.
 
 Keep the executable and its parent directories trusted, especially for a root
 service. Changing the symlink does not restart the running supervisor. Reload or
@@ -207,4 +208,3 @@ CLI commands, the TUI, and shell activation then connect to the managed
 supervisor without spawning a replacement if it is unavailable or still
 starting. Explicit `pitchfork supervisor start` and `pitchfork supervisor run`
 remain available.
-
