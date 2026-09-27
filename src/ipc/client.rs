@@ -732,15 +732,14 @@ impl IpcClient {
         // bounded verification), which can far exceed the flat IPC request
         // timeout — a correct, in-progress stop would otherwise be reported
         // as a failure. Budget the request from the daemon's own stop
-        // configuration: its graceful window, plus the supervisor's ~2s
-        // post-SIGKILL verification, plus the normal request timeout as slack.
+        // configuration.
         let stop_budget = crate::state_file::StateFile::get()
             .daemons
             .get(&id)
             .and_then(|d| d.stop_signal.as_ref())
             .and_then(|s| s.timeout)
             .unwrap_or_else(|| settings().supervisor_stop_timeout());
-        let timeout = stop_budget + Duration::from_secs(2) + settings().ipc_request_timeout();
+        let timeout = stop_request_timeout(stop_budget, settings().ipc_request_timeout());
         let rsp = self
             .request_with_timeout(IpcRequest::Stop { id: id.clone() }, Some(timeout))
             .await?;
@@ -782,4 +781,37 @@ impl IpcClient {
 /// is how one older than the request's variant responds to it.
 fn is_unknown_request(error: &str) -> bool {
     error.starts_with("Invalid request:")
+}
+
+/// How long to wait for the supervisor to answer a Stop request: the daemon's
+/// stop budget, plus the supervisor's ~2s post-SIGKILL verification, plus the
+/// normal request timeout as slack.
+///
+/// Saturates rather than overflowing, so a very large configured stop timeout
+/// means waiting indefinitely instead of panicking the CLI.
+fn stop_request_timeout(stop_budget: Duration, request_timeout: Duration) -> Duration {
+    stop_budget
+        .saturating_add(Duration::from_secs(2))
+        .saturating_add(request_timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_request_timeout_adds_verification_and_slack() {
+        assert_eq!(
+            stop_request_timeout(Duration::from_secs(5), Duration::from_secs(10)),
+            Duration::from_secs(17)
+        );
+    }
+
+    #[test]
+    fn stop_request_timeout_saturates_for_a_huge_stop_budget() {
+        assert_eq!(
+            stop_request_timeout(Duration::MAX, Duration::from_secs(10)),
+            Duration::MAX
+        );
+    }
 }
