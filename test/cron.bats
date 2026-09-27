@@ -790,3 +790,62 @@ EOF2
   after=$(pitchfork logs cron_last --raw 2>/dev/null | grep -c "last_tick" || true)
   [[ "$after" -eq "$before" ]]
 }
+
+# An ad-hoc run is not a config daemon, even under the id of one: a schedule
+# later added to config must not start firing the ad-hoc command.
+@test "a cron schedule added to config does not fire an ad-hoc run of the same id" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.anchor]
+run = "sleep 60"
+EOF2
+  run pitchfork start anchor
+  assert_success
+
+  run pitchfork run adhoc_job -- echo adhoc_tick
+  assert_success
+  wait_for_logs adhoc_job "adhoc_tick" 10
+
+  create_pitchfork_toml <<'EOF2'
+[daemons.anchor]
+run = "sleep 60"
+
+[daemons.adhoc_job]
+run = "echo cfg_tick"
+cron = "* * * * * *"
+EOF2
+
+  # Several cron checks later, the ad-hoc command has still run only once.
+  sleep 6
+  run bash -c "pitchfork logs adhoc_job --raw 2>/dev/null | grep -c adhoc_tick"
+  assert_output "1"
+  run pitchfork status adhoc_job
+  refute_output --partial "Cron:"
+}
+
+# A config daemon recorded before `watch_base_dir` was stored has only the
+# schedule it was started with; that schedule still follows config.
+@test "a started cron daemon recorded without its project dir still follows config" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_legacy]
+run = "echo legacy_tick"
+cron = "0 0 0 1 1 *"
+EOF2
+  run pitchfork start cron_legacy
+  assert_success
+
+  # Rewrite the record as an older version stored it.
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+  grep -v '^watch_base_dir = ' "$PITCHFORK_STATE_DIR/state.toml" >"$PITCHFORK_STATE_DIR/state.toml.tmp"
+  mv "$PITCHFORK_STATE_DIR/state.toml.tmp" "$PITCHFORK_STATE_DIR/state.toml"
+  run grep -c "^watch_base_dir = " "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "0"
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&-
+  _wait_for_cron_schedule cron_legacy "0 0 0 1 1 *"
+
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_legacy]
+run = "echo legacy_tick"
+cron = "0 0 0 2 2 *"
+EOF2
+  _wait_for_cron_schedule cron_legacy "0 0 0 2 2 *"
+}

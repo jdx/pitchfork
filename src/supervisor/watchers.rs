@@ -1056,10 +1056,15 @@ impl Supervisor {
     /// fire from that copy, so without this an edit to `cron` in config — a new
     /// expression, a new `retrigger`, removing it, adding it back — would not
     /// reach a daemon that had been started until it was started again.
-    /// Ad-hoc runs have no schedule, so every stored one came from config.
+    ///
+    /// A record without `watch_base_dir`, the directory of the project whose
+    /// config defined it (whether or not it watches files), is synced only if
+    /// it already has a schedule. An ad-hoc `pitchfork run` has no such
+    /// directory, and giving it the schedule of a config daemon with the same
+    /// id would fire its own command on that schedule. A config daemon
+    /// recorded before that directory was stored has none either, but has the
+    /// schedule it was started with, which must still follow config.
     async fn sync_cron_schedules_with_config(&self) {
-        // `watch_base_dir` is the directory of the project whose config defined
-        // the daemon, whether or not it watches files.
         // Each record's schedule is noted as read, so a result is only applied
         // to a record nothing has changed since: a daemon started meanwhile
         // stores the schedule of the config it was started from, which may be
@@ -1069,6 +1074,7 @@ impl Supervisor {
             state
                 .daemons
                 .iter()
+                .filter(|(_, d)| d.watch_base_dir.is_some() || d.cron_schedule.is_some())
                 .map(|(id, d)| {
                     (
                         id.clone(),
