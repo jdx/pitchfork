@@ -64,6 +64,18 @@ If left empty and the bind address is non-loopback, a random 32-byte hex token i
 
 For external API consumers (e.g., curl, mobile apps), set this to a fixed value or pass it via the PITCHFORK_API_TOKEN environment variable.
 
+## `boot.executable`
+
+- **Type:** `string`
+- **Scope:** only from your own configuration, never from a project file
+- **Set with:** `PITCHFORK_BOOT_EXECUTABLE`
+
+Executable path written into boot registrations
+
+Set an absolute path to a stable executable or symlink to keep boot registrations independent of versioned package-manager install paths. The path is preserved as written, including symlinks. It must exist and be executable. No shell, PATH lookup, or tilde expansion is used.
+
+Used by boot enable, explicit refresh, and automatic stale-path repair. Set this in the user or system config so boot-time repair sees it too. Project config files cannot select a boot executable. Empty (default) uses the running binary's resolved path, as before.
+
 ## `general.autostop_delay`
 
 - **Type:** `duration`

@@ -1064,6 +1064,19 @@
         }
       }
     },
+    "SettingsBootPartial": {
+      "description": "Partial mirror of [`SettingsBoot`].",
+      "type": "object",
+      "properties": {
+        "executable": {
+          "description": "Absolute executable path written into boot registrations",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "SettingsGeneralPartial": {
       "description": "Partial mirror of [`SettingsGeneral`].",
       "type": "object",
@@ -1269,6 +1282,9 @@
       "properties": {
         "api": {
           "$ref": "#/$defs/SettingsApiPartial"
+        },
+        "boot": {
+          "$ref": "#/$defs/SettingsBootPartial"
         },
         "general": {
           "$ref": "#/$defs/SettingsGeneralPartial"

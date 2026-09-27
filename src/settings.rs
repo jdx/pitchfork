@@ -90,6 +90,25 @@ pub struct SettingsApi {
     pub token: String,
 }
 
+/// The `boot.*` settings.
+#[derive(usage_rs::Config, Debug, Clone, PartialEq)]
+#[usage(prefix = "boot")]
+pub struct SettingsBoot {
+    /// Executable path written into boot registrations
+    ///
+    /// Set an absolute path to a stable executable or symlink to keep boot
+    /// registrations independent of versioned package-manager install paths.
+    /// The path is preserved as written, including symlinks. It must exist
+    /// and be executable. No shell, PATH lookup, or tilde expansion is used.
+    ///
+    /// Used by boot enable, explicit refresh, and automatic stale-path repair.
+    /// Set this in the user or system config so boot-time repair sees it too.
+    /// Project config files cannot select a boot executable.
+    /// Empty (default) uses the running binary's resolved path, as before.
+    #[usage(env = "PITCHFORK_BOOT_EXECUTABLE", default = "", scope = "global")]
+    pub executable: String,
+}
+
 /// The `general.*` settings.
 #[derive(usage_rs::Config, Debug, Clone, PartialEq)]
 #[usage(prefix = "general")]
@@ -1189,6 +1208,8 @@ pub struct Settings {
     #[usage(flatten)]
     pub api: SettingsApi,
     #[usage(flatten)]
+    pub boot: SettingsBoot,
+    #[usage(flatten)]
     pub general: SettingsGeneral,
     #[usage(flatten)]
     pub ipc: SettingsIpc,
@@ -1810,6 +1831,14 @@ settings_partial! {
 }
 
 settings_partial! {
+    /// Partial mirror of [`SettingsBoot`].
+    SettingsBootPartial {
+        /// Absolute executable path written into boot registrations
+        executable: String,
+    }
+}
+
+settings_partial! {
     /// Partial mirror of [`SettingsGeneral`].
     SettingsGeneralPartial {
         /// Delay before auto-stopping daemons when leaving a directory
@@ -2013,6 +2042,7 @@ settings_partial! {
     /// pitchfork.toml files.
     SettingsPartial {
         @group api: SettingsApiPartial,
+        @group boot: SettingsBootPartial,
         @group general: SettingsGeneralPartial,
         @group ipc: SettingsIpcPartial,
         @group logs: SettingsLogsPartial,
@@ -2025,6 +2055,7 @@ settings_partial! {
 
 impl_has_any_set!(
     SettingsApiPartial,
+    SettingsBootPartial,
     SettingsGeneralPartial,
     SettingsIpcPartial,
     SettingsLogsArchiveHookPartial,
@@ -2255,8 +2286,9 @@ mod tests {
             .map(|meta| meta.key)
             .collect();
         // 75 before either change, plus `supervisor.oneshot_timeout` from main,
-        // `proxy.dns` / `proxy.dns_port`, and `proxy.idle_timeout`.
-        assert_eq!(keys.len(), 79, "{keys:?}");
+        // `proxy.dns` / `proxy.dns_port`, `proxy.idle_timeout`, and `boot.executable`.
+        assert_eq!(keys.len(), 80, "{keys:?}");
+        assert!(keys.contains(&"boot.executable"));
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"supervisor.oneshot_timeout"));
         assert!(keys.contains(&"logs.archive_hook.command"));
@@ -2707,6 +2739,43 @@ user = "postgres"
             .id;
         let origin = resolved.origin(id).unwrap().describe();
         assert!(origin.contains("higher.toml"), "{origin}");
+    }
+
+    #[test]
+    fn boot_executable_rejects_project_config() {
+        let tree = Tree::new("boot-scope");
+        let project = tree.write(
+            "pitchfork.toml",
+            "[settings.boot]\nexecutable = \"/tmp/project/pitchfork\"\n",
+        );
+        let global = tree.write(
+            "config.toml",
+            "[settings.boot]\nexecutable = \"/opt/pitchfork/stable\"\n",
+        );
+        let project = FileLayer::at(&project, FileScope::Project).under("settings");
+        let global = FileLayer::at(&global, FileScope::Global).under("settings");
+
+        let resolved = resolve(
+            Settings::SETTINGS_REGISTRY,
+            Layers::new().then(&project).then(&global),
+        )
+        .unwrap();
+        assert_eq!(
+            Settings::read(&resolved).unwrap().boot.executable,
+            "/opt/pitchfork/stable"
+        );
+        assert!(resolved.warnings.iter().any(|warning| {
+            warning.message.contains("boot.executable") && warning.message.contains("cannot be set")
+        }));
+
+        let resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&project)).unwrap();
+        assert!(
+            Settings::read(&resolved)
+                .unwrap()
+                .boot
+                .executable
+                .is_empty()
+        );
     }
 
     #[test]

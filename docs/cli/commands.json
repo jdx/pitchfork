@@ -5277,6 +5277,38 @@
         "default_list": [],
         "extensions": []
       },
+      "boot.executable": {
+        "default": "",
+        "default_note": null,
+        "data_type": "string",
+        "value_type": {
+          "kind": "base",
+          "of": "string"
+        },
+        "env": "PITCHFORK_BOOT_EXECUTABLE",
+        "envs": [
+          "PITCHFORK_BOOT_EXECUTABLE"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Executable path written into boot registrations",
+        "long_help": "Executable path written into boot registrations\n\nSet an absolute path to a stable executable or symlink to keep boot registrations independent of versioned package-manager install paths. The path is preserved as written, including symlinks. It must exist and be executable. No shell, PATH lookup, or tilde expansion is used.\n\nUsed by boot enable, explicit refresh, and automatic stale-path repair. Set this in the user or system config so boot-time repair sees it too. Project config files cannot select a boot executable. Empty (default) uses the running binary's resolved path, as before.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "global",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "general.autostop_delay": {
         "default": "1m",
         "default_note": null,

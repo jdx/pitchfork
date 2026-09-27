@@ -4,7 +4,7 @@ use crate::cli::json_output::{JsonSettingEntry, print_json};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::{SettingsPartial, settings_resolved};
 use miette::{IntoDiagnostic, bail};
-use usage_rs::config::{PropMeta, Registry, Resolved, SourceKind, Ty};
+use usage_rs::config::{PropMeta, Registry, Resolved, Scope, SourceKind, Ty};
 
 const LOG_LEVEL_VALUES: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
@@ -281,6 +281,14 @@ impl SetCmd {
         let value = &self.value;
         validate_setting_key(key)?;
         validate_setting_value(key, value)?;
+
+        let scope = REGISTRY.get(REGISTRY.lookup(key).unwrap().id).scope;
+        if scope == Scope::Env {
+            bail!("{key} can only be set in the environment");
+        }
+        if scope == Scope::Global && !self.global {
+            bail!("{key} can only be set in global configuration; pass --global");
+        }
 
         let config_path = resolve_config_path(self.global, self.local, self.project, false).await?;
 
