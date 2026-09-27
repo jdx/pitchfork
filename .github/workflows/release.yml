@@ -170,6 +170,10 @@ jobs:
       - name: Upload binary (Linux, via cross)
         if: matrix.os == 'ubuntu-latest'
         uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1
+        env:
+          # Links the Linux GNU executable non-PIE (see link_without_pie in
+          # build.rs).
+          PITCHFORK_NO_PIE: "1"
         with:
           bin: pitchfork
           target: ${{ matrix.target }}
@@ -177,6 +181,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           profile: serious
           build-tool: cross
+      - name: Check the Linux GNU binary is linked non-PIE
+        if: contains(matrix.target, '-linux-gnu')
+        shell: bash
+        env:
+          BINARY: target/${{ matrix.target }}/serious/pitchfork
+        run: |
+          if ! readelf -h "$BINARY" | grep -q 'Type:.*EXEC'; then
+            echo "::error::$BINARY is not linked non-PIE; PITCHFORK_NO_PIE did not reach build.rs"
+            exit 1
+          fi
       - name: Upload binary (Windows)
         if: startsWith(matrix.os, 'windows')
         uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1
