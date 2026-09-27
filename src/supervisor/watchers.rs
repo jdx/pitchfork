@@ -39,6 +39,98 @@ fn build_archive_hook(config: &crate::settings::SettingsLogsArchiveHook) -> Opti
     })
 }
 
+/// The cron schedule a daemon record stores: expression, retrigger, immediate.
+type StoredCron = (
+    Option<String>,
+    Option<crate::pitchfork_toml::CronRetrigger>,
+    Option<bool>,
+);
+
+fn stored_cron(daemon: &crate::daemon::Daemon) -> StoredCron {
+    (
+        daemon.cron_schedule.clone(),
+        daemon.cron_retrigger,
+        daemon.cron_immediate,
+    )
+}
+
+/// What config says about a daemon's cron schedule.
+#[derive(Debug)]
+enum ConfigCron {
+    /// Config schedules the daemon like this.
+    Scheduled(crate::pitchfork_toml::PitchforkTomlCron),
+    /// Config was read and does not schedule the daemon: its `cron`, or the
+    /// daemon itself, is gone.
+    Unscheduled,
+    /// The daemon's config could not be found or read, so nothing is known
+    /// and its stored schedule must stay.
+    Unknown,
+}
+
+/// Look up `id`'s schedule in its own project's config and in `all`, the
+/// config of every project the supervisor knows.
+///
+/// The own config is read from `project_dir`, the directory of the project
+/// whose config defined the daemon, so a daemon missing from it has been
+/// removed — even if it was the project's last one, or the config file went
+/// with it. Daemons recorded before that directory was stored have only
+/// `dir`, their working directory, which need not be inside their project;
+/// for them a missing daemon counts as removed only if the config read there
+/// still defines another daemon of the same namespace.
+///
+/// `all` alone never shows a removal: a project that failed to load is
+/// skipped by it rather than failing it, and another project it loaded
+/// separately may share the namespace, so an unreadable config would look
+/// like deleted schedules.
+fn config_cron(
+    id: &DaemonId,
+    project_dir: Option<&Path>,
+    dir: Option<&Path>,
+    all: Option<&PitchforkToml>,
+) -> ConfigCron {
+    let (own_dir, own_is_project) = match project_dir {
+        Some(project_dir) => (Some(project_dir), true),
+        None => (dir, false),
+    };
+    let own = own_dir.and_then(|dir| PitchforkToml::all_merged_from(dir).ok());
+    config_cron_in(id, own.as_ref(), own_is_project, all)
+}
+
+/// [`config_cron`] over configs already read: `own`, read from the daemon's
+/// project directory when `own_is_project` or else from its working
+/// directory, and `all`.
+fn config_cron_in(
+    id: &DaemonId,
+    own: Option<&PitchforkToml>,
+    own_is_project: bool,
+    all: Option<&PitchforkToml>,
+) -> ConfigCron {
+    // With the daemon's own project known, only its config answers: another
+    // project loaded into `all` can define a daemon under the same id, and
+    // must not stand in for the own project when that could not be read.
+    let all = if own_is_project { None } else { all };
+    for pt in own.into_iter().chain(all) {
+        if let Some(daemon) = pt.daemons.get(id) {
+            return match &daemon.cron {
+                Some(cron) => ConfigCron::Scheduled(cron.clone()),
+                None => ConfigCron::Unscheduled,
+            };
+        }
+    }
+    let project_read = own.is_some_and(|pt| {
+        own_is_project
+            || pt
+                .daemons
+                .keys()
+                .any(|other| other.namespace() == id.namespace())
+    });
+    if project_read {
+        ConfigCron::Unscheduled
+    } else {
+        ConfigCron::Unknown
+    }
+}
+
 fn daemon_ids_for_dir(dir: &Path, dir_to_daemons: &HashMap<PathBuf, Vec<DaemonId>>) -> String {
     dir_to_daemons
         .get(dir)
@@ -764,6 +856,10 @@ impl Supervisor {
         // are invisible to the cron checker.
         self.register_config_cron_daemons().await?;
 
+        // Bring the schedules stored in state in line with config first, so
+        // the checks below fire each daemon by the schedule it has now.
+        self.sync_cron_schedules_with_config().await;
+
         let now = chrono::Local::now();
 
         // Collect only IDs of daemons with cron schedules (avoids cloning entire HashMap)
@@ -952,6 +1048,115 @@ impl Supervisor {
             )));
         };
         Some(self.run_options_from_config(id, config, &pt).await)
+    }
+
+    /// Update the cron schedules stored in state to what config says now.
+    ///
+    /// `pitchfork start` stores a daemon's schedule in state, and the checks
+    /// fire from that copy, so without this an edit to `cron` in config — a new
+    /// expression, a new `retrigger`, removing it, adding it back — would not
+    /// reach a daemon that had been started until it was started again.
+    /// Ad-hoc runs have no schedule, so every stored one came from config.
+    async fn sync_cron_schedules_with_config(&self) {
+        // `watch_base_dir` is the directory of the project whose config defined
+        // the daemon, whether or not it watches files.
+        // Each record's schedule is noted as read, so a result is only applied
+        // to a record nothing has changed since: a daemon started meanwhile
+        // stores the schedule of the config it was started from, which may be
+        // newer than the one read here.
+        let daemons: Vec<(DaemonId, Option<PathBuf>, Option<PathBuf>, StoredCron)> = {
+            let state = self.state_file.lock().await;
+            state
+                .daemons
+                .iter()
+                .map(|(id, d)| {
+                    (
+                        id.clone(),
+                        d.watch_base_dir.clone(),
+                        d.dir.clone(),
+                        stored_cron(d),
+                    )
+                })
+                .collect()
+        };
+        // Reading config walks the filesystem, so it runs on a blocking worker
+        // rather than holding up the watcher.
+        let found = match tokio::task::spawn_blocking(move || {
+            let all = PitchforkToml::all_merged_all_namespaces().ok();
+            daemons
+                .into_iter()
+                .map(|(id, project_dir, dir, stored)| {
+                    let cron =
+                        config_cron(&id, project_dir.as_deref(), dir.as_deref(), all.as_ref());
+                    (id, cron, stored)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        {
+            Ok(found) => found,
+            Err(e) => {
+                warn!("cron: reading config panicked ({e}); keeping stored schedules");
+                return;
+            }
+        };
+
+        let mut state = self.state_file.lock().await;
+        let mut changed = false;
+        for (id, cron, stored) in found {
+            let Some(daemon) = state.daemons.get_mut(&id) else {
+                continue;
+            };
+            if stored_cron(daemon) != stored {
+                debug!("cron: {id} changed while config was read; leaving it to the next check");
+                continue;
+            }
+            match cron {
+                ConfigCron::Scheduled(cron) => {
+                    if daemon.cron_schedule.as_deref() != Some(cron.schedule.as_str()) {
+                        // A new schedule starts afresh: its first check is
+                        // decided by `immediate`, not by when the old one last
+                        // fired.
+                        daemon.cron_schedule = Some(cron.schedule.clone());
+                        daemon.cron_retrigger = Some(cron.retrigger);
+                        daemon.cron_immediate = Some(cron.immediate);
+                        daemon.last_cron_triggered = None;
+                        info!(
+                            "cron: {id} is now scheduled by config as {:?}",
+                            cron.schedule
+                        );
+                        changed = true;
+                    } else {
+                        if daemon.cron_retrigger != Some(cron.retrigger) {
+                            daemon.cron_retrigger = Some(cron.retrigger);
+                            info!(
+                                "cron: {id} now retriggers {:?} as config says",
+                                cron.retrigger
+                            );
+                            changed = true;
+                        }
+                        if daemon.cron_immediate != Some(cron.immediate) {
+                            daemon.cron_immediate = Some(cron.immediate);
+                            changed = true;
+                        }
+                    }
+                }
+                ConfigCron::Unscheduled => {
+                    if daemon.cron_schedule.is_some() {
+                        // A run in progress is left to finish; the daemon is
+                        // just not started by the schedule again.
+                        daemon.cron_schedule = None;
+                        daemon.cron_retrigger = None;
+                        info!("cron: {id} is no longer scheduled in config; dropped its schedule");
+                        changed = true;
+                    }
+                }
+                ConfigCron::Unknown => {}
+            }
+        }
+        if changed && let Err(e) = state.write() {
+            error!("failed to persist cron schedules updated from config: {e}");
+        }
     }
 
     /// Watch files for daemons that have `watch` patterns configured.
@@ -1385,6 +1590,100 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn project(toml: &str) -> PitchforkToml {
+        PitchforkToml::parse_str(toml, Path::new("/tmp/proj/pitchfork.toml")).unwrap()
+    }
+
+    #[test]
+    fn config_cron_follows_the_config_that_defines_the_daemon() {
+        let id = DaemonId::new("proj", "job");
+        let pt = project(
+            "[daemons.job]\nrun = \"echo\"\ncron = { schedule = \"0 0 0 1 1 *\", retrigger = \"always\" }\n",
+        );
+        match config_cron_in(&id, Some(&pt), false, None) {
+            ConfigCron::Scheduled(cron) => {
+                assert_eq!(cron.schedule, "0 0 0 1 1 *");
+                assert_eq!(cron.retrigger, crate::pitchfork_toml::CronRetrigger::Always);
+            }
+            other => panic!("expected a schedule, got {other:?}"),
+        }
+
+        let pt = project("[daemons.job]\nrun = \"echo\"\n");
+        assert!(matches!(
+            config_cron_in(&id, Some(&pt), false, None),
+            ConfigCron::Unscheduled
+        ));
+    }
+
+    #[test]
+    fn config_cron_counts_a_daemon_as_removed_only_if_its_project_was_read() {
+        let id = DaemonId::new("proj", "job");
+        // The project was read and still defines another daemon: `job` was
+        // deleted from it.
+        let pt = project("[daemons.other]\nrun = \"echo\"\n");
+        assert!(matches!(
+            config_cron_in(&id, Some(&pt), false, None),
+            ConfigCron::Unscheduled
+        ));
+
+        // Nothing of the project was read — it failed to load, or is not
+        // one the supervisor knows — so nothing may be dropped.
+        let elsewhere = PitchforkToml::parse_str(
+            "[daemons.other]\nrun = \"echo\"\n",
+            Path::new("/tmp/elsewhere/pitchfork.toml"),
+        )
+        .unwrap();
+        assert!(matches!(
+            config_cron_in(&id, Some(&elsewhere), false, None),
+            ConfigCron::Unknown
+        ));
+        assert!(matches!(
+            config_cron_in(&id, None, false, None),
+            ConfigCron::Unknown
+        ));
+
+        // The project failed to load, and another project loaded on its own
+        // shares its namespace: that says nothing about this project.
+        assert!(matches!(
+            config_cron_in(&id, None, false, Some(&pt)),
+            ConfigCron::Unknown
+        ));
+    }
+
+    #[test]
+    fn config_cron_counts_a_daemon_as_removed_once_its_project_no_longer_defines_it() {
+        let id = DaemonId::new("proj", "job");
+        // Read from the daemon's own project, which now defines no daemon at
+        // all: `job` was its last one, and it is gone.
+        let emptied = project("");
+        assert!(matches!(
+            config_cron_in(&id, Some(&emptied), true, None),
+            ConfigCron::Unscheduled
+        ));
+        // Its project could not be read: nothing is known.
+        assert!(matches!(
+            config_cron_in(&id, None, true, None),
+            ConfigCron::Unknown
+        ));
+        // Nor does another project defining the same id stand in for it.
+        let elsewhere = project(
+            "[daemons.job]\nrun = \"echo\"\ncron = { schedule = \"0 0 0 1 1 *\", retrigger = \"always\" }\n",
+        );
+        assert!(matches!(
+            config_cron_in(&id, None, true, Some(&elsewhere)),
+            ConfigCron::Unknown
+        ));
+        // Another project, loaded separately, defines a daemon under the
+        // same id with a schedule: that is not this daemon's.
+        let other = project(
+            "[daemons.job]\nrun = \"echo\"\ncron = { schedule = \"0 0 0 1 1 *\", retrigger = \"always\" }\n",
+        );
+        assert!(matches!(
+            config_cron_in(&id, Some(&emptied), true, Some(&other)),
+            ConfigCron::Unscheduled
+        ));
+    }
 
     #[cfg(unix)]
     #[tokio::test]
