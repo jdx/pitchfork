@@ -167,9 +167,29 @@ jobs:
             exit 1
           fi
           echo "notarized: submission $id"
+      # The upload action publishes as soon as it has built, so build and check
+      # the binary first. The action's own build then finds it up to date: same
+      # profile, target and PITCHFORK_NO_PIE, which build.rs reruns on.
+      - name: Build the Linux binary and check it is linked non-PIE
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          # Links the Linux GNU executable non-PIE (see link_without_pie in
+          # build.rs).
+          PITCHFORK_NO_PIE: "1"
+          TARGET: ${{ matrix.target }}
+        run: |
+          cross build --bin pitchfork --target "$TARGET" --profile serious
+          binary="target/$TARGET/serious/pitchfork"
+          if ! readelf -h "$binary" | grep -qE '^[[:space:]]*Type:[[:space:]]+EXEC[[:space:]]'; then
+            echo "::error::$binary is not linked non-PIE; PITCHFORK_NO_PIE did not reach build.rs"
+            exit 1
+          fi
       - name: Upload binary (Linux, via cross)
         if: matrix.os == 'ubuntu-latest'
         uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1
+        env:
+          PITCHFORK_NO_PIE: "1"
         with:
           bin: pitchfork
           target: ${{ matrix.target }}
