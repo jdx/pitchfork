@@ -27,6 +27,43 @@ For HTTPS on the standard port, use
 [local proxy setup](/guides/port-management#hostname-resolution); the supervisor
 can remain unprivileged.
 
+## Keep a stable executable path
+
+By default, registrations use the running binary's resolved path. After a
+package-manager upgrade, automatic repair updates stale registrations to that
+path. To opt into a stable symlink instead, set an absolute path in the user
+config (`~/.config/pitchfork/config.toml`) or system config:
+
+```toml
+[settings.boot]
+executable = "/home/alice/.local/share/mise/installs/pitchfork/latest/pitchfork"
+```
+
+Replace the example with your installed executable. Then run
+`pitchfork boot enable` (or `sudo pitchfork boot enable` for a system service).
+Initial registration, repeated `enable`, and automatic repair all use this
+literal path without resolving away symlinks, even if the symlink points to a
+newer version than the running supervisor. Updating the recorded invoking user
+also keeps this executable choice.
+
+The path must be absolute, exist, and be executable. Pitchfork does not expand
+`~`, search `PATH`, or execute a shell command here. Invalid explicit paths fail
+registration; automatic repair logs the error and leaves the old entry intact.
+Status and disable still work. Control characters are rejected. Linux and
+Windows currently do not support whitespace in executable paths; Linux also
+rejects quotes, backslashes, `%`, and `$` because of the systemd registration
+format.
+
+`PITCHFORK_BOOT_EXECUTABLE` overrides the setting for a process. Prefer persistent
+user or system configuration: a terminal-only variable or project-local setting
+might not be visible to the supervisor at boot, which would restore default
+repair behavior. An empty value keeps the original default behavior. This setting
+only affects boot registration, not other internal Pitchfork invocations.
+
+Keep the executable and its parent directories trusted, especially for a root
+service. Changing the symlink does not restart the running supervisor. Reload or
+restart the service when ready to use a new target.
+
 ## Choose which daemons start {#configure-boot-daemons}
 
 Set `boot_start = true` on daemons that should start with the supervisor. For

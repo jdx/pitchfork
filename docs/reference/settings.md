@@ -51,6 +51,11 @@ auto_start = true
 bind_port = 3120
 ```
 
+For a boot registration that survives versioned install paths, set
+`settings.boot.executable` to an absolute stable executable path in the user or
+system config. See [stable boot executable paths](/guides/boot-start#keep-a-stable-executable-path).
+The default empty value uses the running binary's resolved path.
+
 ## Precedence
 
 From lowest to highest priority:

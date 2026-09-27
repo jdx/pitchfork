@@ -50,6 +50,9 @@ mod imp {
     }
 
     pub struct BootManager {
+        /// Literal executable spelling selected for boot registration only.
+        app_path: String,
+        explicit_executable: bool,
         /// User recorded in the system registration, if any.
         invoking_user: Option<String>,
         /// The launcher matching the current privilege level (used for enable).
@@ -102,7 +105,13 @@ mod imp {
         /// Only the current level's registration is ever written, and for root
         /// that is the system registration.
         fn with_invoking_user(invoking_user: Option<String>) -> Result<Self> {
-            let app_path = env::PITCHFORK_BIN.to_string_lossy().to_string();
+            let configured = crate::settings::settings().boot.executable.clone();
+            let explicit_executable = !configured.is_empty();
+            let app_path = if configured.is_empty() {
+                env::PITCHFORK_BIN.to_string_lossy().to_string()
+            } else {
+                configured
+            };
 
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             let (current_args, other_args) =
@@ -163,6 +172,8 @@ mod imp {
 
             #[cfg(target_os = "macos")]
             return Ok(Self {
+                app_path,
+                explicit_executable,
                 invoking_user,
                 current,
                 other,
@@ -171,10 +182,67 @@ mod imp {
 
             #[cfg(not(target_os = "macos"))]
             Ok(Self {
+                app_path,
+                explicit_executable,
                 invoking_user,
                 current,
                 other,
             })
+        }
+
+        /// Validate only explicit choices, and only before registration work.
+        /// Status/disable must remain usable when an executable has disappeared.
+        fn validate_executable(&self) -> Result<()> {
+            if !self.explicit_executable {
+                return Ok(());
+            }
+            let invalid = |reason: &str| {
+                miette::miette!(
+                    "settings.boot.executable '{}': {reason}; set an absolute path to an \
+                     existing executable, or unset the setting to use the running binary",
+                    self.app_path
+                )
+            };
+            let path = std::path::Path::new(&self.app_path);
+            if !path.is_absolute() {
+                return Err(invalid(
+                    "path must be absolute (no PATH or tilde expansion)",
+                ));
+            }
+            if self.app_path.chars().any(char::is_control) {
+                return Err(invalid("path must not contain control characters"));
+            }
+            // auto-launcher writes an unquoted command and reads the first
+            // whitespace-delimited token on these platforms. Reject paths it
+            // cannot round-trip instead of writing a broken registration.
+            #[cfg(any(target_os = "linux", windows))]
+            if self.app_path.chars().any(char::is_whitespace) {
+                return Err(invalid(
+                    "boot registration does not support whitespace in paths on this platform",
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            if self.app_path.contains(['\"', '\'', '\\', '%', '$']) {
+                return Err(invalid(
+                    "boot registration does not support quotes, backslashes, percent signs or dollar signs in systemd executable paths",
+                ));
+            }
+            let metadata = std::fs::metadata(path)
+                .map_err(|e| invalid(&format!("cannot access executable: {e}")))?;
+            if !metadata.is_file() {
+                return Err(invalid("path is not a regular file"));
+            }
+            #[cfg(unix)]
+            {
+                let path = std::ffi::CString::new(self.app_path.as_bytes())
+                    .map_err(|_| invalid("path contains a NUL byte"))?;
+                // SAFETY: path is a valid, NUL-terminated string. access only
+                // checks permissions; it does not run the configured program.
+                if unsafe { libc::access(path.as_ptr(), libc::X_OK) } != 0 {
+                    return Err(invalid("file is not executable by this user"));
+                }
+            }
+            Ok(())
         }
 
         /// User recorded in the registration written at the current level.
@@ -205,12 +273,12 @@ mod imp {
             None
         }
 
-        /// Whether the current-level registration already has the current
-        /// binary path and invoking user, so `enable` has nothing to change.
+        /// Whether the current-level registration already has the selected
+        /// boot executable and invoking user, so `enable` has nothing to change.
         pub fn is_current_level_up_to_date(&self) -> Result<bool> {
-            let current_bin = env::PITCHFORK_BIN.to_string_lossy();
+            self.validate_executable()?;
             let registered = self.current.get_registered_app_path().into_diagnostic()?;
-            if registered.as_deref() != Some(current_bin.as_ref()) {
+            if registered.as_deref() != Some(self.app_path.as_str()) {
                 return Ok(false);
             }
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -282,6 +350,7 @@ mod imp {
         /// On macOS, migrates any legacy LaunchAgentSystem entry (from pre-1.0.3)
         /// to the correct LaunchDaemonSystem entry.
         pub fn enable(&self) -> Result<()> {
+            self.validate_executable()?;
             // For root, legacy will be migrated so only check non-legacy other level.
             // For non-root, legacy cannot be migrated and is also a conflict.
             #[cfg(target_os = "macos")]
@@ -313,6 +382,7 @@ mod imp {
         /// Rewrite the existing registration at the current privilege level,
         /// updating its binary path and recorded invoking user.
         pub fn refresh(&self) -> Result<()> {
+            self.validate_executable()?;
             self.current.enable().into_diagnostic()?;
 
             #[cfg(target_os = "macos")]
@@ -342,8 +412,8 @@ mod imp {
             Ok(())
         }
 
-        /// Check whether the registered boot binary path matches the current
-        /// `PITCHFORK_BIN`. If stale (binary moved after a package-manager upgrade),
+        /// Check whether the registered boot binary path matches the selected
+        /// boot executable. If stale (binary moved after a package-manager upgrade),
         /// re-register at the current privilege level so the next boot uses the
         /// correct path.
         ///
@@ -351,7 +421,11 @@ mod imp {
         /// path already matches. Errors are logged and swallowed — this is a
         /// best-effort self-heal that must not block supervisor startup.
         pub fn check_and_reregister_if_stale(&self) {
-            let current_bin = env::PITCHFORK_BIN.to_string_lossy().to_string();
+            if let Err(e) = self.validate_executable() {
+                warn!("cannot repair boot registration: {e}");
+                return;
+            }
+            let current_bin = &self.app_path;
 
             let registered = match self.current.get_registered_app_path() {
                 Ok(Some(path)) => path,
@@ -362,7 +436,7 @@ mod imp {
                 }
             };
 
-            if registered == current_bin {
+            if registered == *current_bin {
                 return; // path matches, all good
             }
 
@@ -405,6 +479,68 @@ mod imp {
             }
 
             info!("boot registration updated to current binary path");
+        }
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    mod tests {
+        use super::BootManager;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        #[test]
+        fn refresh_preserves_executable_when_invoking_user_changes() {
+            // Root selects /etc regardless of HOME; never exercise that route.
+            assert!(
+                !nix::unistd::Uid::effective().is_root(),
+                "run this test as non-root"
+            );
+            if std::env::var_os("PITCHFORK_BOOT_METADATA_TEST_CHILD").is_none() {
+                let home = tempfile::tempdir().unwrap();
+                let bin = home.path().join("bin");
+                std::fs::create_dir(&bin).unwrap();
+                let systemctl = bin.join("systemctl");
+                std::fs::write(&systemctl, "#!/bin/sh\ncase \"$*\" in\n'--user daemon-reload'|'--user enable pitchfork.service') exit 0 ;;\n*) exit 99 ;;\nesac\n").unwrap();
+                std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+                symlink(std::env::current_exe().unwrap(), bin.join("stable")).unwrap();
+                // Isolate settings/environment lazies from all other unit tests.
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "boot_manager::imp::tests::refresh_preserves_executable_when_invoking_user_changes", "--nocapture"])
+                    .current_dir(home.path())
+                    .env("HOME", home.path())
+                    .env("PATH", &bin)
+                    .env("PITCHFORK_CONFIG_DIR", home.path())
+                    .env("PITCHFORK_BOOT_EXECUTABLE", bin.join("stable"))
+                    .env("PITCHFORK_BOOT_METADATA_TEST_CHILD", "1")
+                    .output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return;
+            }
+
+            // Use real BootManager registration with user-level fixture paths.
+            // This covers metadata writing, not root privilege routing or its
+            // automatic existing-account preservation branch.
+            let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+            let stable = home.join("bin/stable");
+            let unit = home.join(".config/systemd/user/pitchfork.service");
+            for user in [Some("alice"), Some("bob"), None] {
+                let manager = BootManager::with_invoking_user(user.map(String::from)).unwrap();
+                manager.refresh().unwrap();
+                let contents = std::fs::read_to_string(&unit).unwrap();
+                let expected = match user {
+                    Some(user) => format!(
+                        "ExecStart={} supervisor run --boot --invoking-user {user}\n",
+                        stable.display()
+                    ),
+                    None => format!("ExecStart={} supervisor run --boot\n", stable.display()),
+                };
+                assert!(contents.contains(&expected), "{contents}");
+            }
         }
     }
 }
