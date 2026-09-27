@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::{Arc, atomic};
 use std::time::Duration;
-use tokio::io::AsyncBufReadExt;
 use tokio::select;
 use tokio::sync::oneshot;
 use tokio::time;
@@ -322,6 +321,54 @@ fn launch_command(words: Vec<String>, mise_bin: Option<&std::path::Path>) -> (St
             // empty argv is refused before this is reached.
             let program = words.next().unwrap_or_default();
             (program, words.collect())
+        }
+    }
+}
+
+/// Text of one line read from a daemon's output, its line ending removed.
+///
+/// Decoded as the log sink decodes lines, so output that is not UTF-8 is
+/// logged rather than ending the read. A PTY slave's ONLCR turns `\n` into
+/// `\r\n`, so every trailing `\r` goes, as the sink also strips them.
+fn output_line_text(line: &[u8]) -> String {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    crate::cli::log_sink::decode_line(line)
+        .trim_end_matches('\r')
+        .to_string()
+}
+
+/// Send each line of `reader` to `tx` until the output ends or nobody is
+/// listening.
+///
+/// Reading stops only there, never on a line's content: a reader that gave up
+/// would stop draining the daemon's pipe or PTY, and the daemon would block,
+/// or fail, on its next write.
+async fn forward_output_lines<R>(mut reader: R, tx: tokio::sync::mpsc::Sender<super::OutputLine>)
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        // A read error ends the output too: a Linux PTY master reports the
+        // slave closing, once the daemon is gone, as EIO rather than end of
+        // file. Whatever of a last, unterminated line arrived before it is
+        // still sent.
+        let last = match reader.read_until(b'\n', &mut line).await {
+            Ok(0) => break,
+            Ok(_) => false,
+            Err(_) if line.is_empty() => break,
+            Err(_) => true,
+        };
+        let sent = tx
+            .send(super::OutputLine {
+                text: output_line_text(&line),
+                source: super::OutputSource::Local,
+            })
+            .await;
+        if sent.is_err() || last {
+            break;
         }
     }
 }
@@ -1346,23 +1393,16 @@ impl Supervisor {
         #[cfg(unix)]
         let pty_reader = pty_pair.map(|p| {
             tokio::io::BufReader::new(tokio::fs::File::from_std(std::fs::File::from(p.master)))
-                .lines()
         });
         #[cfg(not(unix))]
-        let pty_reader: Option<tokio::io::Lines<tokio::io::BufReader<tokio::fs::File>>> = None;
+        let pty_reader: Option<tokio::io::BufReader<tokio::fs::File>> = None;
         let stdout_reader = if pty_reader.is_none() {
-            child
-                .stdout
-                .take()
-                .map(|s| tokio::io::BufReader::new(s).lines())
+            child.stdout.take().map(tokio::io::BufReader::new)
         } else {
             None
         };
         let stderr_reader = if pty_reader.is_none() {
-            child
-                .stderr
-                .take()
-                .map(|s| tokio::io::BufReader::new(s).lines())
+            child.stderr.take().map(tokio::io::BufReader::new)
         } else {
             None
         };
@@ -1388,66 +1428,21 @@ impl Supervisor {
             // sink's IPC reports) into a single channel.
             let mut output_rx = output_rx;
 
-            if let Some(mut reader) = pty_reader {
+            if let Some(reader) = pty_reader {
                 // PTY mode: single merged stream from the master.
                 // output_tx is moved into the spawn; when the reader ends the
                 // channel closes automatically.
-                tokio::spawn(async move {
-                    while let Ok(Some(mut line)) = reader.next_line().await {
-                        // PTY slave uses ONLCR: \n → \r\n; strip the trailing \r.
-                        if line.ends_with('\r') {
-                            line.pop();
-                        }
-                        if output_tx
-                            .send(super::OutputLine {
-                                text: line,
-                                source: super::OutputSource::Local,
-                            })
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                });
+                tokio::spawn(forward_output_lines(reader, output_tx));
             } else {
                 // Pipe mode: stdout and stderr are merged into the same channel.
                 // Both `ready_output` and `on_output_hook` patterns match against
                 // lines from either stream, which is the expected behavior (a
                 // "server ready" message may appear on stderr in some tools).
-                if let Some(mut stdout) = stdout_reader {
-                    let tx = output_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(Some(line)) = stdout.next_line().await {
-                            if tx
-                                .send(super::OutputLine {
-                                    text: line,
-                                    source: super::OutputSource::Local,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    });
+                if let Some(stdout) = stdout_reader {
+                    tokio::spawn(forward_output_lines(stdout, output_tx.clone()));
                 }
-                if let Some(mut stderr) = stderr_reader {
-                    let tx = output_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(Some(line)) = stderr.next_line().await {
-                            if tx
-                                .send(super::OutputLine {
-                                    text: line,
-                                    source: super::OutputSource::Local,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    });
+                if let Some(stderr) = stderr_reader {
+                    tokio::spawn(forward_output_lines(stderr, output_tx.clone()));
                 }
                 // Drop the last sender so the channel closes when all readers
                 // finish. The relay holds its own clone, so a sink's reports
@@ -3826,5 +3821,78 @@ mod launch_command_tests {
             args,
             words(&["x", "--", "node", "my server.js", "'single'"])
         );
+    }
+}
+
+#[cfg(test)]
+mod output_reader_tests {
+    use super::{forward_output_lines, output_line_text};
+
+    #[test]
+    fn line_endings_are_removed() {
+        assert_eq!(output_line_text(b"ready\n"), "ready");
+        // A PTY's ONLCR, and a program that already wrote `\r\n` through it.
+        assert_eq!(output_line_text(b"ready\r\n"), "ready");
+        assert_eq!(output_line_text(b"ready\r\r\n"), "ready");
+        // The last line of the output may have no newline at all.
+        assert_eq!(output_line_text(b"ready"), "ready");
+    }
+
+    #[tokio::test]
+    async fn a_line_that_is_not_utf8_does_not_end_the_read() {
+        // What cut the output off before: `next_line` fails on the second
+        // line, and nothing after it was read.
+        let output: &[u8] = b"before\nbad \xff\xfe bytes\nafter 1\nafter 2\nlast";
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        forward_output_lines(tokio::io::BufReader::new(output), tx).await;
+
+        let mut lines = Vec::new();
+        while let Some(line) = rx.recv().await {
+            lines.push(line.text);
+        }
+        assert_eq!(lines.len(), 5, "{lines:?}");
+        assert_eq!(lines[0], "before");
+        assert!(lines[1].starts_with("bad "), "{:?}", lines[1]);
+        assert_eq!(&lines[2..], ["after 1", "after 2", "last"]);
+    }
+}
+
+#[cfg(test)]
+mod output_reader_eio_tests {
+    use super::forward_output_lines;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    /// Output that ends as a Linux PTY master does once the slave closes:
+    /// the last bytes, with no newline, then `EIO` instead of end of file.
+    struct EndsWithEio(Option<&'static [u8]>);
+
+    impl tokio::io::AsyncRead for EndsWithEio {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match self.0.take() {
+                Some(bytes) => {
+                    buf.put_slice(bytes);
+                    Poll::Ready(Ok(()))
+                }
+                None => Poll::Ready(Err(std::io::Error::from_raw_os_error(5))),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_last_line_cut_off_by_eio_is_still_forwarded() {
+        let reader = tokio::io::BufReader::new(EndsWithEio(Some(b"first\nlast without newline")));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        forward_output_lines(reader, tx).await;
+
+        let mut lines = Vec::new();
+        while let Some(line) = rx.recv().await {
+            lines.push(line.text);
+        }
+        assert_eq!(lines, ["first", "last without newline"]);
     }
 }

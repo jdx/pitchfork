@@ -445,7 +445,7 @@ fn split_before_incomplete_utf8(bytes: &[u8]) -> usize {
 /// on Windows, console programs — `cmd` among them — write in the console's
 /// code page, so a Japanese system hands over Shift_JIS, and reading that as
 /// UTF-8 would store nothing but replacement characters.
-fn decode_line(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+pub(crate) fn decode_line(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     if let Ok(text) = std::str::from_utf8(bytes) {
         return std::borrow::Cow::Borrowed(text);
     }
