@@ -45,7 +45,7 @@ depends = ["lint-fix", "build", "build:docs", "test", "render"]
 
 [tasks.docs]
 dir = "docs"
-run = "aube install && exec aube run docs:dev"
+run = "aube install && aube run docs:dev"
 
 [tasks.lint]
 depends = ["build:ui"]
@@ -70,7 +70,7 @@ run = [
 
 [tasks."build:ui"]
 dir = "ui"
-run = "aube install && exec aube run build && touch ../src/web/static_files.rs"
+run = "aube install && aube run build"
 sources = ["src/**/*"]
 outputs = ["dist/**/*"]
 
@@ -79,7 +79,7 @@ dir = "docs"
 # `render` rewrites docs/cli and docs/public while this task reads them, so
 # when both are scheduled (ci-dev) run this one afterwards.
 wait_for = ["render"]
-run = "aube install && exec aube run docs:build"
+run = "aube install && aube run docs:build"
 
 [tasks.render]
 depends = ["build"]
