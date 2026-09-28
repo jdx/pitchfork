@@ -90,7 +90,12 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_output: Option<ReadyOutput>,
     pub ready_http: Option<ReadyHttp>,
     pub ready_port: Option<ReadyPort>,
+    /// See `Daemon::configured_ready_port`.
+    pub configured_ready_port: Option<ReadyPort>,
     pub ready_cmd: Option<ReadyCmd>,
+    /// The ready checks above replace the record's: one left `None` is
+    /// cleared rather than inherited. See `RunOptions::replaces_ready_checks`.
+    pub replaces_ready_checks: bool,
     pub health_cmd: Option<HealthCmd>,
     pub health_http: Option<HealthHttp>,
     pub health_port: Option<HealthPort>,
@@ -189,7 +194,9 @@ impl UpsertDaemonOpts {
             o.ready_output = opts.ready_output.clone();
             o.ready_http = opts.ready_http.clone();
             o.ready_port = opts.ready_port.clone();
+            o.configured_ready_port = opts.ready_port.clone();
             o.ready_cmd = opts.ready_cmd.clone();
+            o.replaces_ready_checks = opts.replaces_ready_checks;
             o.health_cmd = opts.health_cmd.clone();
             o.health_http = opts.health_http.clone();
             o.health_port = opts.health_port.clone();
@@ -347,6 +354,8 @@ impl Supervisor {
         );
         let mut state_file = self.state_file.lock().await;
         let existing = state_file.daemons.get(&opts.id);
+        // What unset ready checks fall back to.
+        let ready_base = existing.filter(|_| !opts.replaces_ready_checks);
         let daemon = Daemon {
             id: opts.id.clone(),
             // title/start_time identify the process for orphan cleanup after a
@@ -420,19 +429,22 @@ impl Supervisor {
             retry_count: opts
                 .retry_count
                 .unwrap_or(existing.map(|d| d.retry_count).unwrap_or(0)),
-            ready_delay: opts.ready_delay.or(existing.and_then(|d| d.ready_delay)),
+            ready_delay: opts.ready_delay.or(ready_base.and_then(|d| d.ready_delay)),
             ready_output: opts
                 .ready_output
-                .or(existing.and_then(|d| d.ready_output.clone())),
+                .or(ready_base.and_then(|d| d.ready_output.clone())),
             ready_http: opts
                 .ready_http
-                .or(existing.and_then(|d| d.ready_http.clone())),
+                .or(ready_base.and_then(|d| d.ready_http.clone())),
             ready_port: opts
                 .ready_port
-                .or(existing.and_then(|d| d.ready_port.clone())),
+                .or(ready_base.and_then(|d| d.ready_port.clone())),
+            configured_ready_port: opts
+                .configured_ready_port
+                .or(ready_base.and_then(|d| d.configured_ready_port.clone())),
             ready_cmd: opts
                 .ready_cmd
-                .or(existing.and_then(|d| d.ready_cmd.clone())),
+                .or(ready_base.and_then(|d| d.ready_cmd.clone())),
             health_cmd: opts
                 .health_cmd
                 .or(existing.and_then(|d| d.health_cmd.clone())),

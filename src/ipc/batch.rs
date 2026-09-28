@@ -13,7 +13,6 @@ use crate::pitchfork_toml::{
     ReadyOutput, ReadyPort, project_dir_for_config,
 };
 use chrono::{DateTime, Local};
-use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -883,12 +882,7 @@ impl IpcClient {
                         let task = Self::spawn_adhoc_start_task(
                             id,
                             cmd.clone(),
-                            adhoc_daemon.dir.clone().unwrap_or_default(),
-                            adhoc_daemon.env.clone(),
-                            adhoc_daemon.ready_http.clone(),
-                            adhoc_daemon.health_cmd.clone(),
-                            adhoc_daemon.health_http.clone(),
-                            adhoc_daemon.health_port.clone(),
+                            adhoc_daemon,
                             is_explicit,
                             &opts,
                         );
@@ -1041,35 +1035,58 @@ impl IpcClient {
     /// Spawn a task to start an ad-hoc daemon using saved command
     ///
     /// This handles restarting ad-hoc daemons that were originally started
-    /// via `pitchfork run` command.
+    /// via `pitchfork run` command. `saved` is the daemon's record, whose
+    /// settings from that run apply again unless `opts` overrides them.
     ///
     /// Each task uses its own dedicated IPC connection so concurrent responses
     /// are attributed deterministically (see [`Self::connect_dedicated`]).
-    #[allow(clippy::too_many_arguments)]
     fn spawn_adhoc_start_task(
         id: DaemonId,
         cmd: Vec<String>,
-        dir: PathBuf,
-        env: Option<IndexMap<String, String>>,
-        ready_http: Option<ReadyHttp>,
-        health_cmd: Option<HealthCmd>,
-        health_http: Option<HealthHttp>,
-        health_port: Option<HealthPort>,
+        saved: &crate::daemon::Daemon,
         is_explicitly_requested: bool,
         opts: &StartOptions,
     ) -> tokio::task::JoinHandle<SpawnTaskResult> {
         let force = opts.force && is_explicitly_requested;
-        let delay = opts.delay;
-        let output = opts.output.clone();
-        let http = merge_ready_http_override(ready_http, opts.http.clone());
-        let port = opts.port;
-        let ready_cmd = opts.cmd.clone().map(ReadyCmd::new);
-        let health_cmd = merge_health_cmd_override(health_cmd, opts.health_cmd.clone());
-        let health_http = merge_health_http_override(health_http, opts.health_http.clone());
-        let health_port = merge_health_port_override(health_port, opts.health_port);
-        let expected_port = opts.expected_port.clone();
-        let auto_bump_port = opts.auto_bump_port;
-        let retry = opts.retry.unwrap_or_default();
+        let dir = saved.dir.clone().unwrap_or_default();
+        let env = saved.env.clone();
+        // Readiness flags replace how the daemon was waited for; without any,
+        // it is waited for the way `pitchfork run` was asked to.
+        let ready_flags = opts.delay.is_some()
+            || opts.output.is_some()
+            || opts.http.is_some()
+            || opts.port.is_some()
+            || opts.cmd.is_some();
+        let (delay, output, http, port, ready_cmd) = if ready_flags {
+            (
+                opts.delay,
+                opts.output.clone().map(ReadyOutput::new),
+                merge_ready_http_override(None, opts.http.clone()),
+                opts.port.map(ReadyPort::new),
+                opts.cmd.clone().map(ReadyCmd::new),
+            )
+        } else {
+            (
+                saved.ready_delay,
+                saved.ready_output.clone(),
+                saved.ready_http.clone(),
+                saved.configured_ready_port.clone(),
+                saved.ready_cmd.clone(),
+            )
+        };
+        let health_cmd =
+            merge_health_cmd_override(saved.health_cmd.clone(), opts.health_cmd.clone());
+        let health_http =
+            merge_health_http_override(saved.health_http.clone(), opts.health_http.clone());
+        let health_port = merge_health_port_override(saved.health_port.clone(), opts.health_port);
+        // `restart` offers no flags for these, so they stay as `run` set them;
+        // `start` may override the expected ports or the bump, each on its own.
+        let saved_port = saved.port.clone().unwrap_or_default();
+        let port_config = crate::config_types::PortConfig::from_parts(
+            opts.expected_port.clone().unwrap_or(saved_port.expect),
+            opts.auto_bump_port.unwrap_or(saved_port.bump),
+        );
+        let retry = opts.retry.unwrap_or(saved.retry);
         let shell_pid = opts.shell_pid;
         let quiet = opts.quiet;
 
@@ -1082,17 +1099,15 @@ impl IpcClient {
                 dir: crate::config_types::Dir(dir),
                 retry,
                 ready_delay: delay,
-                ready_output: output.map(ReadyOutput::new),
+                ready_output: output,
                 ready_http: http,
-                ready_port: port.map(ReadyPort::new),
+                ready_port: port,
                 ready_cmd,
                 health_cmd,
                 health_http,
                 health_port,
-                port: crate::config_types::PortConfig::from_parts(
-                    expected_port.unwrap_or_default(),
-                    auto_bump_port.unwrap_or_default(),
-                ),
+                port: port_config,
+                replaces_ready_checks: ready_flags,
                 wait_ready: true,
                 env,
                 watch: vec![],

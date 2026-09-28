@@ -186,6 +186,14 @@ pub struct Daemon {
     /// Appended after `no_shell` for the positional IPC encoding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scheduled_from_config: bool,
+    /// The ready port as the start gave it. `ready_port` holds the port the
+    /// run actually checked, moved along with a port bump, so it cannot tell
+    /// a ready port that was bumped from one given as the bumped number. A
+    /// restart of an ad-hoc daemon starts from this one and bumps it afresh.
+    ///
+    /// Appended after `scheduled_from_config` for the positional IPC encoding.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub configured_ready_port: Option<ReadyPort>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -298,6 +306,13 @@ pub struct RunOptions {
     /// array. `run` is `None` then, since there is no command line.
     #[serde(default)]
     pub no_shell: bool,
+    /// This start's ready checks are the daemon's only ones: those it leaves
+    /// unset are cleared from the record instead of kept. Set by an ad-hoc
+    /// restart given readiness flags, which replace how it was waited for.
+    ///
+    /// Appended after `no_shell` for the positional IPC encoding.
+    #[serde(default)]
+    pub replaces_ready_checks: bool,
     /// Set by the supervisor on a start a client asked for over IPC; never
     /// sent. See `Daemon::scheduled_from_config`.
     #[serde(skip)]
@@ -371,6 +386,8 @@ impl Daemon {
             // run; only the cron watcher's own call sets this.
             cron_started: false,
             no_shell: self.no_shell,
+            // Built from the whole record, whose ready checks it carries.
+            replaces_ready_checks: false,
             // Set by the IPC handler for a client's own request.
             requested_by_client: false,
             cron_schedule: self.cron_schedule.clone(),
