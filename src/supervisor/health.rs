@@ -104,6 +104,8 @@ impl Supervisor {
             // process, so the start time disambiguates process generations.
             if process_identity_changed(last_pid, last_start_time, daemon.pid, daemon.start_time) {
                 consecutive_failures = 0;
+                // Nor does it reuse a connection to the process it replaced.
+                http_client = None;
                 last_pid = daemon.pid;
                 last_start_time = daemon.start_time;
             }
@@ -308,14 +310,46 @@ fn process_identity_changed(
     last_pid != current_pid || last_start_time != current_start_time
 }
 
-/// Build the shared HTTP client used for daemon health probes.
+/// TLS settings for the probe clients, built once per process: as reqwest
+/// builds them, but only once.
 ///
-/// No total timeout is set here: `health_http_probe` bounds each request with
-/// `effective_http_timeout`, so a per-daemon `health_http.timeout` larger than
-/// `supervisor.http_client_timeout` is honored rather than silently capped by
-/// a shared client timeout.
+/// Creating the verifier loads and parses the system's CA certificates on
+/// Linux, which took about 16 ms in a release build and blocks the async
+/// worker it runs on. `None` if they cannot be built; each client then builds
+/// its own, as before.
+static PROBE_TLS: once_cell::sync::Lazy<Option<rustls::ClientConfig>> =
+    once_cell::sync::Lazy::new(|| {
+        let provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::ring::default_provider()));
+        let verifier = rustls_platform_verifier::Verifier::new(provider.clone()).ok()?;
+        let mut tls = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .ok()?
+            .dangerous()
+            .with_custom_certificate_verifier(std::sync::Arc::new(verifier))
+            .with_no_client_auth();
+        tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Some(tls)
+    });
+
+/// A new HTTP client for one daemon run's ready or health probes.
+///
+/// Each run gets its own, so repeated probes of a process reuse its
+/// connections while a restarted daemon's probes never reuse one to the
+/// process it replaced. Building one takes microseconds, since the TLS
+/// settings are shared.
+///
+/// No total timeout is set here: each probe bounds its own request, so a
+/// per-daemon `health_http.timeout` larger than `supervisor.http_client_timeout`
+/// is honored rather than silently capped by a client timeout.
 pub(crate) fn supervisor_http_client() -> reqwest::Client {
-    reqwest::Client::builder().build().unwrap_or_default()
+    let builder = reqwest::Client::builder();
+    let builder = match PROBE_TLS.as_ref() {
+        Some(tls) => builder.tls_backend_preconfigured(tls.clone()),
+        None => builder,
+    };
+    builder.build().unwrap_or_default()
 }
 
 /// Effective probe interval: the first health check that sets one, else the
@@ -640,6 +674,14 @@ mod tests {
             }),
             override_
         );
+    }
+
+    #[test]
+    fn probe_clients_share_tls_settings() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        assert!(PROBE_TLS.is_some());
+        // A client is still built from them.
+        let _client = supervisor_http_client();
     }
 
     #[test]
