@@ -23,9 +23,11 @@ to the current directory. Within each directory, precedence is
 `pitchfork.local.toml`. Inspect existing definitions before adding another.
 
 Short daemon names resolve in the current namespace. Use `namespace/daemon` when
-targeting another project or resolving ambiguity. `--local` includes inherited
-parent configs; `--all` also reaches global services. Prefer explicit names or an
-existing group for a bounded operation.
+targeting another project or resolving ambiguity. Prefer explicit daemon names
+or an existing group for a bounded operation. `--local` includes inherited parent
+configs; `--global` selects global services. `start --all` selects local and global
+configured daemons, while `stop --all` and `restart --all` select every running or
+waiting daemon, including unrelated projects.
 
 ## Define foreground services
 
