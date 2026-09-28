@@ -225,6 +225,18 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Identify the release source
+        id: source
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # A manual retry may target a release from before skills shipped.
+          if [ -f skills/pitchfork/SKILL.md ]; then
+            echo "skill=skill/pitchfork=repo:skills/pitchfork" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download the release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -267,9 +279,11 @@ jobs:
       - uses: jdx/packslip@87479dfc6443253dff69601cace5fc6ea07e6df5 # v1.4.0
         with:
           tag: ${{ inputs.tag }}
+          commit: ${{ steps.source.outputs.commit }}
           artifacts: dist/pitchfork-*.tar.gz dist/pitchfork-*.zip
           bin: pitchfork
           resources: |
+            ${{ steps.source.outputs.skill }}
             cli-spec/usage=asset:pitchfork.usage.kdl
             completion/bash=asset:pitchfork.bash
             completion/zsh=asset:pitchfork.zsh
