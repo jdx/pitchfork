@@ -10,6 +10,15 @@ teardown() {
   _common_teardown
 }
 
+# How many times the supervisor has killed a daemon for failing its health
+# check. Only the file logger's timestamped lines count: on Unix the
+# supervisor's stderr goes to the same file, so each message appears there a
+# second time without a timestamp.
+_health_kills() {
+  grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} .*killing daemon .* due to health check failure' \
+    "$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log" || true
+}
+
 @test "health cmd failure kills daemon and retry restarts it" {
   # ready_delay has to stay under the health grace period. Health checks begin
   # as soon as the daemon is running, and `retries * interval` doubles as the
@@ -36,10 +45,9 @@ EOF
   # exactly two runs. Observe both health-triggered kills before reading
   # status, so the first run's transient error cannot end the wait early.
   while true; do
-    local sup_log failures status logs count
-    sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+    local failures status logs count
     logs=$(read_logs unhealthy)
-    failures=$(grep -c "killing daemon .* due to health check failure" "$sup_log" || true)
+    failures=$(_health_kills)
     status=$(get_daemon_status unhealthy)
     count=$(grep -c "started" <<< "$logs" || true)
     if [[ "$status" == *"errored"* ]] \
@@ -118,10 +126,9 @@ EOF
 
   # Observe both health-triggered kills before checking the terminal status.
   while true; do
-    local sup_log failures status logs count
-    sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+    local failures status logs count
     logs=$(read_logs webhealth)
-    failures=$(grep -c "killing daemon .* due to health check failure" "$sup_log" || true)
+    failures=$(_health_kills)
     status=$(get_daemon_status webhealth)
     count=$(grep -c "Server listening on" <<< "$logs" || true)
     if [[ "$status" == *"errored"* ]] && [[ $count -ge 2 ]] && [[ $failures -ge 2 ]]; then
@@ -174,10 +181,9 @@ EOF
   # with exactly two runs.
   # Observe both health-triggered kills before checking the terminal status.
   while true; do
-    local sup_log failures status logs count
-    sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+    local failures status logs count
     logs=$(read_logs porthealth)
-    failures=$(grep -c "killing daemon .* due to health check failure" "$sup_log" || true)
+    failures=$(_health_kills)
     status=$(get_daemon_status porthealth)
     count=$(grep -c "Listening on" <<< "$logs" || true)
     if [[ "$status" == *"errored"* ]] && [[ $count -ge 2 ]] && [[ $failures -ge 2 ]]; then
