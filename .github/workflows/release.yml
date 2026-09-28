@@ -231,7 +231,12 @@ jobs:
           persist-credentials: false
       - name: Identify the release source
         id: source
-        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # A manual retry may target a release from before skills shipped.
+          if [ -f skills/pitchfork/SKILL.md ]; then
+            echo "skill=skill/pitchfork=repo:skills/pitchfork" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download the release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -278,7 +283,7 @@ jobs:
           artifacts: dist/pitchfork-*.tar.gz dist/pitchfork-*.zip
           bin: pitchfork
           resources: |
-            skill/pitchfork=repo:skills/pitchfork
+            ${{ steps.source.outputs.skill }}
             cli-spec/usage=asset:pitchfork.usage.kdl
             completion/bash=asset:pitchfork.bash
             completion/zsh=asset:pitchfork.zsh
