@@ -690,18 +690,37 @@ impl Procs {
             // still running after the timeout, is terminated outright with
             // its process tree. The timeout bounds only the graceful part.
             //
-            // Best effort: once the daemon has exited, its tree can no longer
-            // be walked, so a process it started that outlives it is left
-            // running.
+            // The tree is the daemon's job object (see `win_job`), opened now
+            // while the daemon is alive and its job can be found by name.
+            let job = open_process_handle(pid)
+                .ok()
+                .and_then(|process| crate::win_job::DaemonJob::open(pid, process.0));
             if stop_signal == crate::config_types::StopSignal::SIGINT {
                 let stop_timeout =
                     stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
                 if interrupt_and_wait(pid, stop_timeout) {
                     debug!("process {pid} exited after Ctrl+C");
+                    // Whatever it started and left running goes with it.
+                    if let Some(job) = &job {
+                        job.terminate();
+                    }
                     return Ok(true);
                 }
             }
-            // Use taskkill /F /T to kill the entire process tree.
+            // Terminating the job ends every process in it at once, including
+            // ones whose parent has already exited, which taskkill /T cannot
+            // reach from the daemon.
+            if let Some(job) = &job
+                && job.terminate()
+                && wait_for_exit(pid, JOB_EXIT_WAIT_MS)
+            {
+                debug!("terminated the job of process {pid}");
+                // As below: let the monitor task see the exit first.
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                return Ok(true);
+            }
+            // A daemon without a job: use taskkill /F /T to kill the entire
+            // process tree.
             // sysinfo's process.kill() only kills the main process, leaving
             // child processes (e.g. python3 spawned by sh -c) orphaned and
             // still holding ports. The /T flag kills all descendant processes.
@@ -1116,7 +1135,7 @@ fn process_start_token(pid: u32) -> Option<u64> {
 }
 
 #[cfg(windows)]
-fn process_start_token_from_handle(handle: HANDLE) -> Option<u64> {
+pub(crate) fn process_start_token_from_handle(handle: HANDLE) -> Option<u64> {
     let mut creation = FILETIME {
         dwLowDateTime: 0,
         dwHighDateTime: 0,
@@ -1151,6 +1170,24 @@ fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(ProcessHandle(handle))
+}
+
+/// How long a daemon whose job was terminated is given to finish exiting
+/// before taskkill gets a try.
+#[cfg(windows)]
+const JOB_EXIT_WAIT_MS: u32 = 5000;
+
+/// Wait up to `millis` for process `pid` to exit; true if it has, or is gone.
+#[cfg(windows)]
+fn wait_for_exit(pid: u32, millis: u32) -> bool {
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::{PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return true;
+    }
+    let handle = ProcessHandle(handle);
+    unsafe { WaitForSingleObject(handle.0, millis) == WAIT_OBJECT_0 }
 }
 
 /// Send Ctrl+C to the console of `pid` and wait up to `timeout` for it to exit.

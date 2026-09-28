@@ -32,6 +32,8 @@ mod tui;
 mod ui;
 mod watch_files;
 mod web;
+#[cfg(windows)]
+mod win_job;
 
 pub use miette::Result;
 #[cfg(unix)]

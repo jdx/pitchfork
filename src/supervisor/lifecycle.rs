@@ -1234,6 +1234,10 @@ impl Supervisor {
             None => cmd.args(&args),
         };
         cmd.current_dir(&opts.dir).hide_console_window();
+        // Suspended until it is in a job of its own, so its whole process
+        // tree can be stopped; see `win_job`.
+        #[cfg(windows)]
+        crate::win_job::start_suspended(&mut cmd);
 
         #[cfg(unix)]
         if pty_pair.is_none() {
@@ -1300,6 +1304,10 @@ impl Supervisor {
         // consistently fails to spawn would otherwise accumulate sinks.
         // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
+        #[cfg(windows)]
+        if let (Some(pid), Some(process)) = (child.id(), child.raw_handle()) {
+            crate::win_job::contain_and_resume(process as _, pid);
+        }
         let spawned_pid = child.id();
         // Register the daemon as monitored BEFORE persisting the Running
         // state. The orphan reconciler treats any running, unmonitored PID
