@@ -166,6 +166,11 @@ impl Supervisor {
             debug!("autostop of {daemon_id} cancelled before stopping");
             return;
         }
+        // Held from the recheck through the stop, so a start that finishes in
+        // between — which may no longer ask to be autostopped — is not the
+        // process that gets stopped.
+        let lock = self.stop_lock(daemon_id).await;
+        let _guard = lock.lock().await;
         // Revalidate that the daemon's directory is still inactive: a shell
         // may have entered it between the scheduling check and this task
         // running.
@@ -188,7 +193,7 @@ impl Supervisor {
             debug!("autostop of {daemon_id} cancelled before stopping");
             return;
         }
-        match self.stop(daemon_id).await {
+        match self.stop_locked(daemon_id).await {
             Ok(_) => {
                 self.add_notification(Info, format!("autostopped {label}"))
                     .await;
