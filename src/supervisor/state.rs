@@ -520,10 +520,22 @@ impl Supervisor {
     pub async fn disable(&self, id: &DaemonId) -> Result<bool> {
         info!("disabling daemon: {id}");
         let config = PitchforkToml::all_merged_all_namespaces()?;
+        let not_found = || miette::miette!("daemon '{}' not found", id);
+        // Checked before `stop_lock`, whose entries are never removed, so an
+        // unknown ID does not leave one behind.
+        if !config.daemons.contains_key(id)
+            && !self.state_file.lock().await.daemons.contains_key(id)
+        {
+            return Err(not_found());
+        }
+        // Taken before the state file, in `run_inner`'s order, so a retry
+        // that has already checked the disabled set finishes its start first.
+        let lock = self.stop_lock(id).await;
+        let _guard = lock.lock().await;
         let mut state_file = self.state_file.lock().await;
         let exists = state_file.daemons.contains_key(id) || config.daemons.contains_key(id);
         if !exists {
-            return Err(miette::miette!("daemon '{}' not found", id));
+            return Err(not_found());
         }
         let result = state_file.disable_daemon(id);
         Ok(result)

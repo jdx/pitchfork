@@ -849,3 +849,136 @@ cron = "0 0 0 2 2 *"
 EOF2
   _wait_for_cron_schedule cron_legacy "0 0 0 2 2 *"
 }
+
+@test "a disabled cron daemon is not started on schedule until it is enabled" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_disabled]
+run = "echo disabled_tick"
+cron = "*/10 * * * * *"
+EOF2
+
+  run pitchfork start cron_disabled
+  assert_success
+  wait_for_logs cron_disabled "disabled_tick" 10
+
+  run pitchfork disable cron_disabled
+  assert_success
+  _wait_for_cron_run_to_end cron_disabled
+  local before after
+  before=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+  sleep 4
+  after=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+  [[ "$after" -eq "$before" ]]
+
+  # Enable two seconds past a scheduled time the disabled daemon skipped. It
+  # does not make up for that run: nothing starts before the next one.
+  local now
+  now=$(date +%s)
+  sleep $((10 - now % 10 + 2))
+  run pitchfork enable cron_disabled
+  assert_success
+  sleep 2
+  after=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+  [[ "$after" -eq "$before" ]]
+
+  for _ in $(seq 1 50); do
+    after=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+    [[ "$after" -gt "$before" ]] && break
+    sleep 0.2
+  done
+  [[ "$after" -gt "$before" ]]
+}
+
+@test "a disabled daemon is not retried after it fails" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.retry_disabled]
+run = "echo retry_attempt; sleep 2; exit 1"
+ready_delay = 1
+retry = 10
+EOF2
+
+  run pitchfork start retry_disabled
+  assert_success
+  run pitchfork disable retry_disabled
+  assert_success
+
+  wait_for_status retry_disabled errored 15
+  sleep 4
+  local attempts
+  attempts=$(pitchfork logs retry_disabled --raw 2>/dev/null | grep -c "retry_attempt" || true)
+  [[ "$attempts" -eq 1 ]]
+}
+
+# `pitchfork start` retries a failing daemon itself while it waits for it to
+# become ready. A disable during the backoff ends those retries too.
+@test "a disabled daemon is not retried by a start waiting for it" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.fg_retry_disabled]
+run = "echo fg_attempt; exit 1"
+retry = 5
+EOF2
+
+  pitchfork start fg_retry_disabled >/dev/null 2>&1 3>&- 4>&- &
+  local start_pid=$!
+
+  # Two attempts have run; the backoff before the third is two seconds.
+  local attempts=0
+  for _ in $(seq 1 50); do
+    attempts=$(pitchfork logs fg_retry_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+    [[ "$attempts" -ge 2 ]] && break
+    sleep 0.2
+  done
+  [[ "$attempts" -eq 2 ]]
+  run pitchfork disable fg_retry_disabled
+  assert_success
+
+  wait "$start_pid" || true
+  sleep 3
+  attempts=$(pitchfork logs fg_retry_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+  [[ "$attempts" -eq 2 ]]
+}
+
+# A dependent waiting on an in-flight oneshot treats a failed attempt with
+# retries left as a gap between tries. Once the oneshot is disabled no further
+# try comes, so the dependent must stop waiting instead of until its deadline.
+@test "a start waiting on a oneshot that is disabled between retries stops waiting" {
+  create_pitchfork_toml <<TOML
+[daemons.migrate_disabled]
+run = "echo migrate_attempt; sleep 3; exit 1"
+oneshot = true
+retry = 3
+
+[daemons.api_after]
+run = "echo api started && $(default_shell_sleep_command)"
+depends = ["migrate_disabled"]
+ready_delay = 1
+TOML
+
+  pitchfork start migrate_disabled >/dev/null 2>&1 3>&- 4>&- &
+  local migrate_job=$!
+  wait_for_status migrate_disabled running 10
+
+  pitchfork start api_after >/dev/null 2>&1 3>&- 4>&- &
+  local api_job=$!
+
+  # The first attempt fails; disable during the backoff before the second.
+  wait_for_status migrate_disabled errored 15
+  run pitchfork disable migrate_disabled
+  assert_success
+
+  local done=false
+  for _ in $(seq 1 75); do
+    if ! kill -0 "$api_job" 2>/dev/null; then
+      done=true
+      break
+    fi
+    sleep 0.2
+  done
+  kill "$api_job" 2>/dev/null || true
+  wait "$migrate_job" || true
+  [[ "$done" == true ]]
+
+  run pitchfork status api_after
+  refute_output --partial "running"
+  pitchfork stop --all || true
+}

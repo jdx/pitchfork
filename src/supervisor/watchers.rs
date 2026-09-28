@@ -934,13 +934,22 @@ impl Supervisor {
                     // background flush task creates a window where a supervisor
                     // crash-then-restart will see the stale timestamp from disk and
                     // re-fire the cron job immediately.
-                    {
+                    //
+                    // A disabled daemon still records the time, so enabling it
+                    // later waits for the next scheduled time instead of making
+                    // up for one it skipped.
+                    let disabled = {
                         let mut state_file = self.state_file.lock().await;
                         if state_file.set_last_cron_triggered(&id, now)
                             && let Err(e) = state_file.write()
                         {
                             error!("failed to persist last_cron_triggered for daemon {id}: {e}");
                         }
+                        state_file.disabled.contains(&id)
+                    };
+                    if disabled {
+                        debug!("cron: daemon {id} is disabled, skipping scheduled run");
+                        continue;
                     }
 
                     let should_run = match retrigger {
