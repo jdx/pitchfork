@@ -944,6 +944,59 @@ EOF
   pitchfork stop adhoc_bump
 }
 
+@test "a stopped ad-hoc daemon can be started again" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run adhoc_again --delay 1 -- sleep 60
+  assert_success
+  local original_pid
+  original_pid=$(get_daemon_pid adhoc_again)
+  run pitchfork stop adhoc_again
+  assert_success
+  wait_for_status adhoc_again stopped
+
+  run pitchfork start adhoc_again
+  assert_success
+  wait_for_status adhoc_again running
+  local new_pid
+  new_pid=$(get_daemon_pid adhoc_again)
+  [[ -n "$new_pid" && "$new_pid" != "$original_pid" ]]
+
+  run pitchfork stop adhoc_again
+  assert_success
+  wait_for_status adhoc_again stopped
+
+  run pitchfork restart adhoc_again
+  assert_success
+  wait_for_status adhoc_again running
+
+  pitchfork stop adhoc_again
+}
+
+@test "a daemon removed from config is not started again as ad-hoc" {
+  create_pitchfork_toml <<EOF
+[daemons.removed]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start removed
+  assert_success
+  run pitchfork stop removed
+  assert_success
+  wait_for_status removed stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork start removed
+  assert_failure
+  assert_output --partial "not found in config or state"
+  run pitchfork status removed
+  refute_output --partial "running"
+}
+
 @test "restart all includes ad-hoc daemons" {
   create_pitchfork_toml <<EOF
 [daemons.config_daemon]

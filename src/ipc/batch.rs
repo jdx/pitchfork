@@ -216,6 +216,29 @@ pub async fn build_run_options(
     Ok(run_opts)
 }
 
+/// The stopped daemons in the state file at `path` that `pitchfork run` made
+/// and config does not define, which a start can run again from their saved
+/// command.
+///
+/// A record made from config has a `watch_base_dir`; one whose config entry is
+/// gone is left alone rather than revived as ad-hoc. A state file that cannot
+/// be read is an error rather than an empty state, so the start reports it
+/// instead of calling the daemon unknown.
+fn stopped_adhoc_daemons(path: &Path, pt: &PitchforkToml) -> Result<Vec<crate::daemon::Daemon>> {
+    let pitchfork_id = DaemonId::pitchfork();
+    Ok(crate::state_file::StateFile::read(path)?
+        .daemons
+        .into_values()
+        .filter(|d| {
+            d.pid.is_none()
+                && d.id != pitchfork_id
+                && d.cmd.is_some()
+                && d.watch_base_dir.is_none()
+                && !pt.daemons.contains_key(&d.id)
+        })
+        .collect())
+}
+
 fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
     // A oneshot's readiness is its exit, so a delay would only be a second,
     // conflicting answer to the same question.
@@ -619,11 +642,25 @@ impl IpcClient {
 
         // Get all active daemons for ad-hoc restart support
         let all_daemons = self.active_daemons().await?;
-        let adhoc_daemons: HashMap<DaemonId, crate::daemon::Daemon> = all_daemons
+        let mut adhoc_daemons: HashMap<DaemonId, crate::daemon::Daemon> = all_daemons
             .into_iter()
             .filter(|d| !pt.daemons.contains_key(&d.id))
             .map(|d| (d.id.clone(), d))
             .collect();
+        // A stopped `pitchfork run` daemon starts again from its saved command,
+        // as a stopped config daemon does from its config. The state file is
+        // read afresh, since `StateFile::get()` is loaded once per process and
+        // a long-lived caller such as the MCP server would miss daemons run
+        // since. It is read only when a requested daemon is neither in config
+        // nor running, so a start that never needs it cannot fail on it.
+        if ids
+            .iter()
+            .any(|id| !pt.daemons.contains_key(id) && !adhoc_daemons.contains_key(id))
+        {
+            for d in stopped_adhoc_daemons(&crate::env::PITCHFORK_STATE_FILE, &pt)? {
+                adhoc_daemons.entry(d.id.clone()).or_insert(d);
+            }
+        }
 
         // Filter out disabled daemons from the requested list
         let requested_ids: Vec<DaemonId> = ids
@@ -915,7 +952,10 @@ impl IpcClient {
                         warn!("Ad-hoc daemon {id} has no saved command, cannot restart");
                     }
                 } else {
-                    warn!("Daemon {id} not found in config or state");
+                    let reason = format!("Daemon {id} not found in config or state");
+                    warn!("{reason}");
+                    any_failed = true;
+                    failed.push((id, reason));
                 }
             }
 
@@ -1510,6 +1550,60 @@ mod tests {
     fn saved_ready_port_is_none_without_a_ready_port() {
         let saved = saved_with_ports(None, None, &[3000], &[3004]);
         assert_eq!(saved_ready_port(&saved), None);
+    }
+
+    fn saved_daemon(
+        name: &str,
+        set: impl FnOnce(&mut crate::daemon::Daemon),
+    ) -> crate::daemon::Daemon {
+        let mut d = crate::daemon::Daemon {
+            id: DaemonId::new("global", name),
+            cmd: Some(vec!["sleep".to_string(), "60".to_string()]),
+            ..Default::default()
+        };
+        set(&mut d);
+        d
+    }
+
+    #[test]
+    fn stopped_adhoc_daemons_are_the_stopped_records_made_by_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.toml");
+        let mut state = crate::state_file::StateFile::new(path.clone());
+        for d in [
+            saved_daemon("adhoc", |_| {}),
+            saved_daemon("running", |d| d.pid = Some(1234)),
+            saved_daemon("no_cmd", |d| d.cmd = None),
+            saved_daemon("from_removed_config", |d| {
+                d.watch_base_dir = Some(PathBuf::from("/project"));
+            }),
+            saved_daemon("in_config", |_| {}),
+        ] {
+            state.daemons.insert(d.id.clone(), d);
+        }
+        state.write().unwrap();
+        let mut pt = PitchforkToml::new(dir.path().join("pitchfork.toml"));
+        pt.daemons.insert(
+            DaemonId::new("global", "in_config"),
+            PitchforkTomlDaemon::default(),
+        );
+
+        let found: Vec<_> = stopped_adhoc_daemons(&path, &pt)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+
+        assert_eq!(found, vec![DaemonId::new("global", "adhoc")]);
+    }
+
+    #[test]
+    fn stopped_adhoc_daemons_reports_an_unreadable_state_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.toml");
+        std::fs::write(&path, "this is = = not toml [[[").unwrap();
+
+        assert!(stopped_adhoc_daemons(&path, &PitchforkToml::new(dir.path().join("x"))).is_err());
     }
 
     #[test]
