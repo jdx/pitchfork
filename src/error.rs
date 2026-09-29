@@ -433,6 +433,7 @@ pub enum IpcError {
     },
 
     /// The socket path does not fit in `sockaddr_un.sun_path`.
+    #[cfg(unix)]
     #[error(
         "the supervisor socket path is too long: {len} bytes, but this platform allows {limit}"
     )]

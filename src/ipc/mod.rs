@@ -2,6 +2,7 @@ use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
 use crate::daemon_id::DaemonId;
 use crate::env;
+#[cfg(unix)]
 use crate::error::IpcError;
 use interprocess::local_socket::Name;
 #[cfg(unix)]
