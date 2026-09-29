@@ -1659,3 +1659,38 @@ EOT
   assert_success
   assert_equal "$(awk -F'\t' '{print NF}' <<< "$output")" 4
 }
+
+@test "config remove drops the label with the last attachment" {
+  mkdir -p "$TEST_TEMP_DIR/labelled" "$TEST_TEMP_DIR/gen"
+  local first="$TEST_TEMP_DIR/gen/pitchfork.toml" second="$TEST_TEMP_DIR/gen/second.toml"
+  printf '[daemons.web]\nrun = "sleep 60"\n' > "$first"
+  printf '[daemons.api]\nrun = "sleep 60"\n' > "$second"
+  local ns=(--dir "$TEST_TEMP_DIR/labelled" --namespace labelled-1a2b3c4d)
+
+  run pitchfork config add "$first" "${ns[@]}" --label shop
+  assert_success
+  run pitchfork config add "$second" "${ns[@]}"
+  assert_success
+
+  # The label outlives one attachment while another remains.
+  run pitchfork config remove "$first"
+  assert_success
+  run pitchfork config list --json
+  assert_equal "$(jq -r '.[0].label' <<< "$output")" shop
+  run grep -c '^label = "shop"$' "$PITCHFORK_CONFIG_DIR/config.toml"
+  assert_output 1
+
+  # The last removal leaves no registration, and no stale label behind it.
+  run pitchfork config remove "$second"
+  assert_success
+  run pitchfork config list --json
+  assert_output "[]"
+  run grep -c '^label' "$PITCHFORK_CONFIG_DIR/config.toml"
+  assert_output 0
+
+  # Registering again without --label does not revive the old one.
+  run pitchfork config add "$first" "${ns[@]}"
+  assert_success
+  run pitchfork config list --json
+  assert_equal "$(jq -r '.[0].label' <<< "$output")" null
+}

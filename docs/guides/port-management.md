@@ -518,7 +518,8 @@ The daemons are then served at `web.shop.<tld>`, and those in linked worktrees a
 `[namespaces.<namespace>]` entry, must already be a valid hostname label
 (lowercase letters, digits, and hyphens, up to 63 characters), and is looked up
 for the primary checkout's registration. Registering again with a different
-`--label` replaces it; registering without `--label` keeps it.
+`--label` replaces it; registering without `--label` keeps it. Removing the
+project's last registered file (`pitchfork config remove`) also forgets the label.
 
 Daemons defined in global configuration have no project hostname; use a
 [slug](#slugs-legacy) to route them. A linked worktree of a bare git repository

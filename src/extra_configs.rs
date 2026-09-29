@@ -1,7 +1,7 @@
 //! External files are associated with a project, never with their storage directory.
 use crate::Result;
 use crate::env;
-use crate::pitchfork_toml::{NamespaceEntryRaw, PitchforkToml, current_meta};
+use crate::pitchfork_toml::{NamespaceEntry, NamespaceEntryRaw, PitchforkToml, current_meta};
 use indexmap::IndexMap;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
@@ -270,6 +270,22 @@ pub fn add(namespace: &str, dir: &Path, file: &Path, label: Option<&str>) -> Res
     Ok(changed)
 }
 
+/// Detach `file` from a registration, reporting whether it was attached.
+///
+/// A registration with no attachment left is not a registration: `entries()`
+/// drops it, so it neither names the project's namespace nor its label. The
+/// label goes with the last attachment so that it cannot silently come back
+/// when the directory is registered again without `--label`.
+fn detach_file(entry: &mut NamespaceEntry, file: &Path) -> bool {
+    let before = entry.config.len();
+    entry.config.retain(|p| p != file);
+    let detached = before != entry.config.len();
+    if detached && entry.config.is_empty() {
+        entry.label = None;
+    }
+    detached
+}
+
 pub fn remove(file: &Path) -> Result<Option<String>> {
     let path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
     if !path.exists() {
@@ -284,9 +300,7 @@ pub fn remove(file: &Path) -> Result<Option<String>> {
     let file = normalize(file);
     let mut removed = None;
     for (name, entry) in &mut pt.namespaces {
-        let before = entry.config.len();
-        entry.config.retain(|p| p != &file);
-        if before != entry.config.len() {
+        if detach_file(entry, &file) {
             removed = Some(name.clone());
         }
     }
@@ -332,6 +346,29 @@ mod tests {
         assert!(!text.contains("config"));
         assert!(!text.contains("label"));
         assert_eq!(entries[0].label, None);
+    }
+
+    /// The label lives exactly as long as the registration: it survives while
+    /// any attachment remains and goes with the last one.
+    #[test]
+    fn detach_file_drops_label_with_last_attachment() {
+        let a = PathBuf::from("/gen/a.toml");
+        let b = PathBuf::from("/gen/b.toml");
+        let mut entry = NamespaceEntry {
+            dir: PathBuf::from("/shop"),
+            config: vec![a.clone(), b.clone()],
+            label: Some("shop".into()),
+        };
+        assert!(!detach_file(&mut entry, Path::new("/gen/none.toml")));
+        assert_eq!(entry.label.as_deref(), Some("shop"));
+        assert!(detach_file(&mut entry, &a));
+        assert_eq!(entry.config, vec![b.clone()]);
+        assert_eq!(entry.label.as_deref(), Some("shop"));
+        assert!(detach_file(&mut entry, &b));
+        assert!(entry.config.is_empty());
+        assert_eq!(entry.label, None);
+        // Removing again is a no-op and cannot resurrect anything.
+        assert!(!detach_file(&mut entry, &b));
     }
 
     #[test]
