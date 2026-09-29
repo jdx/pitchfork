@@ -22,7 +22,7 @@
 - [`pitchfork daemons remove [FLAGS] <ID>`](/cli/daemons/remove.md)
 - [`pitchfork completion <SHELL>`](/cli/completion.md)
 - [`pitchfork config [--json] [SUBCOMMAND]`](/cli/config.md)
-- [`pitchfork config add [--dir <DIR>] [--namespace <NAMESPACE>] <FILE>`](/cli/config/add.md)
+- [`pitchfork config add [FLAGS] <FILE>`](/cli/config/add.md)
 - [`pitchfork config remove <FILE>`](/cli/config/remove.md)
 - [`pitchfork config list [--json]`](/cli/config/list.md)
 - [`pitchfork disable <ID>`](/cli/disable.md)

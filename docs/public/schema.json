@@ -273,6 +273,13 @@
         "dir": {
           "description": "Project directory containing the pitchfork.toml",
           "type": "string"
+        },
+        "label": {
+          "description": "Hostname label for the project, used instead of the namespace when the\nnamespace is only an identifier (for example a generated\n`shop-528f92b13a6784f0`). Must already be a valid DNS label.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

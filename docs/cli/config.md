@@ -12,6 +12,6 @@ Attach externally generated configuration to a project.
 
 ## Subcommands
 
-- [`pitchfork config add [--dir <DIR>] [--namespace <NAMESPACE>] <FILE>`](/cli/config/add.md)
+- [`pitchfork config add [FLAGS] <FILE>`](/cli/config/add.md)
 - [`pitchfork config list [--json]`](/cli/config/list.md)
 - [`pitchfork config remove <FILE>`](/cli/config/remove.md)

@@ -1532,3 +1532,171 @@ EOF
   pitchfork stop --all || true
   kill_port "$app_port"
 }
+
+# mise registers each checkout under a generated namespace that keeps daemon IDs
+# unique, and passes the hostname it advertises as --label.
+@test "registered label names the project hostname, not the generated namespace" {
+  local primary="$TEST_TEMP_DIR/shop" worktree="$TEST_TEMP_DIR/feat-x"
+  local gen="$TEST_TEMP_DIR/gen" ns_primary="shop-528f92b13a6784f0" ns_wt="shop-9d3c41aa07be5e12"
+  local url_script primary_port wt_port proxy_port
+  url_script="$(to_shell_path "$(script_path echo_env_server.py)")"
+  primary_port=$(_free_port)
+  wt_port=$(_free_port)
+  proxy_port=$(_free_port)
+
+  mkdir -p "$primary" "$gen"
+  cd "$primary"
+  git init -q .
+  git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  git worktree add -q ../feat-x -b feat-x
+
+  cat > "$gen/primary.toml" <<EOT
+[daemons.web]
+run = 'python3 -u $url_script $primary_port PITCHFORK_URL'
+port = $primary_port
+ready_http = "http://127.0.0.1:$primary_port/"
+EOT
+  cat > "$gen/worktree.toml" <<EOT
+[daemons.web]
+run = 'python3 -u $url_script $wt_port PITCHFORK_URL'
+port = $wt_port
+ready_http = "http://127.0.0.1:$wt_port/"
+EOT
+
+  run pitchfork config add "$gen/primary.toml" --dir "$primary" --namespace "$ns_primary" --label shop
+  assert_success
+  run pitchfork config add "$gen/worktree.toml" --dir "$worktree" --namespace "$ns_wt"
+  assert_success
+  run pitchfork config list --json
+  assert_success
+  json=$output
+  assert_equal "$(jq -r --arg ns "$ns_primary" '.[] | select(.namespace == $ns) | .label' <<< "$json")" shop
+  # The key must be present as null, not just read as null because it is absent.
+  run jq -e --arg ns "$ns_wt" '.[] | select(.namespace == $ns) | has("label") and (.label == null)' <<< "$json"
+  assert_success
+
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=$proxy_port \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  run env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost PITCHFORK_PROXY_PORT=$proxy_port pitchfork proxy status
+  assert_success
+  assert_output --partial "web.shop.localhost:$proxy_port"
+  refute_output --partial "$ns_primary"
+
+  cd "$worktree"
+  run env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost PITCHFORK_PROXY_PORT=$proxy_port pitchfork proxy status
+  assert_success
+  assert_output --partial "web.feat-x.shop.localhost:$proxy_port"
+  refute_output --partial "$ns_primary"
+
+  run pitchfork start web
+  assert_success
+  cd "$primary"
+  run pitchfork start web
+  assert_success
+  sleep 3
+
+  # The proxy routes the label, and each daemon was told the URL it is served at.
+  run curl -s -H "Host: web.shop.localhost" "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "http://web.shop.localhost:$proxy_port"
+  run curl -s -H "Host: web.feat-x.shop.localhost" "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "http://web.feat-x.shop.localhost:$proxy_port"
+  # The generated namespace is an identifier, not a hostname.
+  run curl -s -o /dev/null -w '%{http_code}' -H "Host: web.$ns_primary.localhost" "http://127.0.0.1:$proxy_port/"
+  assert_output "404"
+
+  run pitchfork stop web || true
+  cd "$worktree"
+  run pitchfork stop web || true
+  kill_port "$primary_port"
+  kill_port "$wt_port"
+}
+
+@test "config add --label validates, updates, and is kept when re-adding without it" {
+  mkdir -p "$TEST_TEMP_DIR/labelled" "$TEST_TEMP_DIR/gen"
+  cat > "$TEST_TEMP_DIR/gen/pitchfork.toml" <<'EOT'
+[daemons.web]
+run = "sleep 60"
+EOT
+  local add=(pitchfork config add "$TEST_TEMP_DIR/gen/pitchfork.toml" --dir "$TEST_TEMP_DIR/labelled" --namespace labelled-1a2b3c4d)
+
+  run "${add[@]}" --label Not_A_Label
+  assert_failure
+  assert_output --partial "not a valid hostname label"
+  run "${add[@]}" --label "$(printf 'a%.0s' $(seq 1 64))"
+  assert_failure
+  assert_output --partial "limited to 63"
+  # A rejected label registers nothing.
+  run pitchfork config list --json
+  assert_output "[]"
+
+  run "${add[@]}" --label first
+  assert_success
+  run pitchfork config list --json
+  assert_equal "$(jq -r '.[0].label' <<< "$output")" first
+  assert_output --partial '"namespace": "labelled-1a2b3c4d"'
+
+  run "${add[@]}" --label second
+  assert_success
+  run pitchfork config list --json
+  assert_equal "$(jq -r '.[0].label' <<< "$output")" second
+  assert_equal "$(jq -r 'length' <<< "$output")" 1
+  assert_equal "$(jq -r '.[0].config | length' <<< "$output")" 1
+  run grep -c '^label = "second"$' "$PITCHFORK_CONFIG_DIR/config.toml"
+  assert_output 1
+
+  run "${add[@]}"
+  assert_success
+  run pitchfork config list --json
+  assert_equal "$(jq -r '.[0].label' <<< "$output")" second
+
+  # The text listing keeps its four columns.
+  run pitchfork config list
+  assert_success
+  assert_equal "$(awk -F'\t' '{print NF}' <<< "$output")" 4
+}
+
+@test "config remove drops the label with the last attachment" {
+  mkdir -p "$TEST_TEMP_DIR/labelled" "$TEST_TEMP_DIR/gen"
+  local first="$TEST_TEMP_DIR/gen/pitchfork.toml" second="$TEST_TEMP_DIR/gen/second.toml"
+  printf '[daemons.web]\nrun = "sleep 60"\n' > "$first"
+  printf '[daemons.api]\nrun = "sleep 60"\n' > "$second"
+  local ns=(--dir "$TEST_TEMP_DIR/labelled" --namespace labelled-1a2b3c4d)
+
+  run pitchfork config add "$first" "${ns[@]}" --label shop
+  assert_success
+  run pitchfork config add "$second" "${ns[@]}"
+  assert_success
+
+  # The label outlives one attachment while another remains.
+  run pitchfork config remove "$first"
+  assert_success
+  run pitchfork config list --json
+  assert_equal "$(jq -r '.[0].label' <<< "$output")" shop
+  run grep -c '^label = "shop"$' "$PITCHFORK_CONFIG_DIR/config.toml"
+  assert_output 1
+
+  # The last removal leaves no registration, and no stale label behind it.
+  run pitchfork config remove "$second"
+  assert_success
+  run pitchfork config list --json
+  assert_output "[]"
+  run grep -c '^label' "$PITCHFORK_CONFIG_DIR/config.toml"
+  assert_output 0
+
+  # Registering again without --label does not revive the old one.
+  run pitchfork config add "$first" "${ns[@]}"
+  assert_success
+  run pitchfork config list --json
+  assert_success
+  json=$output
+  run jq -e '.[0] | has("label") and (.label == null)' <<< "$json"
+  assert_success
+}

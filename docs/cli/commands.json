@@ -1208,7 +1208,7 @@
               "config",
               "add"
             ],
-            "usage": "config add [--dir <DIR>] [--namespace <NAMESPACE>] <FILE>",
+            "usage": "config add [FLAGS] <FILE>",
             "subcommands": {},
             "args": [
               {
@@ -1249,6 +1249,25 @@
                 "arg": {
                   "name": "NAMESPACE",
                   "usage": "<NAMESPACE>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "label",
+                "usage": "--label <LABEL>",
+                "help": "Hostname label for the project, when the namespace is only an identifier",
+                "help_first_line": "Hostname label for the project, when the namespace is only an identifier",
+                "short": [],
+                "long": [
+                  "label"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "LABEL",
+                  "usage": "<LABEL>",
                   "required": true,
                   "double_dash": "Optional",
                   "hide": false
