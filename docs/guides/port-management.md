@@ -581,7 +581,9 @@ If two projects, two worktrees within a project, or two daemons within a
 checkout produce the same label, neither conflicting entry is routed. For
 example, `foo_bar` and `foo-bar` both become `foo-bar`. Run
 `pitchfork proxy status` to see **Conflicts**, then change the relevant
-`namespace`, `worktree_label`, or daemon `proxy` label. Hostnames that exceed
+`namespace`, `worktree_label`, or daemon `proxy` label; when the clashing project
+label comes from a registration, register a different one with
+`pitchfork config add <file> --label <other>`. Hostnames that exceed
 the 253-byte DNS limit, including the TLD, are also rejected.
 
 ### Slugs (Legacy)

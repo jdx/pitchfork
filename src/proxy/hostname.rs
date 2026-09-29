@@ -276,6 +276,14 @@ pub fn project_label(primary: &Path) -> Option<String> {
     pick_project_label(primary, registered.as_deref(), explicit.as_deref())
 }
 
+/// The label a registration names for a primary checkout, when it is usable.
+///
+/// This is the part of [`project_label`] that a `--label` registration
+/// controls, as opposed to a namespace or a directory name.
+fn registered_project_label(primary: &Path) -> Option<String> {
+    crate::extra_configs::label_for_dir(primary).and_then(|l| sanitize_label(&l))
+}
+
 /// The precedence behind [`project_label`], separated from the lookups.
 ///
 /// A registered label that sanitizes to nothing (a hand-edited registry) is
@@ -705,6 +713,30 @@ fn project_label_is_ambiguous(label: &str, primary: &Path) -> bool {
     false
 }
 
+/// The error for two projects that reduce to one label.
+///
+/// When either label came from a registration, a registered label outranks a
+/// namespace, so setting a `namespace` cannot resolve the clash; the advice is
+/// to register a different label instead.
+fn project_label_collision_message(
+    label: &str,
+    first: &Path,
+    second: &Path,
+    from_registration: bool,
+) -> String {
+    let advice = if from_registration {
+        "Register a different label for one of them with \
+         `pitchfork config add <file> --label <other>`."
+    } else {
+        "Set a distinct top-level `namespace` in one of them."
+    };
+    format!(
+        "project label '{label}' is claimed by two directories: {} and {}. {advice}",
+        first.display(),
+        second.display(),
+    )
+}
+
 /// Linked worktree roots recorded in a checkout's git common directory.
 ///
 /// Each `<common>/worktrees/<name>/gitdir` holds the path of that worktree's
@@ -830,11 +862,13 @@ impl HostRegistry {
 
             if let Some(existing) = registry.projects.get(&label) {
                 if existing.primary.dir != primary {
-                    registry.errors.push(format!(
-                        "project label '{label}' is claimed by two directories: {} and {}. \
-                         Set a distinct top-level `namespace` in one of them.",
-                        existing.primary.dir.display(),
-                        primary.display(),
+                    let registered = registered_project_label(&existing.primary.dir).is_some()
+                        || registered_project_label(&primary).is_some();
+                    registry.errors.push(project_label_collision_message(
+                        &label,
+                        &existing.primary.dir,
+                        &primary,
+                        registered,
                     ));
                     // Neither is routed: answering for one of them would serve
                     // the wrong project's daemons under a URL the other
@@ -1692,6 +1726,26 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("/repos/fix-1"), "{}", errors[0]);
         assert!(errors[0].contains("/repos/fix.1"), "{}", errors[0]);
+    }
+
+    /// A label clash between registered labels is fixed by registering another
+    /// label, not by a namespace that the registered label outranks.
+    #[test]
+    fn test_project_label_collision_message_depends_on_source() {
+        let a = Path::new("/repos/a");
+        let b = Path::new("/repos/b");
+        let plain = project_label_collision_message("shop", a, b, false);
+        assert!(plain.contains("`namespace`"), "{plain}");
+        assert!(!plain.contains("--label"), "{plain}");
+        let registered = project_label_collision_message("shop", a, b, true);
+        assert!(
+            registered.contains("pitchfork config add <file> --label <other>"),
+            "{registered}"
+        );
+        assert!(!registered.contains("`namespace`"), "{registered}");
+        for msg in [&plain, &registered] {
+            assert!(msg.contains("'shop'") && msg.contains("/repos/a") && msg.contains("/repos/b"));
+        }
     }
 
     /// Two projects that reduce to one label are reported, and neither is
