@@ -16,6 +16,7 @@ mod daemons;
 mod disable;
 mod enable;
 mod interactive;
+mod interrupt;
 pub mod json_output;
 mod list;
 pub mod log_sink;
@@ -70,6 +71,8 @@ enum Commands {
     Disable(disable::Disable),
     #[usage(alias = "e")]
     Enable(enable::Enable),
+    #[usage(hide)]
+    Interrupt(interrupt::Interrupt),
     #[usage(alias = "ls")]
     List(list::List),
     #[usage(hide)]
@@ -146,6 +149,7 @@ pub async fn run() -> Result<()> {
         Commands::Config(config) => config.run().await,
         Commands::Disable(disable) => disable.run().await,
         Commands::Enable(enable) => enable.run().await,
+        Commands::Interrupt(interrupt) => interrupt.run().await,
         Commands::List(list) => list.run().await,
         Commands::LogSink(log_sink) => log_sink.run().await,
         Commands::Logs(logs) => logs.run().await,
