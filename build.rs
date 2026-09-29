@@ -54,6 +54,19 @@ fn ensure_web_ui() {
         std::fs::create_dir_all(dist)
             .and_then(|()| std::fs::write(&index, html))
             .expect("failed to write the placeholder ui/dist/index.html");
+        // `mise run build:ui` skips itself when its outputs are newer than its
+        // sources. A freshly written placeholder would look up to date and keep the
+        // real UI from ever being built, so date it before any source.
+        if let Err(err) = std::fs::File::options()
+            .write(true)
+            .open(&index)
+            .and_then(|file| file.set_modified(std::time::UNIX_EPOCH))
+        {
+            println!(
+                "cargo:warning=could not back-date the placeholder ui/dist/index.html ({err}); \
+                 delete ui/dist before running `mise run build:ui`"
+            );
+        }
     }
     println!(
         "cargo:warning=ui/dist has no built web UI; embedding a placeholder page. \
