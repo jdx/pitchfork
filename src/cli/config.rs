@@ -30,6 +30,9 @@ struct Add {
     dir: Option<PathBuf>,
     #[usage(long)]
     namespace: Option<String>,
+    /// Hostname label for the project, when the namespace is only an identifier
+    #[usage(long)]
+    label: Option<String>,
 }
 
 /// Detach a configuration file, including a file that no longer exists.
@@ -64,6 +67,10 @@ impl Config {
                 if !dir.is_dir() {
                     miette::bail!("--dir must name a directory");
                 }
+                if let Some(label) = &args.label {
+                    crate::proxy::hostname::validate_registered_label(label)
+                        .map_err(|e| miette::miette!("invalid --label: {e}"))?;
+                }
                 let namespace = args
                     .namespace
                     .clone()
@@ -92,7 +99,7 @@ impl Config {
                     &toml::to_string(&value).into_diagnostic()?,
                     &dir.join("pitchfork.toml"),
                 )?;
-                extra_configs::add(&namespace, &dir, &file)?;
+                extra_configs::add(&namespace, &dir, &file, args.label.as_deref())?;
                 Ok(())
             }
             Some(Commands::Remove(args)) => {

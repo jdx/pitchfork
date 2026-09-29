@@ -473,7 +473,7 @@ settings; the examples in the quick start use HTTP on port 8088.
 
 | Label | Source |
 |-------|--------|
-| Project | The primary checkout's explicit namespace, including a registered namespace, or its directory name |
+| Project | The `label` of the primary checkout's registration, else its explicit namespace (including a registered one), else its directory name |
 | Worktree | The linked worktree's `worktree_label`, or its directory name |
 | Daemon | The daemon's `proxy` string, or its name |
 
@@ -503,6 +503,22 @@ pitchfork config add /home/user/myproject/pitchfork.toml --dir /home/user/myproj
 ```
 
 Changing the current directory alone does not register a project.
+
+A registered namespace is used as the project label. A tool that registers under
+a generated namespace, such as `shop-528f92b13a6784f0`, can name the hostname
+label separately with `--label`:
+
+```sh
+pitchfork config add /home/user/myproject/pitchfork.toml \
+  --dir /home/user/myproject --namespace shop-528f92b13a6784f0 --label shop
+```
+
+The daemons are then served at `web.shop.<tld>`, and those in linked worktrees at
+`web.<worktree>.shop.<tld>`. The label is stored as `label = "shop"` in the
+`[namespaces.<namespace>]` entry, must already be a valid hostname label
+(lowercase letters, digits, and hyphens, up to 63 characters), and is looked up
+for the primary checkout's registration. Registering again with a different
+`--label` replaces it; registering without `--label` keeps it.
 
 Daemons defined in global configuration have no project hostname; use a
 [slug](#slugs-legacy) to route them. A linked worktree of a bare git repository

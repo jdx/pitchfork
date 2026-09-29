@@ -15,6 +15,8 @@ pub struct Entry {
     pub namespace: String,
     pub dir: PathBuf,
     pub config: Vec<PathBuf>,
+    /// Hostname label the registration names for the project, if any.
+    pub label: Option<String>,
     pub source: &'static str,
 }
 
@@ -82,6 +84,7 @@ fn parse_entries(content: &str) -> Result<Vec<Entry>> {
                 namespace,
                 dir,
                 config,
+                label: entry.label,
                 source: "registry",
             }
         })
@@ -141,6 +144,7 @@ pub fn entries() -> Vec<Entry> {
             namespace: String::new(),
             dir,
             config,
+            label: None,
             source: "env",
         });
     }
@@ -199,8 +203,24 @@ pub fn namespace_for_dir(dir: &Path) -> Option<String> {
         .map(|e| e.namespace)
 }
 
+/// The hostname label a registration names for the project at `dir`.
+///
+/// A pure lookup in the cached registry. It is what lets a tool register a
+/// project under a generated namespace (needed to keep daemon IDs unique) and
+/// still get the hostname it advertises.
+pub fn label_for_dir(dir: &Path) -> Option<String> {
+    let dir = normalize(dir);
+    entries()
+        .into_iter()
+        .find(|e| e.source == "registry" && e.dir == dir)
+        .and_then(|e| e.label)
+}
+
 /// Mutate under the same lock as the existing namespace and slug writers.
-pub fn add(namespace: &str, dir: &Path, file: &Path) -> Result<bool> {
+///
+/// A `label` replaces the one already recorded for the namespace; `None` leaves
+/// it alone. Returns whether anything was written.
+pub fn add(namespace: &str, dir: &Path, file: &Path, label: Option<&str>) -> Result<bool> {
     let path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).into_diagnostic()?;
@@ -231,13 +251,23 @@ pub fn add(namespace: &str, dir: &Path, file: &Path) -> Result<bool> {
         .or_insert_with(|| crate::pitchfork_toml::NamespaceEntry {
             dir,
             config: Vec::new(),
+            label: None,
         });
-    if entry.config.contains(&file) {
-        return Ok(false);
+    let mut changed = false;
+    if let Some(label) = label
+        && entry.label.as_deref() != Some(label)
+    {
+        entry.label = Some(label.to_string());
+        changed = true;
     }
-    entry.config.push(file);
-    pt.write_unlocked()?;
-    Ok(true)
+    if !entry.config.contains(&file) {
+        entry.config.push(file);
+        changed = true;
+    }
+    if changed {
+        pt.write_unlocked()?;
+    }
+    Ok(changed)
 }
 
 pub fn remove(file: &Path) -> Result<Option<String>> {
@@ -296,7 +326,24 @@ mod tests {
         let raw = NamespaceEntryRaw {
             dir: "/old".into(),
             config: vec![],
+            label: None,
         };
-        assert!(!toml::to_string(&raw).unwrap().contains("config"));
+        let text = toml::to_string(&raw).unwrap();
+        assert!(!text.contains("config"));
+        assert!(!text.contains("label"));
+        assert_eq!(entries[0].label, None);
+    }
+
+    #[test]
+    fn registry_label_parses_and_round_trips() {
+        let doc = "[namespaces.shop-528f92b13a6784f0]\ndir = \"/shop\"\n\
+                   config = [\"/gen/pitchfork.toml\"]\nlabel = \"shop\"\n";
+        let entries = parse_entries(doc).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].namespace, "shop-528f92b13a6784f0");
+        assert_eq!(entries[0].label.as_deref(), Some("shop"));
+        let raw: Registrations = toml::from_str(doc).unwrap();
+        let again = toml::to_string(&raw.namespaces["shop-528f92b13a6784f0"]).unwrap();
+        assert!(again.contains("label = \"shop\""), "{again}");
     }
 }

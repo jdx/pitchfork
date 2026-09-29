@@ -21,6 +21,11 @@ dir = "/path/to/project"
 config = ["/path/to/generated.toml"]
 ```
 
+Add `--label <label>` to name the project's proxy hostname label when the namespace
+is only an identifier (for example a generated `shop-528f92b13a6784f0`). It is stored
+as `label = "..."` in the entry, and `pitchfork config list --json` reports it. See
+[Where Labels Come From](/guides/port-management#where-labels-come-from).
+
 Relative attachment paths resolve against `dir`; `~` is supported. An attachment
 inherits the project's explicit namespace or its directory name. Use
 `--namespace` when registering a project without its own configuration. A namespace

@@ -330,6 +330,9 @@ cmd config help="Attach externally generated configuration to a project." effect
         flag --namespace {
             arg <NAMESPACE>
         }
+        flag --label help="Hostname label for the project, when the namespace is only an identifier" {
+            arg <LABEL>
+        }
         flag "-h --help" help="Print help" action=help builtin=#true
         arg <FILE>
     }

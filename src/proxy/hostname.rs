@@ -10,9 +10,10 @@
 //! <project>.<tld>                       project page (not a daemon)
 //! ```
 //!
-//! Labels are DNS-safe lowercase. The project label is the namespace's project
-//! name when the project declares one explicitly, otherwise the directory name
-//! of the primary checkout. The worktree label is the linked worktree's
+//! Labels are DNS-safe lowercase. The project label is the label its
+//! registration names (`pitchfork config add --label`), else the namespace's
+//! project name when the project declares one explicitly, otherwise the
+//! directory name of the primary checkout. The worktree label is the linked worktree's
 //! directory name unless the config sets `worktree_label`.
 
 use crate::config_types::ProxyConfig;
@@ -228,17 +229,67 @@ pub fn detect_checkout(dir: &Path) -> Checkout {
 
 // ─── labels ──────────────────────────────────────────────────────────────────
 
+/// Check that a label a registration names is usable as written.
+///
+/// The label is used verbatim, so it must already be what [`sanitize_label`]
+/// would produce, and `<label>.<tld>` (the project page) must fit the DNS
+/// limit. Returns a message saying what to change otherwise.
+pub fn validate_registered_label(label: &str) -> Result<(), String> {
+    let Some(clean) = sanitize_label(label) else {
+        return Err(format!(
+            "label '{label}' has no usable characters; use lowercase letters, digits and hyphens"
+        ));
+    };
+    if label.len() > MAX_LABEL_LEN {
+        return Err(format!(
+            "label '{label}' is {} characters; a hostname label is limited to {MAX_LABEL_LEN}",
+            label.len()
+        ));
+    }
+    if clean != label {
+        return Err(format!(
+            "label '{label}' is not a valid hostname label; use lowercase letters, digits and \
+             single hyphens between them (for example '{clean}')"
+        ));
+    }
+    if !hostname_fits(label) {
+        return Err(format!(
+            "label '{label}' plus the configured proxy.tld is over the {MAX_HOSTNAME_LEN}-byte DNS limit"
+        ));
+    }
+    Ok(())
+}
+
 /// The project label for a primary checkout.
 ///
-/// A project registered or configured with an explicit namespace uses that
-/// name; otherwise the directory name of the primary checkout is used.
+/// A registration that names a label (`pitchfork config add --label`) wins:
+/// a tool that registers under a generated namespace, kept only to make daemon
+/// IDs unique, says here what the hostname should be. Otherwise a project
+/// registered or configured with an explicit namespace uses that name, and
+/// failing that the directory name of the primary checkout is used.
 pub fn project_label(primary: &Path) -> Option<String> {
+    let registered = crate::extra_configs::label_for_dir(primary);
     let explicit = PitchforkToml::project_namespace_override(primary)
         .ok()
         .flatten()
         .or_else(|| crate::extra_configs::namespace_for_dir(primary));
-    match explicit {
-        Some(ns) => sanitize_label(&ns),
+    pick_project_label(primary, registered.as_deref(), explicit.as_deref())
+}
+
+/// The precedence behind [`project_label`], separated from the lookups.
+///
+/// A registered label that sanitizes to nothing (a hand-edited registry) is
+/// ignored rather than hiding the project.
+fn pick_project_label(
+    primary: &Path,
+    registered: Option<&str>,
+    explicit_namespace: Option<&str>,
+) -> Option<String> {
+    if let Some(label) = registered.and_then(sanitize_label) {
+        return Some(label);
+    }
+    match explicit_namespace {
+        Some(ns) => sanitize_label(ns),
         None => sanitize_label(&primary.file_name()?.to_string_lossy()),
     }
 }
@@ -1330,6 +1381,46 @@ mod tests {
         let repo = temp.path().join("My App");
         std::fs::create_dir_all(&repo).unwrap();
         assert_eq!(project_label(&repo).as_deref(), Some("my-app"));
+    }
+
+    /// Registry label, then explicit namespace, then the directory name.
+    #[test]
+    fn test_pick_project_label_precedence() {
+        let repo = Path::new("/work/Shop Repo");
+        let ns = Some("shop-528f92b13a6784f0");
+        assert_eq!(
+            pick_project_label(repo, Some("shop"), ns).as_deref(),
+            Some("shop")
+        );
+        assert_eq!(
+            pick_project_label(repo, None, ns).as_deref(),
+            Some("shop-528f92b13a6784f0")
+        );
+        assert_eq!(
+            pick_project_label(repo, None, None).as_deref(),
+            Some("shop-repo")
+        );
+        // An unusable registered label falls through instead of hiding the project.
+        assert_eq!(
+            pick_project_label(repo, Some("---"), ns).as_deref(),
+            Some("shop-528f92b13a6784f0")
+        );
+    }
+
+    #[test]
+    fn test_validate_registered_label() {
+        assert!(validate_registered_label("shop").is_ok());
+        assert!(validate_registered_label("my-shop-2").is_ok());
+        assert!(validate_registered_label(&"a".repeat(63)).is_ok());
+        for bad in [
+            "Shop", "my_shop", "-shop", "shop-", "a--b", "a.b", "", "---",
+        ] {
+            assert!(validate_registered_label(bad).is_err(), "{bad:?}");
+        }
+        let long = validate_registered_label(&"a".repeat(64)).unwrap_err();
+        assert!(long.contains("63"), "{long}");
+        let hint = validate_registered_label("My Shop").unwrap_err();
+        assert!(hint.contains("'my-shop'"), "{hint}");
     }
 
     /// A project that declares a namespace uses that name instead.

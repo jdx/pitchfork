@@ -103,6 +103,11 @@ pub struct NamespaceEntryRaw {
     /// Additional configuration files, relative to dir or absolute.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<String>,
+    /// Hostname label for the project, used instead of the namespace when the
+    /// namespace is only an identifier (for example a generated
+    /// `shop-528f92b13a6784f0`). Must already be a valid DNS label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Resolved namespace entry with PathBuf.
@@ -111,6 +116,8 @@ pub struct NamespaceEntry {
     /// Project directory containing the pitchfork.toml
     pub dir: PathBuf,
     pub config: Vec<PathBuf>,
+    /// Hostname label for the project, when the registration names one.
+    pub label: Option<String>,
 }
 
 /// Internal structure for reading config files (uses String keys for short daemon names)
@@ -1547,6 +1554,7 @@ impl PitchforkToml {
                         })
                         .collect(),
                     dir: env::expand_tilde(entry.dir),
+                    label: entry.label,
                 },
             );
         }
@@ -1746,6 +1754,7 @@ impl PitchforkToml {
                             .iter()
                             .map(|p| p.to_string_lossy().into_owned())
                             .collect(),
+                        label: entry.label.clone(),
                     },
                 );
             }
@@ -1922,6 +1931,7 @@ impl PitchforkToml {
                     NamespaceEntry {
                         dir: d.clone(),
                         config: Vec::new(),
+                        label: None,
                     },
                 );
             }
@@ -2032,6 +2042,7 @@ impl PitchforkToml {
                 NamespaceEntry {
                     dir,
                     config: Vec::new(),
+                    label: None,
                 },
             );
         }
@@ -2728,6 +2739,7 @@ dir = "~/projects/web"
             NamespaceEntry {
                 dir: PathBuf::from("/tmp/myproject"),
                 config: Vec::new(),
+                label: None,
             },
         );
         pt.write().unwrap();
