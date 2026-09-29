@@ -432,6 +432,22 @@ pub enum IpcError {
         help: String,
     },
 
+    /// The socket path does not fit in `sockaddr_un.sun_path`.
+    #[error(
+        "the supervisor socket path is too long: {len} bytes, but this platform allows {limit}"
+    )]
+    #[diagnostic(
+        code(pitchfork::ipc::socket_path_too_long),
+        url("https://pitchfork.jdx.dev/reference/file-locations"),
+        help("{help}")
+    )]
+    SocketPathTooLong {
+        path: PathBuf,
+        len: usize,
+        limit: usize,
+        help: String,
+    },
+
     #[error("IPC request timed out after {seconds}s")]
     #[diagnostic(
         code(pitchfork::ipc::timeout),

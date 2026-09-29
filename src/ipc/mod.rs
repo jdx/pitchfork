@@ -2,12 +2,15 @@ use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
 use crate::daemon_id::DaemonId;
 use crate::env;
+use crate::error::IpcError;
 use interprocess::local_socket::Name;
 #[cfg(unix)]
 use interprocess::local_socket::{GenericFilePath, ToFsName};
 #[cfg(windows)]
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use miette::{Context, IntoDiagnostic};
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 
 pub(crate) mod batch;
@@ -199,11 +202,52 @@ pub enum IpcResponse {
         count: u64,
     },
 }
+
+/// Bytes a socket path may occupy in `sockaddr_un.sun_path` on this platform
+/// (108 on Linux, 104 on macOS and the BSDs). Matches the check `interprocess`
+/// makes when it builds the address, so an over-long path is caught here first.
+#[cfg(unix)]
+const SOCKET_PATH_CAPACITY: usize = {
+    // SAFETY: `sockaddr_un` is plain data, for which all-zero bytes are valid.
+    let sun = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+    sun.sun_path.len()
+};
+
+/// Fail with an actionable error when a socket path cannot fit in `sun_path`.
+///
+/// Without this the connection attempt fails, five retries later, with
+/// `local socket name length exceeds capacity of sun_path of sockaddr_un`,
+/// which names neither the path nor what to change.
+#[cfg(unix)]
+fn check_socket_path(path: &Path, capacity: usize) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let len = path.as_os_str().as_bytes().len();
+    if len <= capacity {
+        return Ok(());
+    }
+    let over = len - capacity;
+    let help = format!(
+        "the socket is {path} and is {over} byte(s) over the limit.\n\
+         Set PITCHFORK_STATE_DIR (or XDG_STATE_HOME) to a shorter directory, for example \
+         PITCHFORK_STATE_DIR=/tmp/pitchfork, so that <state dir>/sock/main.sock is at most \
+         {capacity} bytes.",
+        path = path.display()
+    );
+    Err(IpcError::SocketPathTooLong {
+        path: path.to_path_buf(),
+        len,
+        limit: capacity,
+        help,
+    }
+    .into())
+}
+
 fn fs_name(name: &str) -> Result<Name<'_>> {
     // Unix: use a filesystem path for the AF_UNIX socket.
     #[cfg(unix)]
     {
         let path = env::IPC_SOCK_DIR.join(name).with_extension("sock");
+        check_socket_path(&path, SOCKET_PATH_CAPACITY)?;
         let fs_name = path.to_fs_name::<GenericFilePath>().into_diagnostic()?;
         Ok(fs_name)
     }
@@ -297,6 +341,46 @@ fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_over_sun_path_capacity_names_path_length_and_fix() {
+        let fits = PathBuf::from(format!("/{}", "a".repeat(SOCKET_PATH_CAPACITY - 1)));
+        assert_eq!(fits.as_os_str().len(), SOCKET_PATH_CAPACITY);
+        assert!(check_socket_path(&fits, SOCKET_PATH_CAPACITY).is_ok());
+
+        let long = PathBuf::from(format!(
+            "/{}/sock/main.sock",
+            "a".repeat(SOCKET_PATH_CAPACITY)
+        ));
+        let err = check_socket_path(&long, SOCKET_PATH_CAPACITY).unwrap_err();
+        let len = long.as_os_str().len();
+        let message = err.to_string();
+        assert!(message.contains(&format!("{len} bytes")), "{message}");
+        assert!(
+            message.contains(&format!("allows {SOCKET_PATH_CAPACITY}")),
+            "{message}"
+        );
+        let help = err.help().expect("help text").to_string();
+        assert!(help.contains(&long.display().to_string()), "{help}");
+        assert!(help.contains("PITCHFORK_STATE_DIR"), "{help}");
+        assert!(help.contains("XDG_STATE_HOME"), "{help}");
+        assert!(
+            matches!(
+                err.downcast_ref::<IpcError>(),
+                Some(IpcError::SocketPathTooLong { len: l, limit, .. })
+                    if *l == len && *limit == SOCKET_PATH_CAPACITY
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_capacity_matches_the_platform() {
+        // 108 on Linux, 104 on macOS and the BSDs.
+        assert!((100..=108).contains(&SOCKET_PATH_CAPACITY));
+    }
 
     #[test]
     fn filtered_clean_ipc_round_trips() {
