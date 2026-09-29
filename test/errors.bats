@@ -151,3 +151,19 @@ EOF
   assert_success
   assert_output ""
 }
+
+@test "a state directory too long for a unix socket says what to shorten" {
+  skip_on_windows "Windows IPC uses named pipes, which have no path length limit"
+  local long="$TEST_TEMP_DIR/$(printf 'x%.0s' $(seq 1 120))"
+  local suffix=/sock/main.sock
+  mkdir -p "$long"
+
+  PITCHFORK_LOG=warn PITCHFORK_STATE_DIR="$long" run pitchfork list
+  assert_failure
+  assert_output --partial "socket path is too long"
+  # miette wraps the long path, so check the length instead of the path.
+  assert_output --partial "$((${#long} + ${#suffix})) bytes"
+  assert_output --partial "PITCHFORK_STATE_DIR"
+  assert_output --partial "XDG_STATE_HOME"
+  refute_output --partial "after 5 attempts"
+}

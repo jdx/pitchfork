@@ -44,6 +44,12 @@ The normal location is `~/.local/state/pitchfork/`:
 the system's state-directory resolution (including `XDG_STATE_HOME`). On macOS,
 pitchfork falls back to `~/.local/state/pitchfork`.
 
+The socket path (`<state dir>/sock/main.sock`) must fit in a Unix socket address:
+108 bytes on Linux, 104 on macOS. A longer state directory, such as a deeply
+nested `PITCHFORK_STATE_DIR`, makes pitchfork report the socket path, its length,
+and the limit instead of connecting. Point `PITCHFORK_STATE_DIR` (or
+`XDG_STATE_HOME`) at a shorter directory to fix it.
+
 The supervisor generates the proxy CA during HTTPS startup. The proxy caches
 per-hostname certificates when using that CA to serve HTTPS.
 `proxy/setup.toml` records system configuration for
