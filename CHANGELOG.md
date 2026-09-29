@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.29.0](https://github.com/jdx/pitchfork/compare/v2.28.0...v2.29.0) - 2026-09-29
+
+### Added
+
+- *(boot)* keep stable executable paths in boot registrations ([#940](https://github.com/jdx/pitchfork/pull/940))
+
+### Fixed
+
+- *(supervisor)* send Ctrl+C on Windows for stop_signal = "SIGINT" ([#931](https://github.com/jdx/pitchfork/pull/931))
+- *(proxy)* let a registration name its project hostname label ([#956](https://github.com/jdx/pitchfork/pull/956))
+- *(supervisor)* explain when the state directory is too long for the socket ([#955](https://github.com/jdx/pitchfork/pull/955))
+- *(ipc)* remove the broken MessagePack mode selected by IPC_JSON=false ([#930](https://github.com/jdx/pitchfork/pull/930))
+
+### Other
+
+- *(deps)* update rust crate clx to v3.0.3 ([#952](https://github.com/jdx/pitchfork/pull/952))
+- let cargo build succeed before the web UI is built ([#951](https://github.com/jdx/pitchfork/pull/951))
+- *(deps)* update rust crate usage_rs to v6.12.0 ([#947](https://github.com/jdx/pitchfork/pull/947))
+- *(proxy)* stop DNS responder tests failing on Windows port exclusions ([#926](https://github.com/jdx/pitchfork/pull/926))
+
 ## [2.28.0](https://github.com/jdx/pitchfork/compare/v2.27.0...v2.28.0) - 2026-09-27
 
 ### Added
