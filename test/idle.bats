@@ -8,7 +8,7 @@ setup() {
   _common_setup
   skip_on_windows "the tests use POSIX shell PIDs and python test servers"
 
-  PROXY_PORT=$(_free_port)
+  PROXY_PORT=$(free_port)
   STREAM_SCRIPT="$(to_shell_path "$(script_path stream_server.py)")"
   # Check idleness often, so a short grace period is noticed promptly.
   export PITCHFORK_INTERVAL=500ms
@@ -16,10 +16,6 @@ setup() {
 
 teardown() {
   _common_teardown
-}
-
-_free_port() {
-  python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()"
 }
 
 # Start the supervisor with the proxy on plain HTTP. Extra `VAR=value`
@@ -79,9 +75,9 @@ supervisor_log() {
   local proj="$TEST_TEMP_DIR/idleproj"
   mkdir -p "$proj" && cd "$proj"
   local db_port api_port manual_port
-  db_port=$(_free_port)
-  api_port=$(_free_port)
-  manual_port=$(_free_port)
+  db_port=$(free_port)
+  api_port=$(free_port)
+  manual_port=$(free_port)
   {
     stream_daemon db "$db_port"
     stream_daemon api "$api_port" "port = $api_port" 'depends = ["db"]'
@@ -122,8 +118,8 @@ supervisor_log() {
   local proj="$TEST_TEMP_DIR/optproj"
   mkdir -p "$proj" && cd "$proj"
   local keep_port quick_port
-  keep_port=$(_free_port)
-  quick_port=$(_free_port)
+  keep_port=$(free_port)
+  quick_port=$(free_port)
   {
     stream_daemon keep "$keep_port" "port = $keep_port"
     stream_daemon quick "$quick_port" "port = $quick_port" 'proxy_idle_timeout = "2s"'
@@ -149,7 +145,7 @@ supervisor_log() {
   local proj="$TEST_TEMP_DIR/streamproj"
   mkdir -p "$proj" && cd "$proj"
   local port
-  port=$(_free_port)
+  port=$(free_port)
   stream_daemon web "$port" "port = $port" >pitchfork.toml
 
   start_proxy_supervisor PITCHFORK_PROXY_IDLE_TIMEOUT=2s
@@ -183,7 +179,7 @@ supervisor_log() {
   local proj="$TEST_TEMP_DIR/claimproj"
   mkdir -p "$proj" && cd "$proj"
   local port
-  port=$(_free_port)
+  port=$(free_port)
   stream_daemon api "$port" "port = $port" >pitchfork.toml
 
   start_proxy_supervisor PITCHFORK_PROXY_IDLE_TIMEOUT=2s
@@ -203,7 +199,7 @@ supervisor_log() {
   local proj="$TEST_TEMP_DIR/shellproj"
   mkdir -p "$proj" && cd "$proj"
   local port
-  port=$(_free_port)
+  port=$(free_port)
   stream_daemon api "$port" "port = $port" >pitchfork.toml
 
   start_proxy_supervisor PITCHFORK_PROXY_IDLE_TIMEOUT=2s
@@ -229,9 +225,9 @@ supervisor_log() {
   local proj="$TEST_TEMP_DIR/shareproj"
   mkdir -p "$proj" && cd "$proj"
   local db_port api_port admin_port
-  db_port=$(_free_port)
-  api_port=$(_free_port)
-  admin_port=$(_free_port)
+  db_port=$(free_port)
+  api_port=$(free_port)
+  admin_port=$(free_port)
   {
     stream_daemon db "$db_port"
     stream_daemon api "$api_port" "port = $api_port" 'depends = ["db"]'

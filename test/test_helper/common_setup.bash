@@ -203,6 +203,63 @@ skip_on_windows() {
   fi
 }
 
+# Print a TCP port on 127.0.0.1 that is free now and that no earlier call in
+# this test has returned.
+#
+# Each port is released before it is printed, so the OS can offer it again to
+# the next call; two daemons, or a daemon and the proxy, would then be given
+# the same port. Ports already handed out are recorded under $TEST_TEMP_DIR
+# (the calls run in subshells, so a variable would not survive) and skipped.
+free_port() {
+  _free_port_unused tcp
+}
+
+# Like free_port, for the proxy's DNS resolver, which binds its port for both
+# UDP and TCP. A TCP-only probe can return a port inside a Windows excluded UDP
+# range (bind fails with os error 10013), so ask the OS for a UDP port and
+# confirm TCP can bind it too.
+free_dns_port() {
+  _free_port_unused dns
+}
+
+_free_port_unused() {
+  python3 - "$1" "$TEST_TEMP_DIR/.issued_ports" <<'PY'
+import os
+import socket
+import sys
+
+kind, path = sys.argv[1], sys.argv[2]
+issued = set(open(path).read().split()) if os.path.exists(path) else set()
+
+
+def candidate():
+    if kind == "tcp":
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        udp.bind(("127.0.0.1", 0))
+        port = udp.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp:
+            try:
+                tcp.bind(("127.0.0.1", port))
+            except OSError:
+                return None
+    return port
+
+
+for _ in range(100):
+    port = candidate()
+    if port is None or str(port) in issued:
+        continue
+    with open(path, "a") as f:
+        f.write(f"{port}\n")
+    print(port)
+    sys.exit(0)
+sys.exit(f"no {kind} port free that this test has not already used")
+PY
+}
+
 # Kill a process by PID, working on both Unix and Windows.
 #
 # Takes a PID reported by pitchfork — the state file or `pitchfork status` —
