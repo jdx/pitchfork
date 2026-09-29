@@ -1569,8 +1569,11 @@ EOT
   assert_success
   run pitchfork config list --json
   assert_success
-  assert_equal "$(jq -r --arg ns "$ns_primary" '.[] | select(.namespace == $ns) | .label' <<< "$output")" shop
-  assert_equal "$(jq -r --arg ns "$ns_wt" '.[] | select(.namespace == $ns) | .label' <<< "$output")" null
+  json=$output
+  assert_equal "$(jq -r --arg ns "$ns_primary" '.[] | select(.namespace == $ns) | .label' <<< "$json")" shop
+  # The key must be present as null, not just read as null because it is absent.
+  run jq -e --arg ns "$ns_wt" '.[] | select(.namespace == $ns) | has("label") and (.label == null)' <<< "$json"
+  assert_success
 
   PITCHFORK_PROXY_ENABLE=true \
     PITCHFORK_PROXY_HTTPS=false \
@@ -1692,5 +1695,8 @@ EOT
   run pitchfork config add "$first" "${ns[@]}"
   assert_success
   run pitchfork config list --json
-  assert_equal "$(jq -r '.[0].label' <<< "$output")" null
+  assert_success
+  json=$output
+  run jq -e '.[0] | has("label") and (.label == null)' <<< "$json"
+  assert_success
 }
