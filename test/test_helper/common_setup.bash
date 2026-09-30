@@ -203,60 +203,65 @@ skip_on_windows() {
   fi
 }
 
-# Print a TCP port on 127.0.0.1 that is free now and that no earlier call in
-# this test has returned.
+# Print a TCP port on 127.0.0.1 that is free now and that no other call in
+# this bats run has returned, in this test or in one running beside it.
 #
-# Each port is released before it is printed, so the OS can offer it again to
-# the next call; two daemons, or a daemon and the proxy, would then be given
-# the same port. Ports already handed out are recorded under $TEST_TEMP_DIR
-# (the calls run in subshells, so a variable would not survive) and skipped.
+# Each port is released before it is printed, so until its daemon binds it,
+# anything else could take it. Ports are therefore taken from 20000-32767,
+# below the range the OS hands out for port 0 and outgoing connections (Linux
+# 32768-60999, macOS and Windows 49152-65535), which other tests' servers and
+# connections draw from. Each port handed out is claimed with a file under
+# $BATS_RUN_TMPDIR, which every test of the run shares; creating it
+# exclusively is atomic, so two tests running in parallel never get the same
+# port.
 free_port() {
   _free_port_unused tcp
 }
 
 # Like free_port, for the proxy's DNS resolver, which binds its port for both
-# UDP and TCP. A TCP-only probe can return a port inside a Windows excluded UDP
-# range (bind fails with os error 10013), so ask the OS for a UDP port and
-# confirm TCP can bind it too.
+# UDP and TCP. A Windows excluded range can refuse either one (bind fails with
+# os error 10013), so both are checked.
 free_dns_port() {
   _free_port_unused dns
 }
 
 _free_port_unused() {
-  python3 - "$1" "$TEST_TEMP_DIR/.issued_ports" <<'PY'
+  python3 - "$1" "${BATS_RUN_TMPDIR:-$TEST_TEMP_DIR}/claimed_ports" <<'PY'
 import os
+import random
 import socket
 import sys
 
-kind, path = sys.argv[1], sys.argv[2]
-issued = set(open(path).read().split()) if os.path.exists(path) else set()
+kind, claims = sys.argv[1], sys.argv[2]
+os.makedirs(claims, exist_ok=True)
 
 
-def candidate():
-    if kind == "tcp":
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
-        udp.bind(("127.0.0.1", 0))
-        port = udp.getsockname()[1]
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp:
+def bindable(port):
+    types = [socket.SOCK_STREAM]
+    if kind == "dns":
+        types.append(socket.SOCK_DGRAM)
+    for sock_type in types:
+        with socket.socket(socket.AF_INET, sock_type) as s:
             try:
-                tcp.bind(("127.0.0.1", port))
+                s.bind(("127.0.0.1", port))
             except OSError:
-                return None
-    return port
+                return False
+    return True
 
 
-for _ in range(100):
-    port = candidate()
-    if port is None or str(port) in issued:
+ports = list(range(20000, 32768))
+random.shuffle(ports)
+for port in ports:
+    # A port stays claimed even when it cannot be bound, so no call tries it
+    # again.
+    try:
+        os.close(os.open(os.path.join(claims, str(port)), os.O_CREAT | os.O_EXCL))
+    except FileExistsError:
         continue
-    with open(path, "a") as f:
-        f.write(f"{port}\n")
-    print(port)
-    sys.exit(0)
-sys.exit(f"no {kind} port free that this test has not already used")
+    if bindable(port):
+        print(port)
+        sys.exit(0)
+sys.exit(f"no {kind} port free in 20000-32767 that this run has not already used")
 PY
 }
 
