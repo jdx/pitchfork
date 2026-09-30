@@ -794,6 +794,14 @@ impl PitchforkToml {
         user_id: &str,
         current_namespace: &str,
     ) -> Result<DaemonId> {
+        // A daemon in the current namespace comes first, so another project's
+        // slug of the same name does not take over a local daemon.
+        // Use try_new to validate user input
+        let preferred_id = DaemonId::try_new(current_namespace, user_id)?;
+        if self.daemons.contains_key(&preferred_id) {
+            return Ok(preferred_id);
+        }
+
         // Check for slug match in global slugs registry
         let global_slugs = Self::read_global_slugs();
         if let Some(entry) = global_slugs.get(user_id) {
@@ -823,13 +831,6 @@ impl PitchforkToml {
                     }
                 }
             }
-        }
-
-        // Try to find the daemon in the current namespace first
-        // Use try_new to validate user input
-        let preferred_id = DaemonId::try_new(current_namespace, user_id)?;
-        if self.daemons.contains_key(&preferred_id) {
-            return Ok(preferred_id);
         }
 
         // Fall back to any matching daemon

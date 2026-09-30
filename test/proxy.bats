@@ -114,6 +114,44 @@ EOF
   run pitchfork stop frontend || true
 }
 
+@test "local daemon takes priority over another project's slug of the same name" {
+  local proj_a="$TEST_TEMP_DIR/slug-owner"
+  local proj_b="$TEST_TEMP_DIR/slug-local"
+  mkdir -p "$proj_a" "$proj_b"
+
+  cd "$proj_a"
+  create_pitchfork_toml <<'EOF'
+[daemons.api]
+run = "sleep 60"
+EOF
+  run pitchfork proxy add api --daemon api
+  assert_success
+
+  cd "$proj_b"
+  create_pitchfork_toml <<'EOF'
+[daemons.api]
+run = "sleep 60"
+EOF
+
+  run pitchfork start api
+  assert_success
+  refute_output --partial "not found"
+
+  run pitchfork status api
+  assert_success
+  assert_output --partial "slug-local/api"
+  assert_output --partial "running"
+
+  run pitchfork stop api
+  assert_success
+
+  cd "$proj_a"
+  run pitchfork status api
+  assert_success
+  assert_output --partial "slug-owner/api"
+  refute_output --partial "running"
+}
+
 @test "slug takes priority over same-named daemon in another namespace" {
   local proj_c="$TEST_TEMP_DIR/proj-c"
   local proj_d="$TEST_TEMP_DIR/proj-d"
