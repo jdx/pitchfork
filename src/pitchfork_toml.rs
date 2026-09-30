@@ -2356,6 +2356,7 @@ impl PitchforkTomlDaemon {
             pty: self.pty,
             // Explicit unless the proxy's start marks it otherwise.
             proxy_idle_timeout_ms: None,
+            keeps_saved_record: false,
         }
     }
 }

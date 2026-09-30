@@ -1211,6 +1211,7 @@ impl IpcClient {
                 mise: None,
                 slug: None,
                 proxy: None,
+                keeps_saved_record: true,
                 ..RunOptions::default()
             };
             if should_inject_default_ready_delay(&run_opts) {
