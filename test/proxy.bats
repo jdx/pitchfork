@@ -215,45 +215,13 @@ EOF
 # Proxy URL display tests
 # ============================================================================
 
-_free_port() {
-  python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()"
-}
-
-# The DNS resolver binds its port for both UDP and TCP. A TCP-only probe can
-# return a port inside a Windows excluded UDP range (bind fails with os error
-# 10013), so ask the OS for a UDP port and confirm TCP can bind it too.
-_free_dns_port() {
-  python3 - <<'PY'
-import socket
-import sys
-
-for _ in range(20):
-    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        udp.bind(("127.0.0.1", 0))
-        port = udp.getsockname()[1]
-        tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            tcp.bind(("127.0.0.1", port))
-        except OSError:
-            continue
-        finally:
-            tcp.close()
-    finally:
-        udp.close()
-    print(port)
-    sys.exit(0)
-sys.exit("no port free for both UDP and TCP")
-PY
-}
-
 @test "list shows proxy URL when proxy is enabled" {
   local proj="$TEST_TEMP_DIR/proxy-list"
   mkdir -p "$proj"
   cd "$proj"
 
   local port
-  port=$(_free_port)
+  port=$(free_port)
 
   local http_script
   http_script="$(script_path http_server.py)"
@@ -285,7 +253,7 @@ EOF
   cd "$proj"
 
   local port
-  port=$(_free_port)
+  port=$(free_port)
 
   local http_script
   http_script="$(script_path http_server.py)"
@@ -318,7 +286,7 @@ EOF
   cd "$proj"
 
   local port
-  port=$(_free_port)
+  port=$(free_port)
 
   local http_script
   http_script="$(script_path http_server.py)"
@@ -444,8 +412,8 @@ EOF
 
   local echo_script daemon_port proxy_port
   echo_script="$(to_shell_path "$(script_path cookie_echo_server.py)")"
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
 
   create_pitchfork_toml <<EOF
 [daemons.cookie-echo]
@@ -494,8 +462,8 @@ EOF
 
   local http_script daemon_port proxy_port
   http_script="$(to_shell_path "$(script_path http_server.py)")"
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
 
   create_pitchfork_toml <<EOF
 [daemons.api]
@@ -553,8 +521,8 @@ EOF
 
   local url_script daemon_port proxy_port
   url_script="$(to_shell_path "$(script_path echo_env_server.py)")"
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
 
   create_pitchfork_toml <<EOF
 [daemons.api]
@@ -631,8 +599,8 @@ EOF
 
   local env_script daemon_port proxy_port
   env_script="$(to_shell_path "$(script_path echo_env_server.py)")"
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
 
   create_pitchfork_toml <<EOF
 [daemons.api]
@@ -692,9 +660,9 @@ _start_proxy_with_dns() {
   cd "$proj"
 
   local daemon_port proxy_port dns_port query
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
-  dns_port=$(_free_dns_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
+  dns_port=$(free_dns_port)
   query="$(to_shell_path "$(script_path dns_query.py)")"
 
   create_pitchfork_toml <<EOF
@@ -761,8 +729,8 @@ EOF
 
 @test "proxy serves a PAC file routing the tld through the proxy" {
   local proxy_port dns_port
-  proxy_port=$(_free_port)
-  dns_port=$(_free_dns_port)
+  proxy_port=$(free_port)
+  dns_port=$(free_dns_port)
 
   _start_proxy_with_dns "$proxy_port" "$dns_port"
 
@@ -776,8 +744,8 @@ EOF
 
 @test "proxy doctor reports the resolver and the listener" {
   local proxy_port dns_port
-  proxy_port=$(_free_port)
-  dns_port=$(_free_dns_port)
+  proxy_port=$(free_port)
+  dns_port=$(free_dns_port)
 
   _start_proxy_with_dns "$proxy_port" "$dns_port"
 
@@ -799,8 +767,8 @@ EOF
   # So `pitchfork proxy doctor || setup-the-proxy` works, and a CI step gating
   # on this command does not read a broken proxy as a healthy one.
   local proxy_port dns_port
-  proxy_port=$(_free_port)
-  dns_port=$(_free_dns_port)
+  proxy_port=$(free_port)
+  dns_port=$(free_dns_port)
 
   # Nothing is started, so the listener check fails whatever the host's DNS
   # does. That makes the exit code the same everywhere this runs.
@@ -845,9 +813,9 @@ EOF
   cd "$proj"
 
   local daemon_port proxy_port dns_port
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
-  dns_port=$(_free_dns_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
+  dns_port=$(free_dns_port)
 
   create_pitchfork_toml <<EOF
 [daemons.pac-web]
@@ -901,9 +869,9 @@ EOF
   cd "$proj"
 
   local daemon_port proxy_port dns_port
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
-  dns_port=$(_free_dns_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
+  dns_port=$(free_dns_port)
 
   create_pitchfork_toml <<EOF
 [daemons.pac-host-web]
@@ -1000,8 +968,8 @@ EOF
   fi
 
   local first_port second_port
-  first_port=$(_free_port)
-  second_port=$(_free_port)
+  first_port=$(free_port)
+  second_port=$(free_port)
 
   # An unprivileged port on plain HTTP, so setup has nothing privileged to do
   # beyond the redirect, which fails harmlessly without sudo here.
@@ -1080,8 +1048,8 @@ _make_tls_certs() {
 
   local tls_script daemon_port proxy_port
   tls_script="$(to_shell_path "$(script_path mtls_echo_server.py)")"
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
 
   create_pitchfork_toml <<EOF
 [daemons.tls-echo]
@@ -1130,7 +1098,7 @@ EOF
   cd "$proj"
 
   local port
-  port=$(_free_port)
+  port=$(free_port)
 
   local http_script
   http_script="$(script_path http_server.py)"
@@ -1190,8 +1158,8 @@ EOF
   cd "$proj"
 
   local daemon_port proxy_port
-  daemon_port=$(_free_port)
-  proxy_port=$(_free_port)
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
 
   create_pitchfork_toml <<EOF
 [daemons.tls-only]
@@ -1258,8 +1226,8 @@ EOF
 
   local http_script app_port proxy_port order
   http_script="$(to_shell_path "$(script_path http_server.py)")"
-  app_port=$(_free_port)
-  proxy_port=$(_free_port)
+  app_port=$(free_port)
+  proxy_port=$(free_port)
   order="$(to_shell_path "$proj/order.log")"
 
   # db takes a moment to become ready, so a dependent started early would
@@ -1318,8 +1286,8 @@ EOF
 
   local http_script app_port proxy_port order
   http_script="$(to_shell_path "$(script_path http_server.py)")"
-  app_port=$(_free_port)
-  proxy_port=$(_free_port)
+  app_port=$(free_port)
+  proxy_port=$(free_port)
   order="$(to_shell_path "$TEST_TEMP_DIR/order.log")"
 
   cat >"$TEST_TEMP_DIR/shared/pitchfork.toml" <<EOF
@@ -1357,8 +1325,8 @@ EOF
 
   local http_script app_port proxy_port seen
   http_script="$(to_shell_path "$(script_path http_server.py)")"
-  app_port=$(_free_port)
-  proxy_port=$(_free_port)
+  app_port=$(free_port)
+  proxy_port=$(free_port)
   seen="$(to_shell_path "$TEST_TEMP_DIR/db-env")"
 
   # db records the environment it was given, both as rendered into its
@@ -1403,8 +1371,8 @@ EOF
   _register_projects failproj
 
   local app_port proxy_port order
-  app_port=$(_free_port)
-  proxy_port=$(_free_port)
+  app_port=$(free_port)
+  proxy_port=$(free_port)
   order="$(to_shell_path "$proj/order.log")"
 
   cat >"$proj/pitchfork.toml" <<EOF
@@ -1439,9 +1407,9 @@ EOF
 
   local http_script port1 port2 proxy_port order marker
   http_script="$(to_shell_path "$(script_path http_server.py)")"
-  port1=$(_free_port)
-  port2=$(_free_port)
-  proxy_port=$(_free_port)
+  port1=$(free_port)
+  port2=$(free_port)
+  proxy_port=$(free_port)
   order="$(to_shell_path "$proj/order.log")"
   marker="$(to_shell_path "$proj/db.ready")"
 
@@ -1500,8 +1468,8 @@ EOF
 
   local http_script app_port proxy_port order
   http_script="$(to_shell_path "$(script_path http_server.py)")"
-  app_port=$(_free_port)
-  proxy_port=$(_free_port)
+  app_port=$(free_port)
+  proxy_port=$(free_port)
   order="$(to_shell_path "$proj/order.log")"
 
   cat >"$proj/pitchfork.toml" <<EOF
@@ -1540,9 +1508,9 @@ EOF
   local gen="$TEST_TEMP_DIR/gen" ns_primary="shop-528f92b13a6784f0" ns_wt="shop-9d3c41aa07be5e12"
   local url_script primary_port wt_port proxy_port
   url_script="$(to_shell_path "$(script_path echo_env_server.py)")"
-  primary_port=$(_free_port)
-  wt_port=$(_free_port)
-  proxy_port=$(_free_port)
+  primary_port=$(free_port)
+  wt_port=$(free_port)
+  proxy_port=$(free_port)
 
   mkdir -p "$primary" "$gen"
   cd "$primary"
