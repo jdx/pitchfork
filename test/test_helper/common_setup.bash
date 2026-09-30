@@ -208,12 +208,13 @@ skip_on_windows() {
 #
 # Each port is released before it is printed, so until its daemon binds it,
 # anything else could take it. Ports are therefore taken from 20000-32767,
-# below the range the OS hands out for port 0 and outgoing connections (Linux
-# 32768-60999, macOS and Windows 49152-65535), which other tests' servers and
-# connections draw from. Each port handed out is claimed with a file under
-# $BATS_RUN_TMPDIR, which every test of the run shares; creating it
-# exclusively is atomic, so two tests running in parallel never get the same
-# port.
+# below the default range the OS hands out for port 0 and outgoing
+# connections (Linux 32768-60999, macOS and Windows 49152-65535), which other
+# tests' servers and connections draw from. A host whose ephemeral range has
+# been widened into 20000-32767 can still take a port. Each port handed out is
+# claimed with a file under $BATS_RUN_TMPDIR, which every test of the run
+# shares; creating it exclusively is atomic, so two tests running in parallel
+# never get the same port.
 free_port() {
   _free_port_unused tcp
 }
@@ -226,7 +227,9 @@ free_dns_port() {
 }
 
 _free_port_unused() {
-  python3 - "$1" "${BATS_RUN_TMPDIR:-$TEST_TEMP_DIR}/claimed_ports" <<'PY'
+  # A per-test directory would let parallel tests claim the same port, so
+  # there is no fallback when bats does not provide the shared one.
+  python3 - "$1" "${BATS_RUN_TMPDIR:?BATS_RUN_TMPDIR is not set; free_port needs a directory shared by every test of the run}/claimed_ports" <<'PY'
 import os
 import random
 import socket
