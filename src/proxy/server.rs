@@ -1603,7 +1603,7 @@ async fn serve_https_with_http_fallback(
          Rebuild pitchfork with: cargo build --features proxy-tls"
         .to_string();
     let _ = bind_tx.send(Err(msg.clone()));
-    miette::bail!("{msg}")
+    miette::bail!("{msg}");
 }
 
 /// Resolve the CA certificate and key paths from settings.

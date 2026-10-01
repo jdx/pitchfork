@@ -558,42 +558,42 @@ mod imp {
             miette::bail!(
                 "boot management is not supported on this platform; \
                 only macOS, Linux, and Windows are supported"
-            )
+            );
         }
 
         pub fn is_enabled(&self) -> Result<bool> {
             miette::bail!(
                 "boot management is not supported on this platform; \
                 only macOS, Linux, and Windows are supported"
-            )
+            );
         }
 
         pub fn is_current_level_enabled(&self) -> Result<bool> {
             miette::bail!(
                 "boot management is not supported on this platform; \
                 only macOS, Linux, and Windows are supported"
-            )
+            );
         }
 
         pub fn is_other_level_enabled(&self) -> Result<bool> {
             miette::bail!(
                 "boot management is not supported on this platform; \
                 only macOS, Linux, and Windows are supported"
-            )
+            );
         }
 
         pub fn enable(&self) -> Result<()> {
             miette::bail!(
                 "boot management is not supported on this platform; \
                 only macOS, Linux, and Windows are supported"
-            )
+            );
         }
 
         pub fn refresh(&self) -> Result<()> {
             miette::bail!(
                 "boot management is not supported on this platform; \
                 only macOS, Linux, and Windows are supported"
-            )
+            );
         }
 
         pub fn invoking_user(&self) -> Option<&str> {
@@ -616,7 +616,7 @@ mod imp {
             miette::bail!(
                 "boot management is not supported on this platform; \
                 only macOS, Linux, and Windows are supported"
-            )
+            );
         }
     }
 }

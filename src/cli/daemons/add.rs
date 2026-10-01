@@ -313,10 +313,12 @@ impl Add {
         } else {
             match s.parse::<u32>() {
                 Ok(n) => Ok(Retry(n)),
-                Err(_) => bail!(
-                    "Invalid retry value: {}. Expected a number or 'true'/'false'",
-                    s
-                ),
+                Err(_) => {
+                    bail!(
+                        "Invalid retry value: {}. Expected a number or 'true'/'false'",
+                        s
+                    );
+                }
             }
         }
     }
@@ -327,10 +329,12 @@ impl Add {
             "always" => Ok(CronRetrigger::Always),
             "success" => Ok(CronRetrigger::Success),
             "fail" => Ok(CronRetrigger::Fail),
-            _ => bail!(
-                "Invalid cron retrigger value: {}. Expected 'finish', 'always', 'success', or 'fail'",
-                s
-            ),
+            _ => {
+                bail!(
+                    "Invalid cron retrigger value: {}. Expected 'finish', 'always', 'success', or 'fail'",
+                    s
+                );
+            }
         }
     }
 }
