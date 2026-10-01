@@ -481,7 +481,7 @@ pub fn validate_proxy_port(port: i64) -> Result<()> {
     miette::bail!(
         "proxy.port is {port}, which is not a usable port. \
          Set it between 1 and 65535 before running setup."
-    )
+    );
 }
 
 /// Reject a TLD that must not reach a privileged file path or a config file.
@@ -2453,7 +2453,7 @@ fn generate_ca(cert: &Path, key: &Path) -> Result<()> {
     #[cfg(not(feature = "proxy-tls"))]
     {
         let _ = (cert, key);
-        miette::bail!("HTTPS proxy support requires the `proxy-tls` feature")
+        miette::bail!("HTTPS proxy support requires the `proxy-tls` feature");
     }
 }
 

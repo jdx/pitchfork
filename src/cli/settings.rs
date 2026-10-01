@@ -397,7 +397,7 @@ fn validate_setting_key(key: &str) -> Result<()> {
     bail!(
         "unknown setting '{key}'. Did you mean one of: {}?",
         suggestions.join(", ")
-    )
+    );
 }
 
 fn validate_setting_value(key: &str, value: &str) -> Result<()> {
@@ -447,7 +447,9 @@ fn apply_setting_to_partial(partial: &mut SettingsPartial, key: &str, value: &st
             "Bool" => toml::Value::Boolean(match value {
                 "true" => true,
                 "false" => false,
-                _ => bail!("invalid boolean value '{value}'. Expected 'true' or 'false'"),
+                _ => {
+                    bail!("invalid boolean value '{value}'. Expected 'true' or 'false'");
+                }
             }),
             "Integer" => toml::Value::Integer(value.parse::<i64>().map_err(|_| {
                 miette::miette!("invalid integer value '{value}'. Expected a number")
