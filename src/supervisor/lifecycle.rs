@@ -1548,9 +1548,11 @@ impl Supervisor {
                 .as_ref()
                 .and_then(|h| h.timeout)
                 .map(|d| Box::pin(time::sleep(d)));
-            let http_client = ready_http
-                .as_ref()
-                .map(|_| crate::supervisor::health::supervisor_http_client());
+            let http_client = if ready_http.is_some() {
+                Some(crate::supervisor::health::supervisor_http_client().await)
+            } else {
+                None
+            };
 
             // Setup TCP port readiness check interval and deadline
             let mut port_check_interval =

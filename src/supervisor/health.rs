@@ -122,7 +122,7 @@ impl Supervisor {
             }
             if let Some(http) = &daemon.health_http {
                 if http_client.is_none() {
-                    http_client = Some(supervisor_http_client());
+                    http_client = Some(supervisor_http_client().await);
                 }
                 if let Some(client) = http_client.as_ref()
                     && !health_http_probe(&id, http, client).await
@@ -314,9 +314,9 @@ fn process_identity_changed(
 /// builds them, but only once.
 ///
 /// Creating the verifier loads and parses the system's CA certificates on
-/// Linux, which took about 16 ms in a release build and blocks the async
-/// worker it runs on. `None` if they cannot be built; each client then builds
-/// its own, as before.
+/// Linux, which took about 16 ms in a release build and blocks the thread it
+/// runs on, so `supervisor_http_client` builds them on a blocking worker.
+/// `None` if they cannot be built; each client then builds its own, as before.
 static PROBE_TLS: once_cell::sync::Lazy<Option<rustls::ClientConfig>> =
     once_cell::sync::Lazy::new(|| {
         let provider = rustls::crypto::CryptoProvider::get_default()
@@ -343,7 +343,14 @@ static PROBE_TLS: once_cell::sync::Lazy<Option<rustls::ClientConfig>> =
 /// No total timeout is set here: each probe bounds its own request, so a
 /// per-daemon `health_http.timeout` larger than `supervisor.http_client_timeout`
 /// is honored rather than silently capped by a client timeout.
-pub(crate) fn supervisor_http_client() -> reqwest::Client {
+pub(crate) async fn supervisor_http_client() -> reqwest::Client {
+    if once_cell::sync::Lazy::get(&PROBE_TLS).is_none() {
+        // The first client loads the certificates, off the async workers.
+        let _ = tokio::task::spawn_blocking(|| {
+            once_cell::sync::Lazy::force(&PROBE_TLS);
+        })
+        .await;
+    }
     let builder = reqwest::Client::builder();
     let builder = match PROBE_TLS.as_ref() {
         Some(tls) => builder.tls_backend_preconfigured(tls.clone()),
@@ -676,12 +683,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn probe_clients_share_tls_settings() {
+    #[tokio::test]
+    async fn probe_clients_share_tls_settings() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        assert!(PROBE_TLS.is_some());
-        // A client is still built from them.
-        let _client = supervisor_http_client();
+        let _client = supervisor_http_client().await;
+        // Building the first client built the shared settings.
+        assert!(once_cell::sync::Lazy::get(&PROBE_TLS).is_some_and(Option::is_some));
     }
 
     #[test]
