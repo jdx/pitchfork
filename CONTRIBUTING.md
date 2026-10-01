@@ -5,7 +5,7 @@
 > created it, opened a PR that fixes it, or have already had a contribution merged into pitchfork.
 > Everyone else is not allowed to, including with lightly edited, reviewed, or disclosed model
 > output. Doing this is an instant ban across all of jdx's projects. See
-> [Community Participation](https://pitchfork.jdx.dev/contributing#community-participation).
+> [contributing guide](https://pitchfork.jdx.dev/contributing).
 
 See the [contributing guide](https://pitchfork.jdx.dev/contributing) for review
 expectations and repository conventions.
