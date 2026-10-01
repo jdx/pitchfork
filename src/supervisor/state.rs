@@ -72,7 +72,10 @@ pub(crate) struct UpsertDaemonOpts {
     /// `None` inherits the existing record's value; see
     /// `Daemon::scheduled_from_config`.
     pub scheduled_from_config: Option<bool>,
-    pub autostop: bool,
+    /// Stop the daemon when its directory is left. A start sets it from its
+    /// `RunOptions`, so removing `auto = ["stop"]` takes effect; `None`
+    /// inherits the existing record's value, like `oneshot`.
+    pub autostop: Option<bool>,
     /// Run-to-completion task rather than a long-running service.
     /// `None` inherits the existing record's value, so a status-only upsert
     /// (stop, exit finalization) does not reclassify the daemon.
@@ -175,7 +178,7 @@ impl UpsertDaemonOpts {
             // Only a client clears it; the supervisor's own starts (the
             // schedule, retries, file watching) leave it as it was.
             o.scheduled_from_config = opts.requested_by_client.then_some(false);
-            o.autostop = opts.autostop;
+            o.autostop = Some(opts.autostop);
             o.oneshot = Some(opts.oneshot);
             o.cron_schedule = opts.cron_schedule.clone();
             o.cron_retrigger = opts.cron_retrigger;
@@ -372,7 +375,9 @@ impl Supervisor {
             pid: opts.pid,
             status: opts.status,
             shell_pid: opts.shell_pid,
-            autostop: opts.autostop || existing.is_some_and(|d| d.autostop),
+            autostop: opts
+                .autostop
+                .unwrap_or_else(|| existing.is_some_and(|d| d.autostop)),
             // A start carries the current config value (including a removed
             // `oneshot = true`, which must reclassify the daemon); every other
             // upsert leaves it None and inherits, so finalizing a completed
