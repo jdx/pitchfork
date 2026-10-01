@@ -72,6 +72,34 @@ EOF
   assert_success
 }
 
+@test "slug that is not a valid daemon name still resolves" {
+  local proj="$TEST_TEMP_DIR/invalid-name-slug"
+  local other_dir="$TEST_TEMP_DIR/invalid-name-other"
+  mkdir -p "$proj" "$other_dir"
+
+  cd "$proj"
+  create_pitchfork_toml <<'EOF'
+[daemons.backend]
+run = "sleep 60"
+EOF
+
+  # `--` is allowed in a slug but not in a daemon name.
+  run pitchfork proxy add my--alias --daemon backend
+  assert_success
+
+  run pitchfork start my--alias
+  assert_success
+
+  cd "$other_dir"
+  run pitchfork status my--alias
+  assert_success
+  assert_output --partial "invalid-name-slug/backend"
+  assert_output --partial "running"
+
+  run pitchfork stop my--alias
+  assert_success
+}
+
 @test "slug takes priority over daemon name in another namespace" {
   local proj_a="$TEST_TEMP_DIR/proj-a"
   local proj_b="$TEST_TEMP_DIR/proj-b"

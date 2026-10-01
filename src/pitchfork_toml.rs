@@ -795,10 +795,12 @@ impl PitchforkToml {
         current_namespace: &str,
     ) -> Result<DaemonId> {
         // A daemon in the current namespace comes first, so another project's
-        // slug of the same name does not take over a local daemon.
-        // Use try_new to validate user input
-        let preferred_id = DaemonId::try_new(current_namespace, user_id)?;
-        if self.daemons.contains_key(&preferred_id) {
+        // slug of the same name does not take over a local daemon. A slug can
+        // be a name no daemon can have (e.g. `my--alias`), so an invalid name
+        // only skips this check and is rejected after the slug lookup.
+        if let Ok(preferred_id) = DaemonId::try_new(current_namespace, user_id)
+            && self.daemons.contains_key(&preferred_id)
+        {
             return Ok(preferred_id);
         }
 
@@ -832,6 +834,9 @@ impl PitchforkToml {
                 }
             }
         }
+
+        // Use try_new to validate user input
+        DaemonId::try_new(current_namespace, user_id)?;
 
         // Fall back to any matching daemon
         let matches = self.resolve_daemon_id(user_id)?;
