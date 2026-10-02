@@ -13,7 +13,6 @@ use crate::pitchfork_toml::{
     ReadyOutput, ReadyPort, project_dir_for_config,
 };
 use chrono::{DateTime, Local};
-use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -226,6 +225,30 @@ fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
         && opts.ready_http.is_none()
         && opts.ready_port.is_none()
         && opts.ready_cmd.is_none()
+}
+
+/// The ready port an ad-hoc daemon was run with, for a restart that keeps it.
+///
+/// A record saved before `configured_ready_port` existed has only
+/// `ready_port`, the port the last run checked. When that run's ports were
+/// bumped and it checked one of them, the record cannot tell a ready port
+/// bumped along with the expected ports from one given as the bumped number,
+/// so no port is kept rather than possibly the wrong one.
+fn saved_ready_port(saved: &crate::daemon::Daemon) -> Option<ReadyPort> {
+    if saved.configured_ready_port.is_some() {
+        return saved.configured_ready_port.clone();
+    }
+    let ready_port = saved.ready_port.clone()?;
+    let expected = saved
+        .port
+        .as_ref()
+        .map(|p| p.expect.as_slice())
+        .unwrap_or_default();
+    let bumped = !expected.is_empty() && saved.resolved_port.as_slice() != expected;
+    let checked_a_resolved_port = ready_port
+        .port
+        .is_some_and(|port| saved.resolved_port.contains(&port));
+    (!(bumped && checked_a_resolved_port)).then_some(ready_port)
 }
 
 /// Render Tera templates for a single daemon config before starting it.
@@ -883,12 +906,7 @@ impl IpcClient {
                         let task = Self::spawn_adhoc_start_task(
                             id,
                             cmd.clone(),
-                            adhoc_daemon.dir.clone().unwrap_or_default(),
-                            adhoc_daemon.env.clone(),
-                            adhoc_daemon.ready_http.clone(),
-                            adhoc_daemon.health_cmd.clone(),
-                            adhoc_daemon.health_http.clone(),
-                            adhoc_daemon.health_port.clone(),
+                            adhoc_daemon,
                             is_explicit,
                             &opts,
                         );
@@ -1041,35 +1059,58 @@ impl IpcClient {
     /// Spawn a task to start an ad-hoc daemon using saved command
     ///
     /// This handles restarting ad-hoc daemons that were originally started
-    /// via `pitchfork run` command.
+    /// via `pitchfork run` command. `saved` is the daemon's record, whose
+    /// settings from that run apply again unless `opts` overrides them.
     ///
     /// Each task uses its own dedicated IPC connection so concurrent responses
     /// are attributed deterministically (see [`Self::connect_dedicated`]).
-    #[allow(clippy::too_many_arguments)]
     fn spawn_adhoc_start_task(
         id: DaemonId,
         cmd: Vec<String>,
-        dir: PathBuf,
-        env: Option<IndexMap<String, String>>,
-        ready_http: Option<ReadyHttp>,
-        health_cmd: Option<HealthCmd>,
-        health_http: Option<HealthHttp>,
-        health_port: Option<HealthPort>,
+        saved: &crate::daemon::Daemon,
         is_explicitly_requested: bool,
         opts: &StartOptions,
     ) -> tokio::task::JoinHandle<SpawnTaskResult> {
         let force = opts.force && is_explicitly_requested;
-        let delay = opts.delay;
-        let output = opts.output.clone();
-        let http = merge_ready_http_override(ready_http, opts.http.clone());
-        let port = opts.port;
-        let ready_cmd = opts.cmd.clone().map(ReadyCmd::new);
-        let health_cmd = merge_health_cmd_override(health_cmd, opts.health_cmd.clone());
-        let health_http = merge_health_http_override(health_http, opts.health_http.clone());
-        let health_port = merge_health_port_override(health_port, opts.health_port);
-        let expected_port = opts.expected_port.clone();
-        let auto_bump_port = opts.auto_bump_port;
-        let retry = opts.retry.unwrap_or_default();
+        let dir = saved.dir.clone().unwrap_or_default();
+        let env = saved.env.clone();
+        // Readiness flags replace how the daemon was waited for; without any,
+        // it is waited for the way `pitchfork run` was asked to.
+        let ready_flags = opts.delay.is_some()
+            || opts.output.is_some()
+            || opts.http.is_some()
+            || opts.port.is_some()
+            || opts.cmd.is_some();
+        let (delay, output, http, port, ready_cmd) = if ready_flags {
+            (
+                opts.delay,
+                opts.output.clone().map(ReadyOutput::new),
+                merge_ready_http_override(None, opts.http.clone()),
+                opts.port.map(ReadyPort::new),
+                opts.cmd.clone().map(ReadyCmd::new),
+            )
+        } else {
+            (
+                saved.ready_delay,
+                saved.ready_output.clone(),
+                saved.ready_http.clone(),
+                saved_ready_port(saved),
+                saved.ready_cmd.clone(),
+            )
+        };
+        let health_cmd =
+            merge_health_cmd_override(saved.health_cmd.clone(), opts.health_cmd.clone());
+        let health_http =
+            merge_health_http_override(saved.health_http.clone(), opts.health_http.clone());
+        let health_port = merge_health_port_override(saved.health_port.clone(), opts.health_port);
+        // `restart` offers no flags for these, so they stay as `run` set them;
+        // `start` may override the expected ports or the bump, each on its own.
+        let saved_port = saved.port.clone().unwrap_or_default();
+        let port_config = crate::config_types::PortConfig::from_parts(
+            opts.expected_port.clone().unwrap_or(saved_port.expect),
+            opts.auto_bump_port.unwrap_or(saved_port.bump),
+        );
+        let retry = opts.retry.unwrap_or(saved.retry);
         let shell_pid = opts.shell_pid;
         let quiet = opts.quiet;
 
@@ -1082,17 +1123,15 @@ impl IpcClient {
                 dir: crate::config_types::Dir(dir),
                 retry,
                 ready_delay: delay,
-                ready_output: output.map(ReadyOutput::new),
+                ready_output: output,
                 ready_http: http,
-                ready_port: port.map(ReadyPort::new),
+                ready_port: port,
                 ready_cmd,
                 health_cmd,
                 health_http,
                 health_port,
-                port: crate::config_types::PortConfig::from_parts(
-                    expected_port.unwrap_or_default(),
-                    auto_bump_port.unwrap_or_default(),
-                ),
+                port: port_config,
+                replaces_ready_checks: ready_flags,
                 wait_ready: true,
                 env,
                 watch: vec![],
@@ -1416,6 +1455,62 @@ mod tests {
     use crate::env;
 
     use super::*;
+
+    fn saved_with_ports(
+        configured: Option<u16>,
+        checked: Option<u16>,
+        expected: &[u16],
+        resolved: &[u16],
+    ) -> crate::daemon::Daemon {
+        crate::daemon::Daemon {
+            configured_ready_port: configured.map(ReadyPort::new),
+            ready_port: checked.map(ReadyPort::new),
+            port: (!expected.is_empty()).then(|| crate::config_types::PortConfig {
+                expect: expected.to_vec(),
+                ..Default::default()
+            }),
+            resolved_port: resolved.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saved_ready_port_prefers_the_port_as_given() {
+        let saved = saved_with_ports(Some(3000), Some(3004), &[3000], &[3004]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(3000)));
+    }
+
+    #[test]
+    fn saved_ready_port_falls_back_to_an_older_record_s_checked_port() {
+        // No expected ports: the checked port is the one given.
+        let saved = saved_with_ports(None, Some(8080), &[], &[]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(8080)));
+        // Expected ports that were not bumped.
+        let saved = saved_with_ports(None, Some(3000), &[3000], &[3000]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(3000)));
+    }
+
+    #[test]
+    fn saved_ready_port_drops_an_older_record_s_ambiguous_bumped_port() {
+        // `--port 3000` bumped to 3001, or `--port 3001` given as it is: the
+        // two runs leave the same record, so neither port is assumed.
+        let saved = saved_with_ports(None, Some(3001), &[3000], &[3001]);
+        assert_eq!(saved_ready_port(&saved), None);
+        let saved = saved_with_ports(None, Some(4003), &[3000, 4000], &[3003, 4003]);
+        assert_eq!(saved_ready_port(&saved), None);
+    }
+
+    #[test]
+    fn saved_ready_port_keeps_an_older_record_s_port_outside_the_bumped_ones() {
+        let saved = saved_with_ports(None, Some(8080), &[3000], &[3001]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(8080)));
+    }
+
+    #[test]
+    fn saved_ready_port_is_none_without_a_ready_port() {
+        let saved = saved_with_ports(None, None, &[3000], &[3004]);
+        assert_eq!(saved_ready_port(&saved), None);
+    }
 
     #[test]
     fn http_override_preserves_configured_status_codes() {
