@@ -320,6 +320,15 @@ pub struct RunOptions {
 }
 
 impl Daemon {
+    /// Whether this record was made by `pitchfork run` rather than from
+    /// config. Every start from config records `watch_base_dir`, the
+    /// directory of the project that defined it; a config daemon recorded
+    /// before that directory was stored still has the cron schedule it was
+    /// started with, which `pitchfork run` never gives a daemon.
+    pub fn is_adhoc(&self) -> bool {
+        self.watch_base_dir.is_none() && self.cron_schedule.is_none()
+    }
+
     /// The next time the cron watcher will consider this daemon due, or
     /// `None` when it has no schedule or the schedule does not parse.
     ///

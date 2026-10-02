@@ -109,6 +109,14 @@ impl Supervisor {
                 let daemons = self.active_daemons().await;
                 IpcResponse::ActiveDaemons(daemons)
             }
+            IpcRequest::GetDaemons { ids } => {
+                let state = self.state_file.lock().await;
+                IpcResponse::Daemons(
+                    ids.iter()
+                        .filter_map(|id| state.daemons.get(id).cloned())
+                        .collect(),
+                )
+            }
             IpcRequest::GetNotifications => {
                 let notifications = self.get_notifications().await;
                 IpcResponse::Notifications(notifications)

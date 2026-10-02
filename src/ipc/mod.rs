@@ -115,6 +115,12 @@ pub enum IpcRequest {
     ClaimDaemons {
         ids: Vec<DaemonId>,
     },
+    /// The supervisor's records of these daemons, whatever their status.
+    /// Missing ids are left out. Appended to preserve the wire indexes of
+    /// existing variants.
+    GetDaemons {
+        ids: Vec<DaemonId>,
+    },
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
@@ -202,6 +208,8 @@ pub enum IpcResponse {
     Cleaned {
         count: u64,
     },
+    /// Records answering `GetDaemons`.
+    Daemons(Vec<Daemon>),
 }
 
 /// Bytes a socket path may occupy in `sockaddr_un.sun_path` on this platform

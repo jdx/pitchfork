@@ -115,7 +115,11 @@ pub(crate) struct UpsertDaemonOpts {
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
     pub watch_mode: Option<WatchMode>,
-    pub watch_base_dir: Option<PathBuf>,
+    /// The directory of the project whose config defined the daemon. A
+    /// start sets it, `None` included: an ad-hoc `pitchfork run` of a former
+    /// config daemon's id must not keep that daemon's directory, which marks
+    /// the record as made from config. Every other upsert inherits it.
+    pub watch_base_dir: Option<Option<PathBuf>>,
     pub mise: Option<bool>,
     /// Unix user to run this daemon as
     pub user: Option<String>,
@@ -205,7 +209,7 @@ impl UpsertDaemonOpts {
             o.env = opts.env.clone();
             o.watch = Some(opts.watch.clone());
             o.watch_mode = Some(opts.watch_mode);
-            o.watch_base_dir = opts.watch_base_dir.clone();
+            o.watch_base_dir = Some(opts.watch_base_dir.clone());
             o.mise = opts.mise;
             o.user = opts.user.clone();
             o.memory_limit = opts.memory_limit;
@@ -473,7 +477,7 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.map(|d| d.watch_mode).unwrap_or_default()),
             watch_base_dir: opts
                 .watch_base_dir
-                .or(existing.and_then(|d| d.watch_base_dir.clone())),
+                .unwrap_or_else(|| existing.and_then(|d| d.watch_base_dir.clone())),
             mise: opts.mise.or(existing.and_then(|d| d.mise)),
             user: opts.user.or(existing.and_then(|d| d.user.clone())),
             proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),

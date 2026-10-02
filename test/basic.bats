@@ -992,9 +992,67 @@ EOF
 
   run pitchfork start removed
   assert_failure
-  assert_output --partial "not found in config or state"
+  assert_output --partial "is in state but has no config entry"
   run pitchfork status removed
   refute_output --partial "running"
+}
+
+@test "starting a daemon that never existed fails" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  # A short name is resolved, and rejected, before the start.
+  run pitchfork start never_existed
+  assert_failure
+  assert_output --partial "daemon 'never_existed' not found"
+  # A qualified id reaches the start itself.
+  run pitchfork start global/never_existed
+  assert_failure
+  assert_output --partial "global/never_existed not found in config or state"
+}
+
+@test "a start naming a known daemon and an unknown one starts the known one and fails" {
+  create_pitchfork_toml <<EOF
+[daemons.good]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start good global/typo
+  assert_failure
+  assert_output --partial "global/typo not found in config or state"
+  wait_for_status good running
+
+  pitchfork stop good
+}
+
+@test "a former config daemon run ad hoc can be started again from its command" {
+  create_pitchfork_toml <<EOF
+[daemons.former]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start former
+  assert_success
+  run pitchfork stop former
+  assert_success
+  wait_for_status former stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run former --delay 1 -- sleep 61
+  assert_success
+  run pitchfork stop former
+  assert_success
+  wait_for_status former stopped
+
+  run pitchfork start former
+  assert_success
+  wait_for_status former running
+
+  pitchfork stop former
 }
 
 @test "restart all includes ad-hoc daemons" {

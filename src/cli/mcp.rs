@@ -113,6 +113,14 @@ fn default_log_lines() -> usize {
 
 // ── Helper: create an internal ErrorData ─────────────────────────────
 
+/// `summary` followed by why each failed daemon did not start, so a caller
+/// can tell an unknown daemon from one that crashed.
+fn with_failure_reasons(summary: String, failed: &[(DaemonId, String)]) -> String {
+    failed.iter().fold(summary, |text, (id, reason)| {
+        format!("{text}\n- {}: {reason}", id.qualified())
+    })
+}
+
 fn internal_err(msg: String) -> ErrorData {
     ErrorData::new(ErrorCode::INTERNAL_ERROR, msg, None::<serde_json::Value>)
 }
@@ -212,10 +220,12 @@ impl PitchforkServer {
                     started_names.join(", ")
                 )
             };
-            Ok(CallToolResult::error(vec![ContentBlock::text(msg)]))
+            Ok(CallToolResult::error(vec![ContentBlock::text(
+                with_failure_reasons(msg, &result.failed),
+            )]))
         } else if started_names.is_empty() {
             Ok(CallToolResult::success(vec![ContentBlock::text(
-                "No daemons needed starting (already running or no matching daemons found)",
+                "No daemons needed starting (already running or disabled)",
             )]))
         } else {
             Ok(CallToolResult::success(vec![ContentBlock::text(format!(
@@ -334,7 +344,9 @@ impl PitchforkServer {
                     started_names.join(", ")
                 )
             };
-            Ok(CallToolResult::error(vec![ContentBlock::text(msg)]))
+            Ok(CallToolResult::error(vec![ContentBlock::text(
+                with_failure_reasons(msg, &result.failed),
+            )]))
         } else if started_names.is_empty() {
             Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No daemons were restarted",
@@ -484,3 +496,23 @@ impl Mcp {
 
 // ── Log helpers ─────────────────────────────────────────────────────
 // (Legacy text log helpers removed; all log reads now go through the SQLite log store.)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_text_says_why_each_daemon_failed() {
+        let text = with_failure_reasons(
+            "All daemons failed to start".to_string(),
+            &[(
+                DaemonId::new("proj", "typo"),
+                "Daemon proj/typo not found in config or state".to_string(),
+            )],
+        );
+        assert_eq!(
+            text,
+            "All daemons failed to start\n- proj/typo: Daemon proj/typo not found in config or state"
+        );
+    }
+}

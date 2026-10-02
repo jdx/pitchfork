@@ -510,6 +510,18 @@ impl IpcClient {
         }
     }
 
+    /// The supervisor's records of `ids`, stopped or not. Ids it has no
+    /// record of are left out.
+    pub async fn daemons(&self, ids: &[DaemonId]) -> Result<Vec<Daemon>> {
+        let rsp = self
+            .request(IpcRequest::GetDaemons { ids: ids.to_vec() })
+            .await?;
+        match rsp {
+            IpcResponse::Daemons(daemons) => Ok(daemons),
+            rsp => Err(Self::unexpected_response("Daemons", &rsp).into()),
+        }
+    }
+
     pub async fn update_shell_dir(&self, shell_pid: u32, dir: PathBuf) -> Result<()> {
         let rsp = self
             .request(IpcRequest::UpdateShellDir {
