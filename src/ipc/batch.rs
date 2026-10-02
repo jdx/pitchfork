@@ -651,13 +651,20 @@ impl IpcClient {
         // as a stopped config daemon does from its config. The state file is
         // read afresh, since `StateFile::get()` is loaded once per process and
         // a long-lived caller such as the MCP server would miss daemons run
-        // since. It is read only when a requested daemon is neither in config
-        // nor running, so a start that never needs it cannot fail on it.
+        // since, and on a blocking worker, since reading it takes a file lock.
+        // It is read only when a requested daemon is neither in config nor
+        // running, so a start that never needs it cannot fail on it.
         if ids
             .iter()
             .any(|id| !pt.daemons.contains_key(id) && !adhoc_daemons.contains_key(id))
         {
-            for d in stopped_adhoc_daemons(&crate::env::PITCHFORK_STATE_FILE, &pt)? {
+            let path = (*crate::env::PITCHFORK_STATE_FILE).clone();
+            let config = pt.clone();
+            let stopped =
+                tokio::task::spawn_blocking(move || stopped_adhoc_daemons(&path, &config))
+                    .await
+                    .map_err(|e| miette::miette!("reading the state file panicked: {e}"))??;
+            for d in stopped {
                 adhoc_daemons.entry(d.id.clone()).or_insert(d);
             }
         }
