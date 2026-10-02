@@ -722,3 +722,40 @@ EOF
 
   pitchfork stop jq_level_combo
 }
+
+@test "logs -n with --jq shows the last N matching entries, not matches among the last N" {
+  cat > "$PWD/emit.sh" <<'EOF2'
+#!/usr/bin/env bash
+for i in 1 2 3; do printf '{"level":"error","msg":"err_%s"}\n' "$i"; done
+for i in $(seq 1 10); do printf '{"level":"info","msg":"info_%s"}\n' "$i"; done
+sleep 3600
+EOF2
+  chmod +x "$PWD/emit.sh"
+
+  create_pitchfork_toml <<EOF2
+[daemons.jq_last_n]
+run = "bash $PWD/emit.sh"
+ready_output = "info_10"
+
+[daemons.jq_last_n.logs]
+log_format = "json"
+EOF2
+
+  pitchfork start jq_last_n
+  wait_for_logs jq_last_n "info_10" 10
+
+  # The errors come before the last two entries, so a limit applied before
+  # the filter would leave nothing to show.
+  PITCHFORK_LOG=error run pitchfork logs jq_last_n -n 2 --jq '.level == "error"' --raw --no-timestamp
+  assert_success
+  [[ "$output" != *'"msg":"err_1"'* ]]
+  [[ "$output" == *'"msg":"err_2"'* ]]
+  [[ "$output" == *'"msg":"err_3"'* ]]
+  [[ "$output" != *'"msg":"info_'* ]]
+
+  PITCHFORK_LOG=error run pitchfork logs jq_last_n -n 2 --jq '.level == "error"' --json
+  assert_success
+  [[ "$(jq -r '[.[].msg] | join(",")' <<<"$output")" == "err_2,err_3" ]]
+
+  pitchfork stop jq_last_n
+}
