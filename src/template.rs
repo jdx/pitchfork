@@ -147,14 +147,29 @@ impl TemplateContext {
     /// Convert this context into a Tera Context for rendering.
     pub fn to_tera_context(&self) -> tera::Context {
         let mut ctx = tera::Context::new();
+        for (key, value) in self.to_json_map() {
+            ctx.insert(key, &value);
+        }
+        ctx
+    }
+
+    /// The variables templates can reference, as JSON.
+    fn to_json_map(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        let mut insert = |key: &str, value: serde_json::Value| {
+            map.insert(key.to_string(), value);
+        };
 
         // Self variables
-        ctx.insert("name", &self.self_state.name);
-        ctx.insert("namespace", &self.self_state.namespace);
-        ctx.insert("id", &self.self_state.id);
-        ctx.insert("slug", &self.self_state.slug);
-        ctx.insert("host", &self.self_state.host);
-        ctx.insert("dir", &self.self_state.dir.to_string_lossy().to_string());
+        insert("name", self.self_state.name.clone().into());
+        insert("namespace", self.self_state.namespace.clone().into());
+        insert("id", self.self_state.id.clone().into());
+        insert("slug", serde_json::json!(self.self_state.slug));
+        insert("host", serde_json::json!(self.self_state.host));
+        insert(
+            "dir",
+            self.self_state.dir.to_string_lossy().to_string().into(),
+        );
 
         // Daemons
         let mut daemons_map = serde_json::Map::new();
@@ -164,13 +179,13 @@ impl TemplateContext {
             }
             daemons_map.insert(name.clone(), daemon_state_to_json(state));
         }
-        ctx.insert("daemons", &serde_json::Value::Object(daemons_map));
+        insert("daemons", serde_json::Value::Object(daemons_map));
 
         // Settings
         let s = settings();
-        ctx.insert(
+        insert(
             "settings",
-            &serde_json::json!({
+            serde_json::json!({
                 "proxy": {
                     "enable": s.proxy.enable,
                     "tld": s.proxy.tld,
@@ -183,20 +198,20 @@ impl TemplateContext {
         // Always expose proxy_url so templates can distinguish an unroutable daemon
         // via a strict null value instead of an undefined-variable error.
         let proxy_url = crate::proxy::build_proxy_url(self.self_state.host.as_deref(), &s);
-        ctx.insert("proxy_url", &proxy_url);
+        insert("proxy_url", serde_json::json!(proxy_url));
         // `url` is the current spelling; `proxy_url` stays for existing configs.
-        ctx.insert("url", &proxy_url);
+        insert("url", serde_json::json!(proxy_url));
 
         // Rendered env for this daemon (set via set_env after env rendering)
         if let Some(ref env) = self.env {
-            let map: serde_json::Map<String, serde_json::Value> = env
+            let env: serde_json::Map<String, serde_json::Value> = env
                 .iter()
                 .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                 .collect();
-            ctx.insert("env", &serde_json::Value::Object(map));
+            insert("env", serde_json::Value::Object(env));
         }
 
-        ctx
+        map
     }
 }
 
@@ -312,7 +327,25 @@ pub fn render_daemon_templates(
 
     // In the argv form each argument is rendered on its own, so a rendered
     // value with spaces stays one argument.
-    config.run = config.run.try_map(|arg| renderer.render(arg))?;
+    //
+    // A command that `mise x` wraps can reference variables only mise knows, such
+    // as `{{ vars.name }}` from mise.toml. Such a command is passed through
+    // unrendered, and `mise x` renders it with this context plus its own.
+    let defers_to_mise = config.mise.unwrap_or(settings().general.mise);
+    let mut deferred = false;
+    config.run = config.run.try_map(|arg| {
+        if defers_to_mise && renderer.references_unknown_variables(arg)? {
+            deferred = true;
+            return Ok(arg.to_string());
+        }
+        renderer.render(arg)
+    })?;
+    if deferred {
+        config.env.get_or_insert_with(IndexMap::new).insert(
+            TEMPLATE_CONTEXT_ENV.to_string(),
+            serde_json::Value::Object(context.to_json_map()).to_string(),
+        );
+    }
 
     if let Some(ref hooks) = config.hooks {
         let rendered = crate::config_types::PitchforkTomlHooks {
@@ -434,6 +467,10 @@ pub fn render_daemon_templates(
     Ok(())
 }
 
+/// Environment variable carrying the template context to the `mise x` wrapper of a
+/// daemon whose command it has to finish rendering.
+pub const TEMPLATE_CONTEXT_ENV: &str = "PITCHFORK_TEMPLATE_CONTEXT";
+
 fn contains_template_syntax(template: &str) -> bool {
     template.contains("{{") || template.contains("{%") || template.contains("{#")
 }
@@ -469,20 +506,45 @@ impl TemplateRenderer {
         }
     }
 
-    fn render(&mut self, template: &str) -> Result<String, RenderError> {
+    /// Whether the template is not one this context can render on its own: it reads a
+    /// top-level variable that is not defined here, found from the parsed template
+    /// rather than by scanning its text, or it does not parse, which includes a
+    /// filter or function pitchfork does not provide.
+    fn references_unknown_variables(&mut self, template: &str) -> Result<bool, RenderError> {
         if !contains_template_syntax(template) {
-            return Ok(template.to_string());
+            return Ok(false);
         }
+        let Ok(name) = self.add_template(template) else {
+            return Ok(true);
+        };
+        let variables =
+            self.tera
+                .get_template_variables(&name)
+                .map_err(|e| RenderError::RenderFailed {
+                    template: template.to_string(),
+                    source: e,
+                })?;
+        Ok(variables.iter().any(|v| !self.context.contains_key(v)))
+    }
 
+    fn add_template(&mut self, template: &str) -> Result<String, RenderError> {
         let template_name = format!("config_{}", self.next_template_id);
         self.next_template_id += 1;
-
         self.tera
             .add_raw_template(&template_name, template)
             .map_err(|e| RenderError::TemplateSyntax {
                 template: template.to_string(),
                 source: e,
             })?;
+        Ok(template_name)
+    }
+
+    fn render(&mut self, template: &str) -> Result<String, RenderError> {
+        if !contains_template_syntax(template) {
+            return Ok(template.to_string());
+        }
+
+        let template_name = self.add_template(template)?;
 
         self.tera
             .render(&template_name, &self.context)
@@ -698,6 +760,51 @@ mod tests {
         };
         render_daemon_templates(&mut config, &mut ctx, None).unwrap();
         assert_eq!(config.run, "redis-cli -p 6379");
+    }
+
+    #[test]
+    fn test_run_with_unknown_variable_is_deferred_to_mise() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "redis-cli -p {{ daemons.redis.port }} {{ vars.greeting | quote }}".into(),
+            mise: Some(true),
+            ..Default::default()
+        };
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+        // The whole command is left for `mise x`, which receives the context.
+        assert_eq!(
+            config.run,
+            "redis-cli -p {{ daemons.redis.port }} {{ vars.greeting | quote }}"
+        );
+        let json = &config.env.as_ref().unwrap()[TEMPLATE_CONTEXT_ENV];
+        let json: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(json["daemons"]["redis"]["port"], 6379);
+        assert_eq!(json["name"], "self");
+    }
+
+    #[test]
+    fn test_unknown_variable_is_an_error_without_mise() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo {{ vars.greeting }}".into(),
+            mise: Some(false),
+            ..Default::default()
+        };
+        assert!(render_daemon_templates(&mut config, &mut ctx, None).is_err());
+        assert!(config.env.is_none());
+    }
+
+    #[test]
+    fn test_known_variables_are_not_deferred() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "redis-cli -p {{ daemons.redis.port }}".into(),
+            mise: Some(true),
+            ..Default::default()
+        };
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+        assert_eq!(config.run, "redis-cli -p 6379");
+        assert!(config.env.is_none());
     }
 
     #[test]

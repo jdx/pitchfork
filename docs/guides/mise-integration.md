@@ -54,6 +54,27 @@ mise_bin = "/opt/tools/mise"
 If mise cannot be found, pitchfork logs a warning and runs without it. Check
 the supervisor logs if a daemon cannot find its runtime.
 
+## Templates that use mise variables
+
+A `run` command can use [templates](/guides/configuration-templates). Pitchfork renders
+the variables it defines, such as `daemons.*`, `url`, and `name`. With `mise = true`, a
+command that uses anything else, such as a mise `[vars]` entry or a filter pitchfork
+does not provide, is passed through unrendered to `mise x`, which finishes rendering
+it with mise's own variables and filters:
+
+```toml
+[daemons.api]
+run = "exec node server.js --port {{ daemons.redis.port }} --title {{ vars.title | quote }}"
+mise = true
+```
+
+Pitchfork gives `mise x` its template variables, so `{{ daemons.redis.port }}` above
+still resolves. It passes them in the `PITCHFORK_TEMPLATE_CONTEXT` environment variable
+as JSON, which mise reads and removes before running the command.
+
+Without `mise = true`, an unknown variable is a render error, as before. Only `run`
+is deferred; other fields, including `env`, must use variables pitchfork defines.
+
 ## Run a mise task
 
 You can also make a mise task the daemon command. For example, in `pitchfork.toml`:
