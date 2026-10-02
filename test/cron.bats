@@ -941,6 +941,38 @@ EOF2
 # A dependent waiting on an in-flight oneshot treats a failed attempt with
 # retries left as a gap between tries. Once the oneshot is disabled no further
 # try comes, so the dependent must stop waiting instead of until its deadline.
+@test "disabling a daemon ends a start waiting out a long retry backoff" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.fg_backoff_disabled]
+run = "echo fg_attempt; exit 1"
+retry = 10
+EOF2
+
+  pitchfork start fg_backoff_disabled >/dev/null 2>&1 3>&- 4>&- &
+  local start_pid=$!
+
+  # Five attempts have run; the backoff before the sixth is 16 seconds.
+  local attempts=0
+  for _ in $(seq 1 200); do
+    attempts=$(pitchfork logs fg_backoff_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+    [[ "$attempts" -ge 5 ]] && break
+    sleep 0.2
+  done
+  [[ "$attempts" -eq 5 ]]
+  sleep 1
+  run pitchfork disable fg_backoff_disabled
+  assert_success
+
+  # The start gives up when the daemon is disabled, not when the backoff ends.
+  local before after
+  before=$(date +%s)
+  wait "$start_pid" || true
+  after=$(date +%s)
+  [[ $((after - before)) -lt 8 ]]
+  attempts=$(pitchfork logs fg_backoff_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+  [[ "$attempts" -eq 5 ]]
+}
+
 @test "a start waiting on a oneshot that is disabled between retries stops waiting" {
   create_pitchfork_toml <<TOML
 [daemons.migrate_disabled]

@@ -538,6 +538,9 @@ impl Supervisor {
             return Err(not_found());
         }
         let result = state_file.disable_daemon(id);
+        // A start sleeping out a retry backoff makes no further attempt, so
+        // it is woken now rather than when the backoff ends.
+        self.cancel_retrying(id);
         Ok(result)
     }
 

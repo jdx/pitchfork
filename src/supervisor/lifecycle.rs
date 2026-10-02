@@ -403,7 +403,7 @@ pub(crate) struct RetryingGuard {
 }
 
 impl RetryingGuard {
-    /// Whether a `stop` has asked this retry sequence to end.
+    /// Whether a `stop` or a `disable` has asked this retry sequence to end.
     fn is_cancelled(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -599,6 +599,17 @@ impl Supervisor {
                     info!("daemon {id} completed while waiting to retry; not running it again");
                     return Ok(IpcResponse::DaemonReady { daemon });
                 }
+                // A disable during the backoff ends the sequence, checked under
+                // the guard `disable` takes. It wakes the backoff the way a stop
+                // does, so it is checked first to report what happened.
+                if attempt > 0 && self.state_file.lock().await.disabled.contains(id) {
+                    info!(
+                        "daemon {id} was disabled while waiting to retry; abandoning its retries"
+                    );
+                    return Ok(IpcResponse::DaemonFailed {
+                        error: "disabled while retrying".to_string(),
+                    });
+                }
                 // A stop that arrived during the backoff ends the sequence.
                 // Without this the loop would start the next attempt on a
                 // daemon the user has just stopped, and the stop would look
@@ -607,15 +618,6 @@ impl Supervisor {
                     info!("daemon {id} was stopped while waiting to retry; abandoning its retries");
                     return Ok(IpcResponse::DaemonFailed {
                         error: "stopped while retrying".to_string(),
-                    });
-                }
-                // So does a disable, checked under the guard `disable` takes.
-                if attempt > 0 && self.state_file.lock().await.disabled.contains(id) {
-                    info!(
-                        "daemon {id} was disabled while waiting to retry; abandoning its retries"
-                    );
-                    return Ok(IpcResponse::DaemonFailed {
-                        error: "disabled while retrying".to_string(),
                     });
                 }
                 let Some(guard) = guard else {
