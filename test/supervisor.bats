@@ -1200,3 +1200,96 @@ EOF
   assert_failure
   assert_output --partial "--invoking-user $(id -un) requires the supervisor to run as root"
 }
+
+# Daemons that ignore the stop signal and take their whole stop timeout, one
+# depending on the other so the supervisor stops them one after the other.
+_slow_stopping_daemons() {
+  local app_timeout="$1"
+  create_pitchfork_toml <<EOF2
+[daemons.db]
+run = "trap '' TERM; exec sleep 600"
+stop_signal = { signal = "SIGTERM", timeout = "2s" }
+ready_delay = 1
+
+[daemons.app]
+run = "trap '' TERM; exec sleep 600"
+stop_signal = { signal = "SIGTERM", timeout = "$app_timeout" }
+ready_delay = 1
+depends = ["db"]
+
+[daemons.other]
+run = "sleep 600"
+ready_delay = 1
+EOF2
+}
+
+_wait_for_pid_gone() {
+  local pid="$1"
+  for _ in $(seq 1 100); do
+    pid_alive "$pid" || return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+@test "supervisor stop waits for every daemon to stop, not just its own timeout" {
+  skip_on_windows "relies on a daemon ignoring SIGTERM"
+  _slow_stopping_daemons 2s
+  run pitchfork start app
+  assert_success
+  local db_pid app_pid
+  db_pid="$(get_daemon_pid db)"
+  app_pid="$(get_daemon_pid app)"
+
+  # Stopping app and then db takes longer than the supervisor's own timeout.
+  PITCHFORK_STOP_TIMEOUT=2s run pitchfork supervisor stop
+  assert_success
+  refute_output --partial "sending SIGKILL"
+
+  _wait_for_pid_gone "$app_pid"
+  _wait_for_pid_gone "$db_pid"
+}
+
+@test "a daemon is not started while the supervisor is shutting down" {
+  skip_on_windows "relies on a daemon ignoring SIGTERM"
+  _slow_stopping_daemons 6s
+  run pitchfork start app
+  assert_success
+  local supervisor_pid
+  supervisor_pid="$(_recorded_supervisor_pid)"
+
+  pitchfork supervisor stop >/dev/null 2>&1 &
+  local stop_pid=$!
+  sleep 1
+
+  run pitchfork start other
+  assert_failure
+  assert_output --partial "shutting down"
+
+  wait "$stop_pid"
+  _wait_for_pid_gone "$supervisor_pid"
+  # Read from the state file: a command would start a new supervisor.
+  run awk '/^\[daemons\."[^"]*\/other"\]/{on=1; next} /^\[/{on=0} on && /^pid =/' "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output ""
+}
+
+@test "a second signal while the supervisor stops kills the daemons left" {
+  skip_on_windows "sends POSIX signals to the supervisor"
+  _slow_stopping_daemons 30s
+  run pitchfork start app other
+  assert_success
+  local db_pid app_pid other_pid supervisor_pid
+  db_pid="$(get_daemon_pid db)"
+  app_pid="$(get_daemon_pid app)"
+  other_pid="$(get_daemon_pid other)"
+  supervisor_pid="$(_recorded_supervisor_pid)"
+
+  kill -INT "$supervisor_pid"
+  sleep 1
+  kill -INT "$supervisor_pid"
+
+  _wait_for_pid_gone "$supervisor_pid"
+  _wait_for_pid_gone "$app_pid"
+  _wait_for_pid_gone "$db_pid"
+  _wait_for_pid_gone "$other_pid"
+}

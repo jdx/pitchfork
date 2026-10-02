@@ -89,6 +89,13 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
     }
     debug!("killing pid {existing_pid}");
     let stop_signal: i32 = StopSignal::default().into();
+    // The state file may be unreadable; the supervisor's own timeout is then
+    // all that is waited, as it always was.
+    let base = crate::settings::settings().supervisor_stop_timeout();
+    let stop_budget = match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+        Ok(sf) => supervisor_stop_budget(sf.daemons.values(), base),
+        Err(_) => base,
+    };
     // Bind the kill to a process generation so a PID recycled between the
     // check above and the signal is still refused. A legacy record without a
     // start time was just verified to be a live pitchfork process, so bind to
@@ -109,7 +116,7 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
             existing_pid,
             Some(expected_start_time),
             stop_signal,
-            None,
+            Some(stop_budget),
         )
         .await;
     match killed {
@@ -117,6 +124,32 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
         Ok(false) => Ok(KillOrStopOutcome::AlreadyDead),
         Err(e) => Err(miette::miette!("{e}. Try rerun with sudo.")),
     }
+}
+
+/// How long to wait for the supervisor to exit after the stop signal before
+/// killing it.
+///
+/// On the stop signal the supervisor stops its daemons, dependents first and
+/// one level after another, and each daemon can take its whole stop timeout
+/// plus the wait after SIGKILL. Killed before it is done, it leaves the
+/// daemons of the later levels running with no supervisor. So `base` (the
+/// `supervisor.stop_timeout` setting) is extended by every running daemon's
+/// stop in turn: an upper bound, since the daemons of one level stop at the
+/// same time. A supervisor that exits sooner ends the wait sooner.
+fn supervisor_stop_budget<'a>(
+    daemons: impl IntoIterator<Item = &'a Daemon>,
+    base: std::time::Duration,
+) -> std::time::Duration {
+    let pitchfork_id = DaemonId::pitchfork();
+    daemons
+        .into_iter()
+        .filter(|d| d.pid.is_some() && d.id != pitchfork_id)
+        .map(|d| {
+            // A daemon without its own timeout is given the supervisor's.
+            let timeout = d.stop_signal.and_then(|s| s.timeout).unwrap_or(base);
+            timeout + crate::procs::PROCESS_GROUP_SIGKILL_WAIT
+        })
+        .fold(base, |total, stop| total.saturating_add(stop))
 }
 
 /// The supervisor's own entry in the state file, if any. The entry may be
@@ -152,4 +185,52 @@ pub async fn resolve_existing_supervisor(force: bool) -> Result<(Option<u32>, Ki
     let record = record.expect("a live record was found above");
     let outcome = kill_or_stop(&record, force).await?;
     Ok((record.pid, outcome))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_types::StopConfig;
+    use std::time::Duration;
+
+    fn daemon(name: &str, pid: Option<u32>, timeout: Option<Duration>) -> Daemon {
+        Daemon {
+            id: DaemonId::new("proj", name),
+            pid,
+            stop_signal: timeout.map(|timeout| StopConfig {
+                timeout: Some(timeout),
+                ..StopConfig::default()
+            }),
+            ..Daemon::default()
+        }
+    }
+
+    #[test]
+    fn stop_budget_covers_each_running_daemon_in_turn() {
+        let base = Duration::from_secs(5);
+        let sigkill = crate::procs::PROCESS_GROUP_SIGKILL_WAIT;
+        let daemons = [
+            daemon("db", Some(1), Some(Duration::from_secs(4))),
+            daemon("app", Some(2), Some(Duration::from_secs(4))),
+            // No timeout of its own: the supervisor's applies.
+            daemon("worker", Some(3), None),
+            // Not running: nothing to stop.
+            daemon("idle", None, Some(Duration::from_secs(60))),
+            Daemon {
+                id: DaemonId::pitchfork(),
+                pid: Some(4),
+                ..Daemon::default()
+            },
+        ];
+        assert_eq!(
+            supervisor_stop_budget(&daemons, base),
+            base + (Duration::from_secs(4) + sigkill) * 2 + (base + sigkill)
+        );
+    }
+
+    #[test]
+    fn stop_budget_is_the_base_with_no_running_daemons() {
+        let base = Duration::from_secs(5);
+        assert_eq!(supervisor_stop_budget(&[], base), base);
+    }
 }

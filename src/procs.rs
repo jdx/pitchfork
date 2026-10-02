@@ -39,6 +39,10 @@ pub struct Procs {
 
 pub static PROCS: Lazy<Procs> = Lazy::new(Procs::new);
 
+/// How long a process-group kill waits, after its SIGKILL, for the group to be
+/// gone before reporting it stuck. Part of the longest a daemon's stop takes.
+pub const PROCESS_GROUP_SIGKILL_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl Default for Procs {
     fn default() -> Self {
         Self::new()
@@ -502,7 +506,8 @@ impl Procs {
         // Wait for SIGKILL to take effect on the whole group (bounded: SIGKILL
         // cannot be caught, so members disappear as soon as the kernel reaps
         // them — anything left after this is stuck in uninterruptible sleep).
-        for _ in 0..40 {
+        let sigkill_polls = PROCESS_GROUP_SIGKILL_WAIT.as_millis() / 50;
+        for _ in 0..sigkill_polls {
             std::thread::sleep(std::time::Duration::from_millis(50));
             if process_group_terminated(pgid) {
                 return Ok(true);

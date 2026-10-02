@@ -928,6 +928,21 @@ impl Supervisor {
         stop_guard: tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<IpcResponse> {
         let id = &opts.id;
+        // Checked under the daemon's stop lock, which `close()` waits out
+        // after setting the flag: a start that took the lock first finishes
+        // before `close()` lists the daemons to stop, and one that takes it
+        // later stops here. Otherwise a daemon started during shutdown (an IPC
+        // start, a cron run, a retry) would be left running once the
+        // supervisor has gone.
+        if self
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            info!("not starting daemon {id}: the supervisor is shutting down");
+            return Ok(IpcResponse::DaemonFailed {
+                error: "the supervisor is shutting down".to_string(),
+            });
+        }
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
         // Create channel for readiness notification if wait_ready is true

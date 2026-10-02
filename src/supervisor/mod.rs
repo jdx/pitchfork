@@ -568,6 +568,11 @@ fn should_remove_liveness_session(
     }
 }
 
+/// Set once a second signal has started a forced exit, so the graceful stop
+/// running beside it (`close()`) does not let the process exit with success
+/// first.
+static FORCE_EXITING: AtomicBool = AtomicBool::new(false);
+
 impl Supervisor {
     pub fn new() -> Result<Self> {
         Ok(Self {
@@ -1443,9 +1448,12 @@ impl Supervisor {
                 loop {
                     stream.recv().await;
                     if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
-                        exit(1);
+                        SUPERVISOR.force_exit().await;
                     } else {
-                        SUPERVISOR.handle_signal().await;
+                        // Spawned, so this loop keeps receiving: a second
+                        // signal of the same kind must reach `force_exit`
+                        // rather than wait for the graceful stop to finish.
+                        tokio::spawn(SUPERVISOR.handle_signal());
                     }
                 }
             });
@@ -1463,9 +1471,9 @@ impl Supervisor {
                     return;
                 }
                 if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
-                    exit(1);
+                    SUPERVISOR.force_exit().await;
                 } else {
-                    SUPERVISOR.handle_signal().await;
+                    tokio::spawn(SUPERVISOR.handle_signal());
                 }
             }
         });
@@ -1476,6 +1484,35 @@ impl Supervisor {
         info!("received signal, stopping");
         self.close().await;
         exit(0)
+    }
+
+    /// A second signal while `close()` is still stopping daemons: exit now,
+    /// but kill the daemons not stopped yet first. They run in their own
+    /// sessions, so exiting without this would leave them running with no
+    /// supervisor.
+    async fn force_exit(&self) -> ! {
+        FORCE_EXITING.store(true, atomic::Ordering::SeqCst);
+        warn!("received another signal while stopping; killing the remaining daemons and exiting");
+        let mut kills = tokio::task::JoinSet::new();
+        for daemon in self.active_daemons().await {
+            let Some(pid) = daemon.pid else { continue };
+            kills.spawn(async move {
+                // No grace period: the stop signal is followed by SIGKILL at once.
+                let killed = PROCS
+                    .kill_process_group_if_start_time_matches_async(
+                        pid,
+                        daemon.start_time,
+                        crate::config_types::StopSignal::default().into(),
+                        Some(Duration::from_millis(1)),
+                    )
+                    .await;
+                if let Err(e) = killed {
+                    error!("failed to kill daemon {}: {e}", daemon.id);
+                }
+            });
+        }
+        kills.join_all().await;
+        exit(1)
     }
 
     pub(crate) async fn close(&self) {
@@ -1529,6 +1566,15 @@ impl Supervisor {
             crate::proxy::hosts::clean_hosts_file();
         }
 
+        // Wait out any start still holding its daemon's stop lock: one that
+        // took the lock before `shutting_down` was set may still be spawning,
+        // and its daemon must be in the list below. A start that takes a lock
+        // from now on sees the flag and does not spawn (see `run_once`).
+        let locks: Vec<_> = self.stop_locks.lock().await.values().cloned().collect();
+        for lock in locks {
+            drop(lock.lock().await);
+        }
+
         let pitchfork_id = DaemonId::pitchfork();
         let active = self.active_daemons().await;
         let active_ids: Vec<DaemonId> = active
@@ -1561,6 +1607,12 @@ impl Supervisor {
             for task in tasks {
                 let _ = task.await;
             }
+        }
+        // A forced exit kills the daemons, so the stops above can finish
+        // before it has. Shutting the IPC server down next would let the
+        // supervisor return and exit with success, so leave the exit to it.
+        if FORCE_EXITING.load(atomic::Ordering::SeqCst) {
+            std::future::pending::<()>().await;
         }
         let _ = self.remove_daemon(&pitchfork_id).await;
 
