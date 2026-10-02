@@ -117,6 +117,9 @@ pub(crate) struct UpsertDaemonOpts {
     pub watch_mode: Option<WatchMode>,
     pub watch_base_dir: Option<PathBuf>,
     pub mise: Option<bool>,
+    /// `Some` replaces the saved template context for a deferred `run`, including
+    /// with `None` when a start no longer defers; `None` keeps what is saved.
+    pub deferred_template_context: Option<Option<String>>,
     /// Unix user to run this daemon as
     pub user: Option<String>,
     /// Memory limit for the daemon process
@@ -207,6 +210,7 @@ impl UpsertDaemonOpts {
             o.watch_mode = Some(opts.watch_mode);
             o.watch_base_dir = opts.watch_base_dir.clone();
             o.mise = opts.mise;
+            o.deferred_template_context = Some(opts.deferred_template_context.clone());
             o.user = opts.user.clone();
             o.memory_limit = opts.memory_limit;
             o.cpu_limit = opts.cpu_limit;
@@ -480,6 +484,9 @@ impl Supervisor {
                 .watch_base_dir
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),
             mise: opts.mise.or(existing.and_then(|d| d.mise)),
+            deferred_template_context: opts
+                .deferred_template_context
+                .unwrap_or_else(|| existing.and_then(|d| d.deferred_template_context.clone())),
             user: opts.user.or(existing.and_then(|d| d.user.clone())),
             proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
             // active_port is intentionally NOT inherited from the existing daemon.

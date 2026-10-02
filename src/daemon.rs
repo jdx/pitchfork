@@ -129,6 +129,10 @@ pub struct Daemon {
     ///   Any daemon that relied on the global setting would silently stop using mise after a downgrade.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// Template context handed to `mise x` for a `run` command left unrendered, kept
+    /// so a restart rebuilt from this record can pass it again.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deferred_template_context: Option<String>,
     /// Unix user to run this daemon as.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user: Option<String>,
@@ -416,7 +420,7 @@ impl Daemon {
             watch_mode: self.watch_mode,
             watch_base_dir: self.watch_base_dir.clone(),
             mise: self.mise,
-            deferred_template_context: None,
+            deferred_template_context: self.deferred_template_context.clone(),
             slug: self.slug.clone(),
             proxy: self.proxy,
             user: self.user.clone(),
@@ -455,6 +459,19 @@ mod tests {
             last_cron_triggered: last_triggered,
             ..Daemon::default()
         }
+    }
+
+    #[test]
+    fn a_restart_from_the_saved_record_keeps_the_deferred_template_context() {
+        let daemon = Daemon {
+            deferred_template_context: Some("{\"name\":\"api\"}".to_string()),
+            ..Daemon::default()
+        };
+        let opts = daemon.to_run_options(vec!["echo".to_string()]);
+        assert_eq!(
+            opts.deferred_template_context.as_deref(),
+            Some("{\"name\":\"api\"}")
+        );
     }
 
     #[test]
