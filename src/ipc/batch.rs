@@ -227,6 +227,30 @@ fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
         && opts.ready_cmd.is_none()
 }
 
+/// The ready port an ad-hoc daemon was run with, for a restart that keeps it.
+///
+/// A record saved before `configured_ready_port` existed has only
+/// `ready_port`, the port the last run checked, which a port bump moved along
+/// with the expected ports. That bump is undone, so the restart bumps afresh.
+fn saved_ready_port(saved: &crate::daemon::Daemon) -> Option<ReadyPort> {
+    if saved.configured_ready_port.is_some() {
+        return saved.configured_ready_port.clone();
+    }
+    let mut ready_port = saved.ready_port.clone()?;
+    let expected = saved
+        .port
+        .as_ref()
+        .map(|p| p.expect.as_slice())
+        .unwrap_or_default();
+    if let Some(port) = ready_port.port
+        && let Some(i) = saved.resolved_port.iter().position(|&p| p == port)
+        && let Some(&given) = expected.get(i)
+    {
+        ready_port.port = Some(given);
+    }
+    Some(ready_port)
+}
+
 /// Render Tera templates for a single daemon config before starting it.
 ///
 /// Merges top-level `[env]` defaults into the daemon's env (per-daemon wins),
@@ -1070,7 +1094,7 @@ impl IpcClient {
                 saved.ready_delay,
                 saved.ready_output.clone(),
                 saved.ready_http.clone(),
-                saved.configured_ready_port.clone(),
+                saved_ready_port(saved),
                 saved.ready_cmd.clone(),
             )
         };
@@ -1431,6 +1455,52 @@ mod tests {
     use crate::env;
 
     use super::*;
+
+    fn saved_with_ports(
+        configured: Option<u16>,
+        checked: Option<u16>,
+        expected: &[u16],
+        resolved: &[u16],
+    ) -> crate::daemon::Daemon {
+        crate::daemon::Daemon {
+            configured_ready_port: configured.map(ReadyPort::new),
+            ready_port: checked.map(ReadyPort::new),
+            port: (!expected.is_empty()).then(|| crate::config_types::PortConfig {
+                expect: expected.to_vec(),
+                ..Default::default()
+            }),
+            resolved_port: resolved.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saved_ready_port_prefers_the_port_as_given() {
+        let saved = saved_with_ports(Some(3000), Some(3004), &[3000], &[3004]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(3000)));
+    }
+
+    #[test]
+    fn saved_ready_port_falls_back_to_an_older_record_s_checked_port() {
+        // No expected ports: the checked port is the one given.
+        let saved = saved_with_ports(None, Some(8080), &[], &[]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(8080)));
+        // Expected ports that were not bumped.
+        let saved = saved_with_ports(None, Some(3000), &[3000], &[3000]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(3000)));
+    }
+
+    #[test]
+    fn saved_ready_port_undoes_the_bump_in_an_older_record() {
+        let saved = saved_with_ports(None, Some(4003), &[3000, 4000], &[3003, 4003]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(4000)));
+    }
+
+    #[test]
+    fn saved_ready_port_is_none_without_a_ready_port() {
+        let saved = saved_with_ports(None, None, &[3000], &[3004]);
+        assert_eq!(saved_ready_port(&saved), None);
+    }
 
     #[test]
     fn http_override_preserves_configured_status_codes() {
