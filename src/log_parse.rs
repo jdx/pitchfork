@@ -91,29 +91,13 @@ fn parse_logfmt(line: &str) -> Option<ParsedLog> {
 
     // Build a JSON object from the key-value pairs.
     let mut obj = Map::new();
-    for (key, maybe_value) in &pairs {
-        // Bare key (no '=') → boolean true. Explicit value (including empty
-        // string from `key=""` or `key=`) → typed value.
-        let json_val = match maybe_value {
-            None => Value::Bool(true),
-            Some(value) if value.is_empty() => Value::String(value.clone()),
-            Some(value) => {
-                if let Ok(n) = value.parse::<i64>() {
-                    Value::Number(n.into())
-                } else if let Ok(n) = value.parse::<f64>() {
-                    serde_json::Number::from_f64(n)
-                        .map(Value::Number)
-                        .unwrap_or_else(|| Value::String(value.clone()))
-                } else if value.eq_ignore_ascii_case("true") {
-                    Value::Bool(true)
-                } else if value.eq_ignore_ascii_case("false") {
-                    Value::Bool(false)
-                } else if value.eq_ignore_ascii_case("null") {
-                    Value::Null
-                } else {
-                    Value::String(value.clone())
-                }
-            }
+    for (key, value) in &pairs {
+        let json_val = match value {
+            // Bare key (no '=') → boolean true.
+            LogfmtValue::Bare => Value::Bool(true),
+            // Quoting is the one way logfmt says a value is text.
+            LogfmtValue::Quoted(value) => Value::String(value.clone()),
+            LogfmtValue::Unquoted(value) => unquoted_logfmt_value(value),
         };
         obj.insert(key.clone(), json_val);
     }
@@ -142,11 +126,46 @@ fn parse_logfmt(line: &str) -> Option<ParsedLog> {
 /// value = ident | '"...' '"'
 /// ```
 ///
+/// A logfmt value as written. Logfmt has no types; quoting is the only
+/// thing a writer can say about a value.
+enum LogfmtValue {
+    /// A key without `=`, distinct from an explicit empty value (`key=""`
+    /// or `key=`).
+    Bare,
+    Quoted(String),
+    Unquoted(String),
+}
+
+/// The JSON value for an unquoted logfmt value: a number, boolean or null
+/// when that is exactly how the text spells it, so nothing is lost
+/// converting it; otherwise the text itself. `007`, `1.10`, `TRUE` and `1e3`
+/// therefore stay strings, as they would print differently as JSON.
+fn unquoted_logfmt_value(value: &str) -> Value {
+    let typed = match value {
+        "true" => Some(Value::Bool(true)),
+        "false" => Some(Value::Bool(false)),
+        "null" => Some(Value::Null),
+        _ => value
+            .parse::<i64>()
+            .ok()
+            .map(|n| Value::Number(n.into()))
+            .or_else(|| {
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                    .map(Value::Number)
+            }),
+    };
+    match typed {
+        Some(typed) if serde_json::to_string(&typed).is_ok_and(|text| text == value) => typed,
+        _ => Value::String(value.to_string()),
+    }
+}
+
 /// Returns `None` if the line doesn't look like logfmt (no `=` found, or
-/// parsing yields zero pairs). Bare keys (no `=`) are represented as
-/// `None` in the value position to distinguish them from explicit empty
-/// values (`key=""` or `key=`).
-fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, Option<String>)>> {
+/// parsing yields zero pairs).
+fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, LogfmtValue)>> {
     let bytes = line.as_bytes();
     let mut pairs = Vec::new();
     let mut bare_key_count = 0;
@@ -225,18 +244,21 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, Option<String>)>> {
                 if i < bytes.len() {
                     i += 1; // skip closing quote
                 }
-                pairs.push((key.to_string(), Some(value)));
+                pairs.push((key.to_string(), LogfmtValue::Quoted(value)));
             } else {
                 // Unquoted value: read until whitespace or end.
                 let val_start = i;
                 while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
                     i += 1;
                 }
-                pairs.push((key.to_string(), Some(line[val_start..i].to_string())));
+                pairs.push((
+                    key.to_string(),
+                    LogfmtValue::Unquoted(line[val_start..i].to_string()),
+                ));
             }
         } else {
             // Bare key (no '='): treat as boolean true.
-            pairs.push((key.to_string(), None));
+            pairs.push((key.to_string(), LogfmtValue::Bare));
             bare_key_count += 1;
         }
     }
@@ -401,6 +423,41 @@ mod tests {
         assert_eq!(parsed.level.as_deref(), Some("info"));
         assert_eq!(parsed.msg.as_deref(), Some("server started"));
         assert!(parsed.fields_json.is_some());
+    }
+
+    fn logfmt_fields(line: &str) -> Value {
+        let parsed = parse(line, "logfmt");
+        serde_json::from_str(parsed.fields_json.as_deref().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn test_logfmt_types_values_only_when_nothing_is_lost() {
+        let fields = logfmt_fields(
+            "level=info status=500 took=0.25 neg=-3 ok=true gone=null id=007 version=1.10 \
+             big=12345678901234567890 exp=1e3 flag=TRUE",
+        );
+        assert_eq!(fields["status"], serde_json::json!(500));
+        assert_eq!(fields["took"], serde_json::json!(0.25));
+        assert_eq!(fields["neg"], serde_json::json!(-3));
+        assert_eq!(fields["ok"], Value::Bool(true));
+        assert_eq!(fields["gone"], Value::Null);
+        for (key, text) in [
+            ("id", "007"),
+            ("version", "1.10"),
+            ("big", "12345678901234567890"),
+            ("exp", "1e3"),
+            ("flag", "TRUE"),
+        ] {
+            assert_eq!(fields[key], Value::String(text.into()), "{key}");
+        }
+    }
+
+    #[test]
+    fn test_logfmt_quoted_values_stay_strings() {
+        let fields = logfmt_fields(r#"level=info code="007" count="42" ok="true""#);
+        assert_eq!(fields["code"], Value::String("007".into()));
+        assert_eq!(fields["count"], Value::String("42".into()));
+        assert_eq!(fields["ok"], Value::String("true".into()));
     }
 
     #[test]

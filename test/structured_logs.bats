@@ -193,6 +193,36 @@ EOF
   pitchfork stop logfmt_parse
 }
 
+@test "logfmt values keep their text unless they are plainly numbers" {
+  cat > "$PWD/emit.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'level=info msg=hi id=007 code="42" status=500'
+sleep 3600
+EOF
+  chmod +x "$PWD/emit.sh"
+
+  create_pitchfork_toml <<EOF
+[daemons.logfmt_types]
+run = "bash $PWD/emit.sh"
+ready_output = "msg=hi"
+
+[daemons.logfmt_types.logs]
+log_format = "logfmt"
+EOF
+
+  pitchfork start logfmt_types
+  wait_for_logs logfmt_types "msg=hi" 10
+
+  PITCHFORK_LOG=error run pitchfork logs logfmt_types --raw --no-timestamp --field id=007
+  assert_success
+  assert_output --partial "msg=hi"
+  PITCHFORK_LOG=error run pitchfork logs logfmt_types --raw --no-timestamp --jq '.fields.code == "42" and .fields.status >= 500'
+  assert_success
+  assert_output --partial "msg=hi"
+
+  pitchfork stop logfmt_types
+}
+
 @test "logfmt log_format handles quoted values with spaces" {
   require_sqlite3
 
