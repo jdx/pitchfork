@@ -403,7 +403,7 @@ pub(crate) struct RetryingGuard {
 }
 
 impl RetryingGuard {
-    /// Whether a `stop` has asked this retry sequence to end.
+    /// Whether a `stop` or a `disable` has asked this retry sequence to end.
     fn is_cancelled(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -539,6 +539,15 @@ impl Supervisor {
             info!("daemon {id} was stopped after this retry was decided on; not starting it");
             return Ok(IpcResponse::DaemonNotRunning);
         }
+        // Likewise a disable, for every start the supervisor makes on its own
+        // (retries, the schedule, boot): each read the disabled set before
+        // waiting for this lock, and `disable` takes it too.
+        if (approved_at.is_some() || !opts.requested_by_client)
+            && self.state_file.lock().await.disabled.contains(id)
+        {
+            info!("daemon {id} was disabled before this start; not starting it");
+            return Ok(IpcResponse::DaemonNotRunning);
+        }
         if let Some(response) = self.claim_or_defer(&opts, &mut stop_guard).await? {
             return Ok(response);
         }
@@ -589,6 +598,17 @@ impl Supervisor {
                 {
                     info!("daemon {id} completed while waiting to retry; not running it again");
                     return Ok(IpcResponse::DaemonReady { daemon });
+                }
+                // A disable during the backoff ends the sequence, checked under
+                // the guard `disable` takes. It wakes the backoff the way a stop
+                // does, so it is checked first to report what happened.
+                if attempt > 0 && self.state_file.lock().await.disabled.contains(id) {
+                    info!(
+                        "daemon {id} was disabled while waiting to retry; abandoning its retries"
+                    );
+                    return Ok(IpcResponse::DaemonFailed {
+                        error: "disabled while retrying".to_string(),
+                    });
                 }
                 // A stop that arrived during the backoff ends the sequence.
                 // Without this the loop would start the next attempt on a
@@ -841,8 +861,13 @@ impl Supervisor {
                     // sleeps out its backoff, so an errored record with
                     // attempts left is a gap between tries rather than the
                     // result. Same condition `check_retry` uses to decide
-                    // whether another attempt is still owed.
-                    if daemon.retry.count() > 0 && daemon.retry_count < daemon.retry.count() {
+                    // whether another attempt is still owed. A disabled daemon
+                    // is owed none: every retry path checks the disabled set,
+                    // under the lock `disable` takes, before starting one.
+                    if daemon.retry.count() > 0
+                        && daemon.retry_count < daemon.retry.count()
+                        && !self.state_file.lock().await.disabled.contains(id)
+                    {
                         debug!(
                             "daemon {id}: in-flight oneshot failed attempt {} of {}; still waiting",
                             daemon.retry_count + 1,

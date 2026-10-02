@@ -1016,6 +1016,42 @@ EOF
   wait "$sup_pid" 2>/dev/null || true
 }
 
+@test "a disabled boot_start daemon is not started with the supervisor" {
+  create_pitchfork_toml <<EOF
+[daemons.bootoff]
+run = "sleep 60"
+boot_start = true
+ready_delay = 1
+EOF
+
+  run pitchfork disable bootoff
+  assert_success
+
+  pitchfork supervisor stop 2>/dev/null || true
+  sleep 1
+  pitchfork supervisor run --boot &
+  local sup_pid=$!
+
+  # Assert only once the boot scan has passed over the daemon.
+  local sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+  local scanned=""
+  for _ in $(seq 1 100); do
+    if grep -q "Skipping boot daemon .*bootoff: it is disabled" "$sup_log" 2>/dev/null; then
+      scanned=1
+      break
+    fi
+    sleep 0.2
+  done
+  [[ -n "$scanned" ]]
+
+  run pitchfork list
+  assert_output --partial "bootoff"
+  refute_output --partial "running"
+
+  kill "$sup_pid" 2>/dev/null || true
+  wait "$sup_pid" 2>/dev/null || true
+}
+
 @test "self-dependency is detected as circular" {
   create_pitchfork_toml <<EOF
 [daemons.self_dep]
