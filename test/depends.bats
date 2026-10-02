@@ -241,6 +241,30 @@ EOF
   done
 }
 
+@test "stop orders daemons by their dependencies from another directory" {
+  local proj="$TEST_TEMP_DIR/stopproj" other="$TEST_TEMP_DIR/elsewhere"
+  mkdir -p "$proj" "$other"
+  cd "$proj"
+  create_pitchfork_toml <<EOF
+[daemons.db]
+run = "sleep 30"
+ready_delay = 0
+
+[daemons.app]
+run = "sleep 30"
+depends = ["db"]
+ready_delay = 0
+EOF
+  run pitchfork start app
+  assert_success
+
+  # The config of stopproj is not visible from here.
+  cd "$other"
+  PITCHFORK_LOG=debug run pitchfork stop --all
+  assert_success
+  assert_output --partial 'shutdown order: [[DaemonId { namespace: "stopproj", name: "app" }], [DaemonId { namespace: "stopproj", name: "db" }]]'
+}
+
 @test "stop --all handles partial running daemons" {
   create_pitchfork_toml <<EOF
 [daemons.db]

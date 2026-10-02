@@ -1,11 +1,12 @@
 use crate::Result;
+use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
+use crate::env;
 use crate::error::{DependencyError, find_similar_daemon};
 use crate::pitchfork_toml::PitchforkTomlDaemon;
+use crate::state_file::StateFile;
 use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet, VecDeque};
-
-use crate::pitchfork_toml::PitchforkToml;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// Result of dependency resolution
 #[derive(Debug)]
@@ -156,88 +157,87 @@ pub fn resolve_dependencies(
 /// This is a shared helper used by both the supervisor's `close()` and
 /// the IPC `stop_daemons()` batch operation.
 ///
-/// Returns a list of levels in reverse dependency order. Each level is a
-/// `Vec<DaemonId>` of daemons that can be stopped concurrently.
-/// Ad-hoc daemons (not in config) are placed in the first level.
-///
-/// Falls back to a single level containing all IDs if config loading
-/// or dependency resolution fails.
+/// The dependencies are those each daemon was started with, as recorded in
+/// the state file, so the order holds wherever `stop` runs: the config
+/// visible from the current directory need not include the daemons' own
+/// projects. Falls back to a single level containing all IDs if the state
+/// file cannot be read.
 pub fn compute_reverse_stop_order(active_ids: &[DaemonId]) -> Vec<Vec<DaemonId>> {
-    compute_reverse_stop_order_with_config(active_ids, None)
-}
-
-/// Like [`compute_reverse_stop_order`] but accepts a pre-loaded config to
-/// avoid redundant disk I/O when the caller already has one.
-pub fn compute_reverse_stop_order_with_config(
-    active_ids: &[DaemonId],
-    config: Option<&PitchforkToml>,
-) -> Vec<Vec<DaemonId>> {
     if active_ids.is_empty() {
         return Vec::new();
     }
-
-    let owned_pt;
-    let pt = match config {
-        Some(pt) => pt,
-        None => match PitchforkToml::all_merged() {
-            Ok(loaded) => {
-                owned_pt = loaded;
-                &owned_pt
-            }
-            Err(e) => {
-                warn!(
-                    "failed to load config for dependency-ordered shutdown, stopping in arbitrary order: {e}"
-                );
-                return vec![active_ids.to_vec()];
-            }
-        },
-    };
-
-    let active_set: HashSet<&DaemonId> = active_ids.iter().collect();
-    let config_ids: Vec<DaemonId> = active_ids
-        .iter()
-        .filter(|id| pt.daemons.contains_key(*id))
-        .cloned()
-        .collect();
-    let adhoc_ids: Vec<DaemonId> = active_ids
-        .iter()
-        .filter(|id| !pt.daemons.contains_key(*id))
-        .cloned()
-        .collect();
-
-    if config_ids.is_empty() {
-        // All ad-hoc daemons, no dependency ordering needed
-        return vec![active_ids.to_vec()];
-    }
-
-    match resolve_dependencies(&config_ids, &pt.daemons) {
-        Ok(dep_order) => {
-            let mut levels: Vec<Vec<DaemonId>> = Vec::new();
-
-            // Stop ad-hoc daemons first (they have no dependency info)
-            if !adhoc_ids.is_empty() {
-                levels.push(adhoc_ids);
-            }
-
-            // Then stop config daemons in reverse dependency order
-            for level in dep_order.levels.into_iter().rev() {
-                let filtered: Vec<DaemonId> = level
-                    .into_iter()
-                    .filter(|id| active_set.contains(id))
-                    .collect();
-                if !filtered.is_empty() {
-                    levels.push(filtered);
-                }
-            }
-
-            debug!("shutdown order: {levels:?}");
-            levels
-        }
+    match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+        Ok(state) => reverse_stop_order(active_ids, &state.daemons),
         Err(e) => {
-            warn!("dependency resolution failed during shutdown, stopping in arbitrary order: {e}");
+            warn!(
+                "failed to read state for dependency-ordered shutdown, stopping in arbitrary order: {e}"
+            );
             vec![active_ids.to_vec()]
         }
     }
+}
+
+/// Group `active_ids` into levels to stop one after another: nothing in a
+/// level is needed by anything in a later one, directly or through daemons
+/// that are not being stopped. Each level can be stopped concurrently.
+///
+/// Dependencies come from the daemons' records. A daemon without a record
+/// depends on nothing. Daemons left in a dependency cycle, and what they
+/// depend on, are stopped together in the last level.
+pub fn reverse_stop_order(
+    active_ids: &[DaemonId],
+    daemons: &BTreeMap<DaemonId, Daemon>,
+) -> Vec<Vec<DaemonId>> {
+    let mut remaining: Vec<DaemonId> = Vec::new();
+    for id in active_ids {
+        if !remaining.contains(id) {
+            remaining.push(id.clone());
+        }
+    }
+    let needs: HashMap<DaemonId, HashSet<DaemonId>> = remaining
+        .iter()
+        .map(|id| (id.clone(), recorded_dependencies(id, daemons)))
+        .collect();
+
+    let mut levels: Vec<Vec<DaemonId>> = Vec::new();
+    while !remaining.is_empty() {
+        let level: Vec<DaemonId> = remaining
+            .iter()
+            .filter(|id| {
+                !remaining
+                    .iter()
+                    .any(|other| other != *id && needs[other].contains(*id))
+            })
+            .cloned()
+            .collect();
+        if level.is_empty() {
+            levels.push(std::mem::take(&mut remaining));
+            break;
+        }
+        remaining.retain(|id| !level.contains(id));
+        levels.push(level);
+    }
+
+    debug!("shutdown order: {levels:?}");
+    levels
+}
+
+/// Everything `id` depends on according to the records, directly or through
+/// other daemons.
+fn recorded_dependencies(id: &DaemonId, daemons: &BTreeMap<DaemonId, Daemon>) -> HashSet<DaemonId> {
+    let mut found = HashSet::new();
+    let mut queue: VecDeque<&DaemonId> = VecDeque::from([id]);
+    while let Some(current) = queue.pop_front() {
+        let Some(daemon) = daemons.get(current) else {
+            continue;
+        };
+        for dep in &daemon.depends {
+            if found.insert(dep.clone()) {
+                queue.push_back(dep);
+            }
+        }
+    }
+    found
 }
 
 #[cfg(test)]
@@ -263,6 +263,69 @@ mod tests {
 
     fn id(name: &str) -> DaemonId {
         DaemonId::new("global", name)
+    }
+
+    fn records(entries: &[(DaemonId, &[DaemonId])]) -> BTreeMap<DaemonId, Daemon> {
+        entries
+            .iter()
+            .map(|(id, depends)| {
+                (
+                    id.clone(),
+                    Daemon {
+                        id: id.clone(),
+                        depends: depends.to_vec(),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_stop_order_follows_recorded_dependencies_of_any_project() {
+        let db = DaemonId::new("projb", "db");
+        let app = DaemonId::new("projb", "app");
+        let daemons = records(&[(db.clone(), &[]), (app.clone(), std::slice::from_ref(&db))]);
+        assert_eq!(
+            reverse_stop_order(&[db.clone(), app.clone()], &daemons),
+            vec![vec![app], vec![db]]
+        );
+    }
+
+    #[test]
+    fn test_stop_order_goes_through_daemons_not_being_stopped() {
+        // web needs cache only through api, which is not running.
+        let daemons = records(&[
+            (id("cache"), &[]),
+            (id("api"), &[id("cache")]),
+            (id("web"), &[id("api")]),
+        ]);
+        assert_eq!(
+            reverse_stop_order(&[id("cache"), id("web")], &daemons),
+            vec![vec![id("web")], vec![id("cache")]]
+        );
+    }
+
+    #[test]
+    fn test_stop_order_puts_unrelated_and_unrecorded_daemons_first() {
+        let daemons = records(&[(id("db"), &[]), (id("app"), &[id("db")])]);
+        assert_eq!(
+            reverse_stop_order(&[id("db"), id("adhoc"), id("app")], &daemons),
+            vec![vec![id("adhoc"), id("app")], vec![id("db")]]
+        );
+    }
+
+    #[test]
+    fn test_stop_order_stops_a_cycle_together_last() {
+        let daemons = records(&[
+            (id("a"), &[id("b")]),
+            (id("b"), &[id("a")]),
+            (id("c"), &[id("a")]),
+        ]);
+        assert_eq!(
+            reverse_stop_order(&[id("a"), id("b"), id("c")], &daemons),
+            vec![vec![id("c")], vec![id("a"), id("b")]]
+        );
     }
 
     #[test]
