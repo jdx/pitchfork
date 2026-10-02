@@ -518,6 +518,21 @@ impl IpcClient {
             .await?;
         match rsp {
             IpcResponse::Daemons(daemons) => Ok(daemons),
+            IpcResponse::Error(e) if is_unknown_request(&e) => {
+                // A supervisor from before this request flushes its state
+                // before answering any request, so the file holds what it
+                // would have answered. Read on a blocking worker, since
+                // reading it takes a file lock.
+                debug!("supervisor predates GetDaemons; reading the state file: {e}");
+                let ids = ids.to_vec();
+                tokio::task::spawn_blocking(move || -> Result<Vec<Daemon>> {
+                    let state =
+                        crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE)?;
+                    Ok(records_of(&state, &ids))
+                })
+                .await
+                .map_err(|e| miette::miette!("reading the state file panicked: {e}"))?
+            }
             rsp => Err(Self::unexpected_response("Daemons", &rsp).into()),
         }
     }
@@ -795,6 +810,14 @@ fn is_unknown_request(error: &str) -> bool {
     error.starts_with("Invalid request:")
 }
 
+/// The records of `ids` in `state`, leaving out ids it has none of: what
+/// `GetDaemons` answers.
+pub(crate) fn records_of(state: &crate::state_file::StateFile, ids: &[DaemonId]) -> Vec<Daemon> {
+    ids.iter()
+        .filter_map(|id| state.daemons.get(id).cloned())
+        .collect()
+}
+
 /// How long to wait for the supervisor to answer a Stop request: the daemon's
 /// stop budget, plus the supervisor's ~2s post-SIGKILL verification, plus the
 /// normal request timeout as slack.
@@ -810,6 +833,32 @@ fn stop_request_timeout(stop_budget: Duration, request_timeout: Duration) -> Dur
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn records_are_those_of_the_asked_ids_that_state_has() {
+        let mut state = crate::state_file::StateFile::new(PathBuf::from("state.toml"));
+        let known = DaemonId::new("proj", "known");
+        state.daemons.insert(
+            known.clone(),
+            Daemon {
+                id: known.clone(),
+                ..Default::default()
+            },
+        );
+        let records = records_of(&state, &[known.clone(), DaemonId::new("proj", "unknown")]);
+        assert_eq!(
+            records.into_iter().map(|d| d.id).collect::<Vec<_>>(),
+            vec![known]
+        );
+    }
+
+    #[test]
+    fn an_older_supervisor_reports_get_daemons_as_an_unknown_request() {
+        // What the supervisor answers a request it cannot deserialize.
+        assert!(is_unknown_request(
+            "Invalid request: unknown variant `GetDaemons`"
+        ));
+    }
 
     #[test]
     fn stop_request_timeout_adds_verification_and_slack() {

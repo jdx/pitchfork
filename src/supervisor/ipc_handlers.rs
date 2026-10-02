@@ -111,11 +111,7 @@ impl Supervisor {
             }
             IpcRequest::GetDaemons { ids } => {
                 let state = self.state_file.lock().await;
-                IpcResponse::Daemons(
-                    ids.iter()
-                        .filter_map(|id| state.daemons.get(id).cloned())
-                        .collect(),
-                )
+                IpcResponse::Daemons(crate::ipc::client::records_of(&state, &ids))
             }
             IpcRequest::GetNotifications => {
                 let notifications = self.get_notifications().await;

@@ -997,6 +997,40 @@ EOF
   refute_output --partial "running"
 }
 
+@test "a former config cron daemon run ad hoc can be started again from its command" {
+  # Keep the schedule sync from clearing the old schedule first.
+  export PITCHFORK_CRON_CHECK_INTERVAL=60s
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&-
+
+  create_pitchfork_toml <<EOF
+[daemons.former_cron]
+run = "sleep 60"
+cron = "0 0 0 1 1 *"
+ready_delay = 1
+EOF
+
+  run pitchfork start former_cron
+  assert_success
+  run pitchfork stop former_cron
+  assert_success
+  wait_for_status former_cron stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run former_cron --delay 1 -- sleep 61
+  assert_success
+  run pitchfork stop former_cron
+  assert_success
+  wait_for_status former_cron stopped
+
+  run pitchfork start former_cron
+  assert_success
+  wait_for_status former_cron running
+
+  pitchfork stop former_cron
+}
+
 @test "starting a daemon that never existed fails" {
   create_pitchfork_toml <<EOF
 EOF

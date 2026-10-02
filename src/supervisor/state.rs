@@ -80,7 +80,11 @@ pub(crate) struct UpsertDaemonOpts {
     /// `None` inherits the existing record's value, so a status-only upsert
     /// (stop, exit finalization) does not reclassify the daemon.
     pub oneshot: Option<bool>,
-    pub cron_schedule: Option<String>,
+    /// A start sets it, `None` included, as it does `watch_base_dir`: an
+    /// ad-hoc `pitchfork run` of a former config cron daemon's id must not keep
+    /// that daemon's schedule, which also marks the record as made from
+    /// config. Every other upsert inherits it.
+    pub cron_schedule: Option<Option<String>>,
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,
     pub last_exit_success: Option<bool>,
@@ -189,7 +193,7 @@ impl UpsertDaemonOpts {
             o.scheduled_from_config = opts.requested_by_client.then_some(false);
             o.autostop = Some(opts.autostop);
             o.oneshot = Some(opts.oneshot);
-            o.cron_schedule = opts.cron_schedule.clone();
+            o.cron_schedule = Some(opts.cron_schedule.clone());
             o.cron_retrigger = opts.cron_retrigger;
             o.cron_immediate = opts.cron_immediate;
             o.retry = Some(opts.retry);
@@ -415,7 +419,7 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.is_some_and(|d| d.scheduled_from_config)),
             cron_schedule: opts
                 .cron_schedule
-                .or(existing.and_then(|d| d.cron_schedule.clone())),
+                .unwrap_or_else(|| existing.and_then(|d| d.cron_schedule.clone())),
             cron_retrigger: opts
                 .cron_retrigger
                 .or(existing.and_then(|d| d.cron_retrigger)),
