@@ -513,6 +513,19 @@ impl Logs {
         Ok(())
     }
 
+    /// The row limit for the SQL query. `-n` is applied there only when
+    /// nothing filters the rows afterwards: a time filter trims to the last N
+    /// once the rows are in chronological order, and a jq filter runs after
+    /// the query, so limiting first would show only the matches among the
+    /// last N entries rather than the last N matches.
+    fn query_limit(&self, has_time_filter: bool, has_jq_filter: bool) -> Option<usize> {
+        if has_time_filter || has_jq_filter {
+            None
+        } else {
+            self.n
+        }
+    }
+
     fn build_message_filters(&self) -> Result<Vec<MessageFilter>> {
         if self.case_sensitive && self.grep.is_empty() {
             warn!("--case-sensitive has no effect without --grep");
@@ -601,7 +614,7 @@ impl Logs {
             daemon_ids,
             from,
             to,
-            limit: if !has_time_filter { self.n } else { None },
+            limit: self.query_limit(has_time_filter, jq_filter.is_some()),
             order_desc: !has_time_filter,
             after_id: None,
             before_id: None,
@@ -614,6 +627,10 @@ impl Logs {
         // Apply jq filter if present.
         if let Some(jq) = jq_filter {
             entries = jq.filter(entries);
+            if !has_time_filter && let Some(n) = self.n {
+                // Newest first: keep the last N matching entries.
+                entries.truncate(n);
+            }
         }
 
         // Apply time-filter take-last-N or reverse for chronological display.
@@ -705,7 +722,7 @@ impl Logs {
             daemon_ids,
             from,
             to,
-            limit: if !has_time_filter { self.n } else { None },
+            limit: self.query_limit(has_time_filter, jq_filter.is_some()),
             order_desc: !has_time_filter,
             after_id: None,
             before_id: None,
@@ -717,7 +734,14 @@ impl Logs {
 
         // Apply jq filter if present.
         let entries = match jq_filter {
-            Some(jq) => jq.filter(entries),
+            Some(jq) => {
+                let mut entries = jq.filter(entries);
+                if !has_time_filter && let Some(n) = self.n {
+                    // Newest first: keep the last N matching entries.
+                    entries.truncate(n);
+                }
+                entries
+            }
             None => entries,
         };
 
