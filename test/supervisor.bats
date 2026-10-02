@@ -1252,6 +1252,43 @@ EOF
 
 # Daemons that ignore the stop signal and take their whole stop timeout, one
 # depending on the other so the supervisor stops them one after the other.
+# A supervisor started outside a project cannot see its config, so the
+# shutdown order must come from the dependencies the daemons were started
+# with. Each daemon notes when its stop signal arrives; `app` lingers before
+# noting it, so had both been stopped together, `db` would be noted first.
+@test "supervisor stop stops a dependent before its dependency when started elsewhere" {
+  skip_on_windows "supervisor stop ends the process tree at once on Windows"
+  local proj="$TEST_TEMP_DIR/orderproj" other="$TEST_TEMP_DIR/elsewhere"
+  local order
+  order="$(to_shell_path "$TEST_TEMP_DIR/stop_order")"
+  mkdir -p "$proj" "$other"
+
+  cd "$other"
+  pitchfork supervisor start
+
+  cd "$proj"
+  create_pitchfork_toml <<EOF
+[daemons.db]
+run = "trap 'echo db >> \"$order\"; exit 0' TERM; while true; do sleep 0.1; done"
+ready_delay = 1
+
+[daemons.app]
+run = "trap 'sleep 1; echo app >> \"$order\"; exit 0' TERM; while true; do sleep 0.1; done"
+ready_delay = 1
+depends = ["db"]
+EOF
+  run pitchfork start app
+  assert_success
+  wait_for_status db running
+  wait_for_status app running
+
+  run pitchfork supervisor stop
+  assert_success
+
+  run cat "$order"
+  assert_output "$(printf 'app\ndb')"
+}
+
 _slow_stopping_daemons() {
   local app_timeout="$1"
   create_pitchfork_toml <<EOF2
