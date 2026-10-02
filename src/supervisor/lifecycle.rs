@@ -1065,6 +1065,16 @@ impl Supervisor {
         } else {
             None
         };
+        // A command left unrendered for `mise x` is not runnable without it: the
+        // shell would see the template tags. Fail here, where the binary is
+        // actually looked up, rather than guessing at render time.
+        if mise_bin.is_none() && opts.deferred_template_context.is_some() {
+            return Ok(IpcResponse::DaemonFailed {
+                error: format!(
+                    "daemon {id}: the command uses template variables only mise can render, but mise is not enabled or its binary was not found"
+                ),
+            });
+        }
         // Started directly, the shell gets its script from `shell_script`.
         // Under mise it goes in as an ordinary argument: mise starts the shell
         // itself, re-quoting each argument, so the raw command line cmd.exe
@@ -1225,6 +1235,10 @@ impl Supervisor {
             opts.env.as_ref(),
             &resolved_ports,
         );
+        // After the daemon's own env, since `mise x` needs exactly this value.
+        if let Some(context) = &opts.deferred_template_context {
+            cmd.env(crate::template::TEMPLATE_CONTEXT_ENV, context);
+        }
 
         // Inject proxy-related environment variables
         inject_proxy_env(&mut cmd, &daemon_proxy_host(&opts).await);

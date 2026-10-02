@@ -1502,6 +1502,7 @@ impl PitchforkToml {
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
+                deferred_template_context: None,
                 user: raw_daemon.user,
                 memory_limit: raw_daemon.memory_limit,
                 cpu_limit: raw_daemon.cpu_limit,
@@ -2188,6 +2189,10 @@ pub struct PitchforkTomlDaemon {
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
+    /// Pitchfork's template context as JSON, set while rendering when `run` was left
+    /// unrendered for `mise x` to finish. Never read from or written to a file.
+    #[schemars(skip)]
+    pub deferred_template_context: Option<String>,
     /// Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.
     pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
@@ -2334,6 +2339,7 @@ impl PitchforkTomlDaemon {
                 self.path.as_deref(),
             )),
             mise: self.mise,
+            deferred_template_context: self.deferred_template_context.clone(),
             slug,
             proxy: None,
             user: self.user.clone(),
