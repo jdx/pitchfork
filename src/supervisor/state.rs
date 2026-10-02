@@ -366,6 +366,14 @@ impl Supervisor {
             // reaches the supervisor, which would otherwise use its own settings.
             // Rendering assumed the project's, so launch has to as well.
             opts.mise = Some(crate::template::mise_enabled(&config));
+            // The project's mise_bin, for the same reason: `build_run_options`
+            // reads it for a client's start.
+            if opts.mise == Some(true) {
+                let project_dir =
+                    crate::ipc::batch::resolve_config_base_dir(config.path.as_deref());
+                opts.mise_bin =
+                    crate::settings::Settings::load_from_dir(&project_dir).explicit_mise_bin();
+            }
             Ok(opts)
         })
         .await

@@ -206,8 +206,8 @@ pub async fn build_run_options(
         }
         // Only an explicit setting: searching for mise when none is set stays
         // with the supervisor, which is where the command runs.
-        if run_opts.mise == Some(true) && !project_settings.general.mise_bin.is_empty() {
-            run_opts.mise_bin = Some(PathBuf::from(&project_settings.general.mise_bin));
+        if run_opts.mise == Some(true) {
+            run_opts.mise_bin = project_settings.explicit_mise_bin();
         }
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);

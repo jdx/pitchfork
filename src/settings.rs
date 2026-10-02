@@ -1463,6 +1463,14 @@ impl Settings {
         self.resolve_mise_bin_with_path(std::env::var_os("PATH").as_deref())
     }
 
+    /// `general.mise_bin` when it is set explicitly, without checking or
+    /// searching. A daemon's project reads this so the supervisor, whose own
+    /// settings do not see the project's, can prefer it; see
+    /// [`Self::resolve_daemon_mise_bin`].
+    pub fn explicit_mise_bin(&self) -> Option<PathBuf> {
+        (!self.general.mise_bin.is_empty()).then(|| PathBuf::from(&self.general.mise_bin))
+    }
+
     /// Resolve the mise binary for a daemon, preferring `project_mise_bin`.
     ///
     /// `project_mise_bin` is the `general.mise_bin` of the daemon's project,
@@ -2129,7 +2137,9 @@ mod tests {
         std::fs::write(&project_mise, "").unwrap();
 
         let mut settings = Settings::default();
+        assert_eq!(settings.explicit_mise_bin(), None);
         settings.general.mise_bin = supervisor_mise.to_string_lossy().into_owned();
+        assert_eq!(settings.explicit_mise_bin(), Some(supervisor_mise.clone()));
 
         assert_eq!(
             settings.resolve_daemon_mise_bin(Some(&project_mise)),
