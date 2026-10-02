@@ -2201,7 +2201,7 @@ impl Supervisor {
             // make every drain wait out the whole deadline. Readiness is moot
             // now anyway — the process has exited.
             drop(output_relay);
-            let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let drain_deadline = tokio::time::Instant::now() + super::EXIT_OUTPUT_DRAIN_TIMEOUT;
             loop {
                 let now = tokio::time::Instant::now();
                 if now >= drain_deadline {
