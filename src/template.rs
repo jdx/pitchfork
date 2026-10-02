@@ -310,6 +310,17 @@ pub fn render_daemon_templates(
     context: &mut TemplateContext,
     top_env: Option<&IndexMap<String, String>>,
 ) -> Result<(), RenderError> {
+    render_daemon_templates_with(config, context, top_env, runs_under_mise)
+}
+
+/// [`render_daemon_templates`] with the decision whether `mise x` will wrap the
+/// daemon given, so a test does not depend on a mise installation.
+fn render_daemon_templates_with(
+    config: &mut PitchforkTomlDaemon,
+    context: &mut TemplateContext,
+    top_env: Option<&IndexMap<String, String>>,
+    runs_under_mise: impl Fn(&PitchforkTomlDaemon) -> bool,
+) -> Result<(), RenderError> {
     // Phase 1: merge top-level env into the daemon's env (per-daemon wins) and
     // render env values. `env` is NOT yet in the context, so env values cannot
     // reference {{ env.* }} (preventing cycles). render_env builds its own
@@ -329,16 +340,21 @@ pub fn render_daemon_templates(
     // value with spaces stays one argument.
     //
     // A command that `mise x` wraps can reference variables only mise knows, such
-    // as `{{ vars.name }}` from mise.toml. Such a command is passed through
-    // unrendered, and `mise x` renders it with this context plus its own.
-    let defers_to_mise = config.mise.unwrap_or(settings().general.mise);
+    // as `{{ vars.name }}` from mise.toml. When this context cannot render such a
+    // command it is passed through unrendered, and `mise x` renders it with this
+    // context plus its own, or reports the error itself.
+    let mut defers_to_mise = None;
     let mut deferred = false;
-    config.run = config.run.try_map(|arg| {
-        if defers_to_mise && renderer.references_unknown_variables(arg)? {
-            deferred = true;
-            return Ok(arg.to_string());
+    config.run = config.run.try_map(|arg| match renderer.render(arg) {
+        Ok(rendered) => Ok(rendered),
+        Err(err) => {
+            if *defers_to_mise.get_or_insert_with(|| runs_under_mise(config)) {
+                deferred = true;
+                Ok(arg.to_string())
+            } else {
+                Err(err)
+            }
         }
-        renderer.render(arg)
     })?;
     if deferred {
         config.env.get_or_insert_with(IndexMap::new).insert(
@@ -471,6 +487,19 @@ pub fn render_daemon_templates(
 /// daemon whose command it has to finish rendering.
 pub const TEMPLATE_CONTEXT_ENV: &str = "PITCHFORK_TEMPLATE_CONTEXT";
 
+/// Whether `mise x` will wrap this daemon's command when it starts, which is what
+/// can finish rendering a command this context could not. Launch resolves the
+/// setting from the daemon's project and then looks for the binary, so this does
+/// too; a command deferred to a launch without mise would reach the shell with its
+/// template tags unrendered.
+fn runs_under_mise(config: &PitchforkTomlDaemon) -> bool {
+    let enabled = config.mise.unwrap_or_else(|| {
+        let dir = crate::ipc::batch::resolve_config_base_dir(config.path.as_deref());
+        crate::settings::Settings::load_from_dir(&dir).general.mise
+    });
+    enabled && settings().resolve_mise_bin().is_some()
+}
+
 fn contains_template_syntax(template: &str) -> bool {
     template.contains("{{") || template.contains("{%") || template.contains("{#")
 }
@@ -504,27 +533,6 @@ impl TemplateRenderer {
             context: context.to_tera_context(),
             next_template_id: 0,
         }
-    }
-
-    /// Whether the template is not one this context can render on its own: it reads a
-    /// top-level variable that is not defined here, found from the parsed template
-    /// rather than by scanning its text, or it does not parse, which includes a
-    /// filter or function pitchfork does not provide.
-    fn references_unknown_variables(&mut self, template: &str) -> Result<bool, RenderError> {
-        if !contains_template_syntax(template) {
-            return Ok(false);
-        }
-        let Ok(name) = self.add_template(template) else {
-            return Ok(true);
-        };
-        let variables =
-            self.tera
-                .get_template_variables(&name)
-                .map_err(|e| RenderError::RenderFailed {
-                    template: template.to_string(),
-                    source: e,
-                })?;
-        Ok(variables.iter().any(|v| !self.context.contains_key(v)))
     }
 
     fn add_template(&mut self, template: &str) -> Result<String, RenderError> {
@@ -767,10 +775,9 @@ mod tests {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "redis-cli -p {{ daemons.redis.port }} {{ vars.greeting | quote }}".into(),
-            mise: Some(true),
             ..Default::default()
         };
-        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
         // The whole command is left for `mise x`, which receives the context.
         assert_eq!(
             config.run,
@@ -787,10 +794,10 @@ mod tests {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "echo {{ vars.greeting }}".into(),
-            mise: Some(false),
             ..Default::default()
         };
-        assert!(render_daemon_templates(&mut config, &mut ctx, None).is_err());
+        // mise is off, or its binary cannot be found, so nothing could finish it.
+        assert!(render_daemon_templates_with(&mut config, &mut ctx, None, |_| false).is_err());
         assert!(config.env.is_none());
     }
 
@@ -799,12 +806,26 @@ mod tests {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "redis-cli -p {{ daemons.redis.port }}".into(),
-            mise: Some(true),
             ..Default::default()
         };
-        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
         assert_eq!(config.run, "redis-cli -p 6379");
         assert!(config.env.is_none());
+    }
+
+    #[test]
+    fn test_missing_nested_variable_is_deferred_when_env_is_defined() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo {{ env.MISE_ONLY }}".into(),
+            env: Some(IndexMap::from([("OWN".to_string(), "x".to_string())])),
+            ..Default::default()
+        };
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
+        assert_eq!(config.run, "echo {{ env.MISE_ONLY }}");
+        let json = &config.env.as_ref().unwrap()[TEMPLATE_CONTEXT_ENV];
+        let json: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(json["env"]["OWN"], "x");
     }
 
     #[test]
