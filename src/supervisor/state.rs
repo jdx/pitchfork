@@ -128,6 +128,10 @@ pub(crate) struct UpsertDaemonOpts {
     /// `Some` replaces the saved template context for a deferred `run`, including
     /// with `None` when a start no longer defers; `None` keeps what is saved.
     pub deferred_template_context: Option<Option<String>>,
+    /// The project's mise binary. `None` keeps the record's, so a status-only
+    /// upsert (stop, exit finalization) does not lose it; a start sets it from
+    /// its `RunOptions`, so one removed from the project's settings is dropped.
+    pub mise_bin: Option<Option<PathBuf>>,
     /// Unix user to run this daemon as
     pub user: Option<String>,
     /// Memory limit for the daemon process
@@ -225,6 +229,7 @@ impl UpsertDaemonOpts {
             o.watch_base_dir = Some(opts.watch_base_dir.clone());
             o.mise = opts.mise;
             o.deferred_template_context = Some(opts.deferred_template_context.clone());
+            o.mise_bin = Some(opts.mise_bin.clone());
             o.user = opts.user.clone();
             o.memory_limit = opts.memory_limit;
             o.cpu_limit = opts.cpu_limit;
@@ -507,6 +512,9 @@ impl Supervisor {
             deferred_template_context: opts
                 .deferred_template_context
                 .unwrap_or_else(|| existing.and_then(|d| d.deferred_template_context.clone())),
+            mise_bin: opts
+                .mise_bin
+                .unwrap_or_else(|| configured.and_then(|d| d.mise_bin.clone())),
             user: opts.user.or(configured.and_then(|d| d.user.clone())),
             proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
             // active_port is intentionally NOT inherited from the existing daemon.

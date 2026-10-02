@@ -2340,6 +2340,8 @@ impl PitchforkTomlDaemon {
             )),
             mise: self.mise,
             deferred_template_context: self.deferred_template_context.clone(),
+            // Resolved from the project settings by `build_run_options`.
+            mise_bin: None,
             slug,
             proxy: None,
             user: self.user.clone(),

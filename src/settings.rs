@@ -1463,6 +1463,22 @@ impl Settings {
         self.resolve_mise_bin_with_path(std::env::var_os("PATH").as_deref())
     }
 
+    /// Resolve the mise binary for a daemon, preferring `project_mise_bin`.
+    ///
+    /// `project_mise_bin` is the `general.mise_bin` of the daemon's project,
+    /// which the client reads because these settings are the supervisor's
+    /// own and do not see the project's. Without it, falls back to
+    /// [`Self::resolve_mise_bin`].
+    pub fn resolve_daemon_mise_bin(
+        &self,
+        project_mise_bin: Option<&std::path::Path>,
+    ) -> Option<std::path::PathBuf> {
+        match project_mise_bin {
+            Some(p) => configured_mise_bin(p),
+            None => self.resolve_mise_bin(),
+        }
+    }
+
     /// [`Self::resolve_mise_bin`] with `path` in place of the `PATH` variable.
     fn resolve_mise_bin_with_path(
         &self,
@@ -1470,15 +1486,7 @@ impl Settings {
     ) -> Option<std::path::PathBuf> {
         // Explicit configuration takes priority
         if !self.general.mise_bin.is_empty() {
-            let p = PathBuf::from(&self.general.mise_bin);
-            if p.is_file() {
-                return Some(p);
-            }
-            warn!(
-                "mise_bin is set to {:?} but the file does not exist",
-                self.general.mise_bin
-            );
-            return None;
+            return configured_mise_bin(Path::new(&self.general.mise_bin));
         }
 
         // Search well-known install paths
@@ -1698,6 +1706,16 @@ fn shell_is_explicit(resolved: &Resolved) -> bool {
     resolved
         .origin_key("general.shell")
         .is_some_and(|origin| origin.kind != SourceKind::DEFAULTS)
+}
+
+/// An explicitly configured `mise_bin`, if the file exists. A missing file is
+/// warned about and gives `None`, not a search for another mise.
+fn configured_mise_bin(path: &Path) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+    warn!("mise_bin is set to {path:?} but the file does not exist");
+    None
 }
 
 /// The file called `name` in the first directory of `path` (a `PATH`-style
@@ -2100,6 +2118,33 @@ mod tests {
         );
         assert_eq!(find_in_path("missing.exe", Some(&path)), None);
         assert_eq!(find_in_path("mise.exe", None), None);
+    }
+
+    #[test]
+    fn resolve_daemon_mise_bin_prefers_the_project_mise_bin() {
+        let dir = tempfile::tempdir().unwrap();
+        let supervisor_mise = dir.path().join("supervisor-mise");
+        let project_mise = dir.path().join("project-mise");
+        std::fs::write(&supervisor_mise, "").unwrap();
+        std::fs::write(&project_mise, "").unwrap();
+
+        let mut settings = Settings::default();
+        settings.general.mise_bin = supervisor_mise.to_string_lossy().into_owned();
+
+        assert_eq!(
+            settings.resolve_daemon_mise_bin(Some(&project_mise)),
+            Some(project_mise)
+        );
+        // A project mise_bin that does not exist is not replaced by another.
+        assert_eq!(
+            settings.resolve_daemon_mise_bin(Some(&dir.path().join("missing"))),
+            None
+        );
+        // Without one, the supervisor's own setting applies, as before.
+        assert_eq!(
+            settings.resolve_daemon_mise_bin(None),
+            Some(supervisor_mise)
+        );
     }
 
     #[cfg(windows)]
