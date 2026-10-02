@@ -227,6 +227,11 @@ pub struct RunOptions {
     pub depends: Vec<DaemonId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
+    /// Template context for a `run` command left unrendered for `mise x`, which
+    /// is started with it in `PITCHFORK_TEMPLATE_CONTEXT`. Kept apart from `env`
+    /// so a variable of that name the user configured stays theirs.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deferred_template_context: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub watch: Vec<String>,
     #[serde(default)]
@@ -411,6 +416,7 @@ impl Daemon {
             watch_mode: self.watch_mode,
             watch_base_dir: self.watch_base_dir.clone(),
             mise: self.mise,
+            deferred_template_context: None,
             slug: self.slug.clone(),
             proxy: self.proxy,
             user: self.user.clone(),

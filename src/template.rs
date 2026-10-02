@@ -327,12 +327,6 @@ fn render_daemon_templates_with(
     // short-lived renderer without env in scope.
     let rendered_env = render_env(top_env, config.env.as_ref(), context)?;
     config.env = rendered_env;
-    // The variable only ever means that this render deferred the command. One a
-    // user declared, or an earlier render left, must not pass for that.
-    if let Some(env) = config.env.as_mut() {
-        env.shift_remove(TEMPLATE_CONTEXT_ENV);
-    }
-
     // Phase 2: expose the rendered env on the context as the authoritative
     // state, so to_tera_context() (used by TemplateRenderer::new) includes it.
     if let Some(ref env) = config.env {
@@ -361,12 +355,8 @@ fn render_daemon_templates_with(
             }
         }
     })?;
-    if deferred {
-        config.env.get_or_insert_with(IndexMap::new).insert(
-            TEMPLATE_CONTEXT_ENV.to_string(),
-            serde_json::Value::Object(context.to_json_map()).to_string(),
-        );
-    }
+    config.deferred_template_context =
+        deferred.then(|| serde_json::Value::Object(context.to_json_map()).to_string());
 
     if let Some(ref hooks) = config.hooks {
         let rendered = crate::config_types::PitchforkTomlHooks {
@@ -794,8 +784,8 @@ mod tests {
             config.run,
             "redis-cli -p {{ daemons.redis.port }} {{ vars.greeting | quote }}"
         );
-        let json = &config.env.as_ref().unwrap()[TEMPLATE_CONTEXT_ENV];
-        let json: serde_json::Value = serde_json::from_str(json).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(config.deferred_template_context.as_ref().unwrap()).unwrap();
         assert_eq!(json["daemons"]["redis"]["port"], 6379);
         assert_eq!(json["name"], "self");
     }
@@ -809,11 +799,11 @@ mod tests {
         };
         // mise is off, so nothing could finish it.
         assert!(render_daemon_templates_with(&mut config, &mut ctx, None, |_| false).is_err());
-        assert!(config.env.is_none());
+        assert!(config.deferred_template_context.is_none());
     }
 
     #[test]
-    fn test_user_declared_context_variable_is_not_a_deferral_marker() {
+    fn test_user_declared_context_variable_is_left_alone() {
         let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "redis-cli -p {{ daemons.redis.port }}".into(),
@@ -824,13 +814,9 @@ mod tests {
             ..Default::default()
         };
         render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
-        assert_eq!(config.run, "redis-cli -p 6379");
-        assert!(
-            config
-                .env
-                .as_ref()
-                .is_none_or(|env| !env.contains_key(TEMPLATE_CONTEXT_ENV))
-        );
+        // Not a deferral, and the user's own value is untouched.
+        assert!(config.deferred_template_context.is_none());
+        assert_eq!(config.env.as_ref().unwrap()[TEMPLATE_CONTEXT_ENV], "mine");
     }
 
     #[test]
@@ -842,7 +828,7 @@ mod tests {
         };
         render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
         assert_eq!(config.run, "redis-cli -p 6379");
-        assert!(config.env.is_none());
+        assert!(config.deferred_template_context.is_none());
     }
 
     #[test]
@@ -855,8 +841,8 @@ mod tests {
         };
         render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
         assert_eq!(config.run, "echo {{ env.MISE_ONLY }}");
-        let json = &config.env.as_ref().unwrap()[TEMPLATE_CONTEXT_ENV];
-        let json: serde_json::Value = serde_json::from_str(json).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(config.deferred_template_context.as_ref().unwrap()).unwrap();
         assert_eq!(json["env"]["OWN"], "x");
     }
 
