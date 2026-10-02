@@ -299,6 +299,26 @@ EOF
   assert_output --partial 'run = "sleep 10"'
 }
 
+@test "daemons add --local uses the namespace pitchfork.toml declares" {
+  create_pitchfork_toml <<'EOF'
+namespace = "myns"
+
+[daemons.web]
+run = "sleep 10"
+EOF
+
+  run pitchfork daemons add api --run "sleep 10" --local
+  assert_success
+  assert_output --partial "added myns/api"
+  run cat pitchfork.local.toml
+  assert_output --partial "[daemons.api]"
+
+  run pitchfork daemons
+  assert_success
+  assert_output --partial "myns/api"
+  assert_output --partial "myns/web"
+}
+
 @test "daemons add --project writes to pitchfork.toml" {
   run pitchfork daemons add testdaemon --run "sleep 10" --project
   assert_success
