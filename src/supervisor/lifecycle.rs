@@ -1040,6 +1040,21 @@ impl Supervisor {
         } else {
             None
         };
+        // A command left unrendered for `mise x` is not runnable without it: the
+        // shell would see the template tags. Fail here, where the binary is
+        // actually looked up, rather than guessing at render time.
+        if mise_bin.is_none()
+            && opts
+                .env
+                .as_ref()
+                .is_some_and(|env| env.contains_key(crate::template::TEMPLATE_CONTEXT_ENV))
+        {
+            return Ok(IpcResponse::DaemonFailed {
+                error: format!(
+                    "daemon {id}: the command uses template variables only mise can render, but mise is not enabled or its binary was not found"
+                ),
+            });
+        }
         // Started directly, the shell gets its script from `shell_script`.
         // Under mise it goes in as an ordinary argument: mise starts the shell
         // itself, re-quoting each argument, so the raw command line cmd.exe

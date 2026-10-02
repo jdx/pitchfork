@@ -79,9 +79,10 @@ tags unrendered, so update mise before relying on this.
 :::
 
 Deferral applies only when `mise x` will actually wrap the daemon: `mise = true` on the
-daemon, or `general.mise = true` in the settings of the daemon's project, and a mise
-binary that pitchfork can find. Otherwise an unresolved variable is a render error, as
-before. Only `run` is deferred; other fields, including `env`, must use variables
+daemon, or `general.mise = true` in the settings of the daemon's project. Otherwise an
+unresolved variable is a render error, as before. If mise is enabled but its binary
+cannot be found when the daemon starts, the start fails rather than running the
+command with unrendered tags. Only `run` is deferred; other fields, including `env`, must use variables
 pitchfork defines.
 
 ## Run a mise task

@@ -487,13 +487,12 @@ fn render_daemon_templates_with(
 /// daemon whose command it has to finish rendering.
 pub const TEMPLATE_CONTEXT_ENV: &str = "PITCHFORK_TEMPLATE_CONTEXT";
 
-/// Whether `mise x` will wrap this daemon's command when it starts, which is what
-/// can finish rendering a command this context could not. Launch resolves the
-/// setting from the daemon's project and then looks for the binary, so this does
-/// too; a command deferred to a launch without mise would reach the shell with its
-/// template tags unrendered.
+/// Whether `mise x` is meant to wrap this daemon's command, which is what can finish
+/// rendering a command this context could not. Whether the binary can be found is
+/// decided at launch, by the supervisor that looks for it: a client rendering the
+/// command may not see the same installation.
 fn runs_under_mise(config: &PitchforkTomlDaemon) -> bool {
-    mise_enabled(config) && settings().resolve_mise_bin().is_some()
+    mise_enabled(config)
 }
 
 /// Whether the daemon asks for `mise x`: its own `mise`, else `general.mise` as set
@@ -803,7 +802,7 @@ mod tests {
             run: "echo {{ vars.greeting }}".into(),
             ..Default::default()
         };
-        // mise is off, or its binary cannot be found, so nothing could finish it.
+        // mise is off, so nothing could finish it.
         assert!(render_daemon_templates_with(&mut config, &mut ctx, None, |_| false).is_err());
         assert!(config.env.is_none());
     }
