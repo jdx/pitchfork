@@ -371,8 +371,8 @@ impl Supervisor {
             if opts.mise == Some(true) {
                 let project_dir =
                     crate::ipc::batch::resolve_config_base_dir(config.path.as_deref());
-                opts.mise_bin =
-                    crate::settings::Settings::load_from_dir(&project_dir).explicit_mise_bin();
+                opts.mise_bin = crate::settings::Settings::load_from_dir(&project_dir)
+                    .explicit_mise_bin(&project_dir);
             }
             Ok(opts)
         })

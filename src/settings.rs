@@ -1467,8 +1467,12 @@ impl Settings {
     /// searching. A daemon's project reads this so the supervisor, whose own
     /// settings do not see the project's, can prefer it; see
     /// [`Self::resolve_daemon_mise_bin`].
-    pub fn explicit_mise_bin(&self) -> Option<PathBuf> {
-        (!self.general.mise_bin.is_empty()).then(|| PathBuf::from(&self.general.mise_bin))
+    ///
+    /// A relative path is taken from `project_dir`, the directory these
+    /// settings were read for: the supervisor that checks and runs it works
+    /// from a directory of its own.
+    pub fn explicit_mise_bin(&self, project_dir: &Path) -> Option<PathBuf> {
+        (!self.general.mise_bin.is_empty()).then(|| project_dir.join(&self.general.mise_bin))
     }
 
     /// Resolve the mise binary for a daemon, preferring `project_mise_bin`.
@@ -2137,9 +2141,19 @@ mod tests {
         std::fs::write(&project_mise, "").unwrap();
 
         let mut settings = Settings::default();
-        assert_eq!(settings.explicit_mise_bin(), None);
+        let project_dir = Path::new("/project");
+        assert_eq!(settings.explicit_mise_bin(project_dir), None);
+        // A relative mise_bin is the project's, not the supervisor's directory's.
+        settings.general.mise_bin = "bin/mise".to_string();
+        assert_eq!(
+            settings.explicit_mise_bin(project_dir),
+            Some(project_dir.join("bin/mise"))
+        );
         settings.general.mise_bin = supervisor_mise.to_string_lossy().into_owned();
-        assert_eq!(settings.explicit_mise_bin(), Some(supervisor_mise.clone()));
+        assert_eq!(
+            settings.explicit_mise_bin(project_dir),
+            Some(supervisor_mise.clone())
+        );
 
         assert_eq!(
             settings.resolve_daemon_mise_bin(Some(&project_mise)),

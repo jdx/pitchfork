@@ -196,8 +196,9 @@ pub async fn build_run_options(
         || should_inject_default_ready_delay(&run_opts)
     {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
+        let settings_dir = project_dir.clone();
         let project_settings = tokio::task::spawn_blocking(move || {
-            crate::settings::Settings::load_from_dir(&project_dir)
+            crate::settings::Settings::load_from_dir(&settings_dir)
         })
         .await
         .map_err(|e| format!("Failed to load project settings: {e}"))?;
@@ -207,7 +208,7 @@ pub async fn build_run_options(
         // Only an explicit setting: searching for mise when none is set stays
         // with the supervisor, which is where the command runs.
         if run_opts.mise == Some(true) {
-            run_opts.mise_bin = project_settings.explicit_mise_bin();
+            run_opts.mise_bin = project_settings.explicit_mise_bin(&project_dir);
         }
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
