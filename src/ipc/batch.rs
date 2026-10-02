@@ -230,25 +230,25 @@ fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
 /// The ready port an ad-hoc daemon was run with, for a restart that keeps it.
 ///
 /// A record saved before `configured_ready_port` existed has only
-/// `ready_port`, the port the last run checked, which a port bump moved along
-/// with the expected ports. That bump is undone, so the restart bumps afresh.
+/// `ready_port`, the port the last run checked. When that run's ports were
+/// bumped and it checked one of them, the record cannot tell a ready port
+/// bumped along with the expected ports from one given as the bumped number,
+/// so no port is kept rather than possibly the wrong one.
 fn saved_ready_port(saved: &crate::daemon::Daemon) -> Option<ReadyPort> {
     if saved.configured_ready_port.is_some() {
         return saved.configured_ready_port.clone();
     }
-    let mut ready_port = saved.ready_port.clone()?;
+    let ready_port = saved.ready_port.clone()?;
     let expected = saved
         .port
         .as_ref()
         .map(|p| p.expect.as_slice())
         .unwrap_or_default();
-    if let Some(port) = ready_port.port
-        && let Some(i) = saved.resolved_port.iter().position(|&p| p == port)
-        && let Some(&given) = expected.get(i)
-    {
-        ready_port.port = Some(given);
-    }
-    Some(ready_port)
+    let bumped = !expected.is_empty() && saved.resolved_port.as_slice() != expected;
+    let checked_a_resolved_port = ready_port
+        .port
+        .is_some_and(|port| saved.resolved_port.contains(&port));
+    (!(bumped && checked_a_resolved_port)).then_some(ready_port)
 }
 
 /// Render Tera templates for a single daemon config before starting it.
@@ -1491,9 +1491,19 @@ mod tests {
     }
 
     #[test]
-    fn saved_ready_port_undoes_the_bump_in_an_older_record() {
+    fn saved_ready_port_drops_an_older_record_s_ambiguous_bumped_port() {
+        // `--port 3000` bumped to 3001, or `--port 3001` given as it is: the
+        // two runs leave the same record, so neither port is assumed.
+        let saved = saved_with_ports(None, Some(3001), &[3000], &[3001]);
+        assert_eq!(saved_ready_port(&saved), None);
         let saved = saved_with_ports(None, Some(4003), &[3000, 4000], &[3003, 4003]);
-        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(4000)));
+        assert_eq!(saved_ready_port(&saved), None);
+    }
+
+    #[test]
+    fn saved_ready_port_keeps_an_older_record_s_port_outside_the_bumped_ones() {
+        let saved = saved_with_ports(None, Some(8080), &[3000], &[3001]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(8080)));
     }
 
     #[test]
