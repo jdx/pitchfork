@@ -80,7 +80,11 @@ pub(crate) struct UpsertDaemonOpts {
     /// `None` inherits the existing record's value, so a status-only upsert
     /// (stop, exit finalization) does not reclassify the daemon.
     pub oneshot: Option<bool>,
-    pub cron_schedule: Option<String>,
+    /// A start sets it, `None` included, as it does `watch_base_dir`: an
+    /// ad-hoc `pitchfork run` of a former config cron daemon's id must not keep
+    /// that daemon's schedule, which also marks the record as made from
+    /// config. Every other upsert inherits it.
+    pub cron_schedule: Option<Option<String>>,
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,
     pub last_exit_success: Option<bool>,
@@ -115,7 +119,11 @@ pub(crate) struct UpsertDaemonOpts {
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
     pub watch_mode: Option<WatchMode>,
-    pub watch_base_dir: Option<PathBuf>,
+    /// The directory of the project whose config defined the daemon. A
+    /// start sets it, `None` included: an ad-hoc `pitchfork run` of a former
+    /// config daemon's id must not keep that daemon's directory, which marks
+    /// the record as made from config. Every other upsert inherits it.
+    pub watch_base_dir: Option<Option<PathBuf>>,
     pub mise: Option<bool>,
     /// `Some` replaces the saved template context for a deferred `run`, including
     /// with `None` when a start no longer defers; `None` keeps what is saved.
@@ -188,7 +196,7 @@ impl UpsertDaemonOpts {
             o.scheduled_from_config = opts.requested_by_client.then_some(false);
             o.autostop = Some(opts.autostop);
             o.oneshot = Some(opts.oneshot);
-            o.cron_schedule = opts.cron_schedule.clone();
+            o.cron_schedule = Some(opts.cron_schedule.clone());
             o.cron_retrigger = opts.cron_retrigger;
             o.cron_immediate = opts.cron_immediate;
             o.retry = Some(opts.retry);
@@ -208,7 +216,7 @@ impl UpsertDaemonOpts {
             o.env = opts.env.clone();
             o.watch = Some(opts.watch.clone());
             o.watch_mode = Some(opts.watch_mode);
-            o.watch_base_dir = opts.watch_base_dir.clone();
+            o.watch_base_dir = Some(opts.watch_base_dir.clone());
             o.mise = opts.mise;
             o.deferred_template_context = Some(opts.deferred_template_context.clone());
             o.user = opts.user.clone();
@@ -420,7 +428,7 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.is_some_and(|d| d.scheduled_from_config)),
             cron_schedule: opts
                 .cron_schedule
-                .or(existing.and_then(|d| d.cron_schedule.clone())),
+                .unwrap_or_else(|| existing.and_then(|d| d.cron_schedule.clone())),
             cron_retrigger: opts
                 .cron_retrigger
                 .or(existing.and_then(|d| d.cron_retrigger)),
@@ -482,7 +490,7 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.map(|d| d.watch_mode).unwrap_or_default()),
             watch_base_dir: opts
                 .watch_base_dir
-                .or(existing.and_then(|d| d.watch_base_dir.clone())),
+                .unwrap_or_else(|| existing.and_then(|d| d.watch_base_dir.clone())),
             mise: opts.mise.or(existing.and_then(|d| d.mise)),
             deferred_template_context: opts
                 .deferred_template_context

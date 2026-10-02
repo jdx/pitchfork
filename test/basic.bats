@@ -944,6 +944,151 @@ EOF
   pitchfork stop adhoc_bump
 }
 
+@test "a stopped ad-hoc daemon can be started again" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run adhoc_again --delay 1 -- sleep 60
+  assert_success
+  local original_pid
+  original_pid=$(get_daemon_pid adhoc_again)
+  run pitchfork stop adhoc_again
+  assert_success
+  wait_for_status adhoc_again stopped
+
+  run pitchfork start adhoc_again
+  assert_success
+  wait_for_status adhoc_again running
+  local new_pid
+  new_pid=$(get_daemon_pid adhoc_again)
+  [[ -n "$new_pid" && "$new_pid" != "$original_pid" ]]
+
+  run pitchfork stop adhoc_again
+  assert_success
+  wait_for_status adhoc_again stopped
+
+  run pitchfork restart adhoc_again
+  assert_success
+  wait_for_status adhoc_again running
+
+  pitchfork stop adhoc_again
+}
+
+@test "a daemon removed from config is not started again as ad-hoc" {
+  create_pitchfork_toml <<EOF
+[daemons.removed]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start removed
+  assert_success
+  run pitchfork stop removed
+  assert_success
+  wait_for_status removed stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork start removed
+  assert_failure
+  assert_output --partial "is in state but has no config entry"
+  run pitchfork status removed
+  refute_output --partial "running"
+}
+
+@test "a former config cron daemon run ad hoc can be started again from its command" {
+  # Keep the schedule sync from clearing the old schedule first.
+  export PITCHFORK_CRON_CHECK_INTERVAL=60s
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&-
+
+  create_pitchfork_toml <<EOF
+[daemons.former_cron]
+run = "sleep 60"
+cron = "0 0 0 1 1 *"
+ready_delay = 1
+EOF
+
+  run pitchfork start former_cron
+  assert_success
+  run pitchfork stop former_cron
+  assert_success
+  wait_for_status former_cron stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run former_cron --delay 1 -- sleep 61
+  assert_success
+  run pitchfork stop former_cron
+  assert_success
+  wait_for_status former_cron stopped
+
+  run pitchfork start former_cron
+  assert_success
+  wait_for_status former_cron running
+
+  pitchfork stop former_cron
+}
+
+@test "starting a daemon that never existed fails" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  # A short name is resolved, and rejected, before the start.
+  run pitchfork start never_existed
+  assert_failure
+  assert_output --partial "daemon 'never_existed' not found"
+  # A qualified id reaches the start itself.
+  run pitchfork start global/never_existed
+  assert_failure
+  assert_output --partial "global/never_existed not found in config or state"
+}
+
+@test "a start naming a known daemon and an unknown one starts the known one and fails" {
+  create_pitchfork_toml <<EOF
+[daemons.good]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start good global/typo
+  assert_failure
+  assert_output --partial "global/typo not found in config or state"
+  wait_for_status good running
+
+  pitchfork stop good
+}
+
+@test "a former config daemon run ad hoc can be started again from its command" {
+  create_pitchfork_toml <<EOF
+[daemons.former]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start former
+  assert_success
+  run pitchfork stop former
+  assert_success
+  wait_for_status former stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run former --delay 1 -- sleep 61
+  assert_success
+  run pitchfork stop former
+  assert_success
+  wait_for_status former stopped
+
+  run pitchfork start former
+  assert_success
+  wait_for_status former running
+
+  pitchfork stop former
+}
+
 @test "restart all includes ad-hoc daemons" {
   create_pitchfork_toml <<EOF
 [daemons.config_daemon]

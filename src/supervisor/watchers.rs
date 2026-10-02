@@ -1083,7 +1083,7 @@ impl Supervisor {
             state
                 .daemons
                 .iter()
-                .filter(|(_, d)| d.watch_base_dir.is_some() || d.cron_schedule.is_some())
+                .filter(|(_, d)| !d.is_adhoc())
                 .map(|(id, d)| {
                     (
                         id.clone(),
