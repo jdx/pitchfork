@@ -203,8 +203,11 @@ in the daemon's `run` command or a [oneshot dependency](/guides/oneshot-tasks).
 - Hooks are **fire-and-forget** — they run in the background and never block the daemon
 - Hook commands run in the daemon's working directory
 - Errors in hooks are logged but do not affect the daemon
-- Hooks read fresh configuration from the daemon's own directory each time they
-  fire, independent of the directory where the per-user supervisor started
+- Hooks read fresh configuration each time they fire, from the project whose
+  `pitchfork.toml` defines the daemon. That is where to change a hook, even when
+  `dir` runs the daemon outside the project. It is independent of the directory
+  where the per-user supervisor started. A daemon started with `pitchfork run`
+  has no project, so its hooks are read from its working directory
 
 ## Examples
 
