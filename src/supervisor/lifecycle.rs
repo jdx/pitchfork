@@ -1548,12 +1548,11 @@ impl Supervisor {
                 .as_ref()
                 .and_then(|h| h.timeout)
                 .map(|d| Box::pin(time::sleep(d)));
-            let http_client = ready_http.as_ref().map(|_| {
-                reqwest::Client::builder()
-                    .timeout(http_client_timeout)
-                    .build()
-                    .unwrap_or_default()
-            });
+            let http_client = if ready_http.is_some() {
+                Some(crate::supervisor::health::supervisor_http_client().await)
+            } else {
+                None
+            };
 
             // Setup TCP port readiness check interval and deadline
             let mut port_check_interval =
@@ -1844,7 +1843,7 @@ impl Supervisor {
                         }
                     }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
                         if let (Some(http), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(&http.url).send().await {
+                            match client.get(&http.url).timeout(http_client_timeout).send().await {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
