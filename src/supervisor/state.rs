@@ -147,7 +147,7 @@ pub(crate) struct UpsertDaemonOpts {
     /// A start that describes the daemon in full, so an unset configuration
     /// field clears the existing record's value instead of inheriting it. An
     /// ad-hoc run under a config daemon's id must not keep that daemon's
-    /// command, schedule or environment. See `RunOptions::keeps_saved_record`.
+    /// command, schedule or environment. See `RunOptions::replaces_saved_record`.
     pub replaces_config: bool,
     /// Idle-shutdown ownership. `None` inherits the existing record's, so a
     /// status-only upsert (stop, exit finalization) keeps it; a start sets it
@@ -190,7 +190,7 @@ impl UpsertDaemonOpts {
         status: DaemonStatus,
     ) -> UpsertDaemonOptsBuilder {
         UpsertDaemonOpts::builder(opts.id.clone()).set(|o| {
-            o.replaces_config = !opts.keeps_saved_record;
+            o.replaces_config = opts.replaces_saved_record;
             o.status = status;
             o.shell_pid = opts.shell_pid;
             o.dir = Some(opts.dir.0.clone());
