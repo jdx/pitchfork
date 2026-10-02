@@ -327,6 +327,11 @@ fn render_daemon_templates_with(
     // short-lived renderer without env in scope.
     let rendered_env = render_env(top_env, config.env.as_ref(), context)?;
     config.env = rendered_env;
+    // The variable only ever means that this render deferred the command. One a
+    // user declared, or an earlier render left, must not pass for that.
+    if let Some(env) = config.env.as_mut() {
+        env.shift_remove(TEMPLATE_CONTEXT_ENV);
+    }
 
     // Phase 2: expose the rendered env on the context as the authoritative
     // state, so to_tera_context() (used by TemplateRenderer::new) includes it.
@@ -805,6 +810,27 @@ mod tests {
         // mise is off, so nothing could finish it.
         assert!(render_daemon_templates_with(&mut config, &mut ctx, None, |_| false).is_err());
         assert!(config.env.is_none());
+    }
+
+    #[test]
+    fn test_user_declared_context_variable_is_not_a_deferral_marker() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "redis-cli -p {{ daemons.redis.port }}".into(),
+            env: Some(IndexMap::from([(
+                TEMPLATE_CONTEXT_ENV.to_string(),
+                "mine".to_string(),
+            )])),
+            ..Default::default()
+        };
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
+        assert_eq!(config.run, "redis-cli -p 6379");
+        assert!(
+            config
+                .env
+                .as_ref()
+                .is_none_or(|env| !env.contains_key(TEMPLATE_CONTEXT_ENV))
+        );
     }
 
     #[test]
