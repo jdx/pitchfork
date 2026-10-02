@@ -101,6 +101,51 @@ EOF
   pitchfork stop healthy
 }
 
+@test "a health check removed from the config stops applying on the next start" {
+  create_pitchfork_toml <<EOF
+[daemons.wasunhealthy]
+run = "sleep 300"
+ready_delay = 1
+health_cmd = { run = "exit 1", interval = "1s", retries = 2 }
+EOF
+
+  pitchfork start wasunhealthy || true
+
+  local deadline
+  deadline=$(($(date +%s) + 30))
+  until [[ $(_health_kills) -ge 1 ]]; do
+    if [[ $(date +%s) -ge $deadline ]]; then
+      echo "the failing health check never killed the daemon" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  wait_for_status wasunhealthy errored 30
+
+  create_pitchfork_toml <<EOF
+[daemons.wasunhealthy]
+run = "sleep 300"
+ready_delay = 1
+EOF
+
+  run pitchfork start wasunhealthy
+  assert_success
+  local pid_before pid_after
+  pid_before=$(get_daemon_pid wasunhealthy)
+  [[ -n "$pid_before" ]]
+
+  # Well past the old check's grace period and several of its intervals.
+  sleep 6
+
+  pid_after=$(get_daemon_pid wasunhealthy)
+  [[ "$pid_after" == "$pid_before" ]]
+  [[ $(_health_kills) -eq 1 ]]
+  run pitchfork status wasunhealthy
+  assert_output --partial "running"
+
+  pitchfork stop wasunhealthy
+}
+
 @test "health http failure kills daemon and retry restarts it" {
   local port
   port=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()")

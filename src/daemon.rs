@@ -278,6 +278,15 @@ pub struct RunOptions {
     /// Allocate a pseudo-terminal for the daemon process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
+    /// This start describes the daemon in full, so the configuration fields
+    /// it leaves unset are cleared from the saved record instead of kept. Set
+    /// by every start except a restart of an ad-hoc daemon, which carries only
+    /// part of its record.
+    ///
+    /// False by default so that a request from an older client, which does
+    /// not send it, keeps merging into the record as it always did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaces_saved_record: bool,
     /// Run-to-completion task rather than a long-running service.
     #[serde(default)]
     pub oneshot: bool,
@@ -440,6 +449,8 @@ impl Daemon {
             log_format: self.log_format.clone(),
             on_output_hook,
             pty: self.pty,
+            // Built from the whole record, so it describes the daemon in full.
+            replaces_saved_record: true,
         }
     }
 }

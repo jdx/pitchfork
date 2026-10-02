@@ -1014,3 +1014,27 @@ TOML
   refute_output --partial "running"
   pitchfork stop --all || true
 }
+
+# An ad-hoc run under the id of a config daemon replaces its record: nothing
+# the config set — the command, the schedule, the environment — carries over.
+@test "an ad-hoc run over a config daemon's record keeps none of its config" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.adhoc_over]
+run = "echo cfg_tick"
+cron = "0 0 3 * * *"
+env = { CFG_ONLY = "cfg_env_value" }
+EOF2
+  run pitchfork start adhoc_over
+  assert_success
+  _wait_for_cron_schedule adhoc_over "0 0 3 * * *"
+  wait_for_logs adhoc_over "cfg_tick" 10
+  _wait_for_cron_run_to_end adhoc_over
+
+  run pitchfork run adhoc_over -- echo adhoc_tick
+  assert_success
+  wait_for_logs adhoc_over "adhoc_tick" 10
+
+  _wait_for_cron_schedule adhoc_over ""
+  run grep -c -e cfg_tick -e cfg_env_value "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "0"
+}

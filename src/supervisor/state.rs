@@ -144,6 +144,11 @@ pub(crate) struct UpsertDaemonOpts {
     pub pty: Option<bool>,
     /// True for config-only cron daemons auto-registered into state.
     pub config_registered: bool,
+    /// A start that describes the daemon in full, so an unset configuration
+    /// field clears the existing record's value instead of inheriting it. An
+    /// ad-hoc run under a config daemon's id must not keep that daemon's
+    /// command, schedule or environment. See `RunOptions::replaces_saved_record`.
+    pub replaces_config: bool,
     /// Idle-shutdown ownership. `None` inherits the existing record's, so a
     /// status-only upsert (stop, exit finalization) keeps it; a start sets it
     /// from its `RunOptions`, which is what makes an explicit start explicit.
@@ -185,6 +190,7 @@ impl UpsertDaemonOpts {
         status: DaemonStatus,
     ) -> UpsertDaemonOptsBuilder {
         UpsertDaemonOpts::builder(opts.id.clone()).set(|o| {
+            o.replaces_config = opts.replaces_saved_record;
             o.status = status;
             o.shell_pid = opts.shell_pid;
             o.dir = Some(opts.dir.0.clone());
@@ -371,8 +377,12 @@ impl Supervisor {
         );
         let mut state_file = self.state_file.lock().await;
         let existing = state_file.daemons.get(&opts.id);
-        // What unset ready checks fall back to.
-        let ready_base = existing.filter(|_| !opts.replaces_ready_checks);
+        // What configuration fields fall back to: nothing for a start, which
+        // sets them all; see `UpsertDaemonOpts::replaces_config`.
+        let configured = existing.filter(|_| !opts.replaces_config);
+        // What unset ready checks fall back to: also nothing when this start's
+        // ready checks replace the daemon's; see `replaces_ready_checks`.
+        let ready_base = configured.filter(|_| !opts.replaces_ready_checks);
         let daemon = Daemon {
             id: opts.id.clone(),
             // title/start_time identify the process for orphan cleanup after a
@@ -411,14 +421,14 @@ impl Supervisor {
             oneshot: opts
                 .oneshot
                 .unwrap_or_else(|| existing.is_some_and(|d| d.oneshot)),
-            dir: opts.dir.or(existing.and_then(|d| d.dir.clone())),
-            cmd: opts.cmd.or(existing.and_then(|d| d.cmd.clone())),
+            dir: opts.dir.or(configured.and_then(|d| d.dir.clone())),
+            cmd: opts.cmd.or(configured.and_then(|d| d.cmd.clone())),
             // A start in the argv form has no command line, and must not
             // inherit the one a shell-form run left behind.
             run: if opts.no_shell == Some(true) {
                 None
             } else {
-                opts.run.or(existing.and_then(|d| d.run.clone()))
+                opts.run.or(configured.and_then(|d| d.run.clone()))
             },
             no_shell: opts
                 .no_shell
@@ -428,13 +438,13 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.is_some_and(|d| d.scheduled_from_config)),
             cron_schedule: opts
                 .cron_schedule
-                .unwrap_or_else(|| existing.and_then(|d| d.cron_schedule.clone())),
+                .unwrap_or_else(|| configured.and_then(|d| d.cron_schedule.clone())),
             cron_retrigger: opts
                 .cron_retrigger
-                .or(existing.and_then(|d| d.cron_retrigger)),
+                .or(configured.and_then(|d| d.cron_retrigger)),
             cron_immediate: opts
                 .cron_immediate
-                .or(existing.and_then(|d| d.cron_immediate)),
+                .or(configured.and_then(|d| d.cron_immediate)),
             last_cron_triggered: existing.and_then(|d| d.last_cron_triggered),
             last_cron_run: existing.and_then(|d| d.last_cron_run),
             last_exit_success: opts
@@ -464,14 +474,16 @@ impl Supervisor {
                 .or(ready_base.and_then(|d| d.ready_cmd.clone())),
             health_cmd: opts
                 .health_cmd
-                .or(existing.and_then(|d| d.health_cmd.clone())),
+                .or(configured.and_then(|d| d.health_cmd.clone())),
             health_http: opts
                 .health_http
-                .or(existing.and_then(|d| d.health_http.clone())),
+                .or(configured.and_then(|d| d.health_http.clone())),
             health_port: opts
                 .health_port
-                .or(existing.and_then(|d| d.health_port.clone())),
-            port: opts.port.or_else(|| existing.and_then(|d| d.port.clone())),
+                .or(configured.and_then(|d| d.health_port.clone())),
+            port: opts
+                .port
+                .or_else(|| configured.and_then(|d| d.port.clone())),
             resolved_port: match opts.resolved_port {
                 Some(ports) => ports,
                 None => existing
@@ -481,7 +493,7 @@ impl Supervisor {
             depends: opts
                 .depends
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),
-            env: opts.env.or(existing.and_then(|d| d.env.clone())),
+            env: opts.env.or(configured.and_then(|d| d.env.clone())),
             watch: opts
                 .watch
                 .unwrap_or_else(|| existing.map(|d| d.watch.clone()).unwrap_or_default()),
@@ -490,12 +502,12 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.map(|d| d.watch_mode).unwrap_or_default()),
             watch_base_dir: opts
                 .watch_base_dir
-                .unwrap_or_else(|| existing.and_then(|d| d.watch_base_dir.clone())),
-            mise: opts.mise.or(existing.and_then(|d| d.mise)),
+                .unwrap_or_else(|| configured.and_then(|d| d.watch_base_dir.clone())),
+            mise: opts.mise.or(configured.and_then(|d| d.mise)),
             deferred_template_context: opts
                 .deferred_template_context
                 .unwrap_or_else(|| existing.and_then(|d| d.deferred_template_context.clone())),
-            user: opts.user.or(existing.and_then(|d| d.user.clone())),
+            user: opts.user.or(configured.and_then(|d| d.user.clone())),
             proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
             // active_port is intentionally NOT inherited from the existing daemon.
             // When a daemon restarts, the new process has not yet bound a port, so
@@ -504,16 +516,18 @@ impl Supervisor {
             // re-detected by detect_and_store_active_port once the new process is ready.
             active_port: opts.active_port,
             slug: opts.slug.or(existing.and_then(|d| d.slug.clone())),
-            memory_limit: opts.memory_limit.or(existing.and_then(|d| d.memory_limit)),
-            cpu_limit: opts.cpu_limit.or(existing.and_then(|d| d.cpu_limit)),
-            stop_signal: opts.stop_signal.or(existing.and_then(|d| d.stop_signal)),
+            memory_limit: opts
+                .memory_limit
+                .or(configured.and_then(|d| d.memory_limit)),
+            cpu_limit: opts.cpu_limit.or(configured.and_then(|d| d.cpu_limit)),
+            stop_signal: opts.stop_signal.or(configured.and_then(|d| d.stop_signal)),
             archive_hook: opts
                 .archive_hook
-                .or(existing.and_then(|d| d.archive_hook.clone())),
+                .or(configured.and_then(|d| d.archive_hook.clone())),
             log_format: opts
                 .log_format
-                .or(existing.and_then(|d| d.log_format.clone())),
-            pty: opts.pty.or(existing.and_then(|d| d.pty)),
+                .or(configured.and_then(|d| d.log_format.clone())),
+            pty: opts.pty.or(configured.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
             proxy_idle_timeout_ms: opts
                 .proxy_idle_timeout_ms

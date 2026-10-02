@@ -2356,6 +2356,7 @@ impl PitchforkTomlDaemon {
             pty: self.pty,
             // Explicit unless the proxy's start marks it otherwise.
             proxy_idle_timeout_ms: None,
+            replaces_saved_record: true,
         }
     }
 }
@@ -2485,6 +2486,8 @@ user = "postgres"
 
         let opts = daemon.to_run_options(&id, vec!["node".to_string(), "server.js".to_string()]);
         assert_eq!(opts.user.as_deref(), Some("postgres"));
+        // A start from config describes the daemon in full.
+        assert!(opts.replaces_saved_record);
     }
 
     #[test]

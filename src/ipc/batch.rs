@@ -1211,6 +1211,8 @@ impl IpcClient {
                 mise: None,
                 slug: None,
                 proxy: None,
+                // Only part of the saved record: what it leaves unset is kept.
+                replaces_saved_record: false,
                 ..RunOptions::default()
             };
             if should_inject_default_ready_delay(&run_opts) {
@@ -1470,6 +1472,9 @@ impl IpcClient {
             mise: None,
             slug: None,
             proxy: None,
+            // An ad-hoc run is the whole daemon: nothing a config daemon of
+            // the same id set carries over.
+            replaces_saved_record: true,
             ..RunOptions::default()
         };
         if should_inject_default_ready_delay(&run_opts) {
