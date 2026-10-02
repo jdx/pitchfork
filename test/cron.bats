@@ -1052,16 +1052,19 @@ EOF2
   # The start itself used up the retries.
   wait_for_logs cron_retries "attempt=2" 10
 
-  # The next scheduled run begins again at attempt 0 and is retried.
-  local first=0 retried=0
+  # The next scheduled run begins again at attempt 0 and is retried through
+  # its last attempt.
+  local first=0 retried=0 exhausted=0
   for _ in $(seq 1 60); do
     first=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=0' || true)
     retried=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=1' || true)
-    [[ "$first" -ge 2 && "$retried" -ge 2 ]] && break
+    exhausted=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=2' || true)
+    [[ "$first" -ge 2 && "$retried" -ge 2 && "$exhausted" -ge 2 ]] && break
     sleep 1
   done
   [[ "$first" -ge 2 ]]
   [[ "$retried" -ge 2 ]]
+  [[ "$exhausted" -ge 2 ]]
 
   pitchfork stop cron_retries || true
 }
