@@ -2191,6 +2191,7 @@ pub struct PitchforkTomlDaemon {
     pub mise: Option<bool>,
     /// Pitchfork's template context as JSON, set while rendering when `run` was left
     /// unrendered for `mise x` to finish. Never read from or written to a file.
+    #[schemars(skip)]
     pub deferred_template_context: Option<String>,
     /// Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.
     pub user: Option<String>,
