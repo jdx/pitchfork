@@ -338,7 +338,12 @@ impl Supervisor {
                 .run
                 .argv()
                 .map_err(|e| miette::miette!("failed to parse command for daemon {id}: {e}"))?;
-            Ok(config.to_run_options(&id, cmd))
+            let mut opts = config.to_run_options(&id, cmd);
+            // A client's start resolves this from the daemon's project before it
+            // reaches the supervisor, which would otherwise use its own settings.
+            // Rendering assumed the project's, so launch has to as well.
+            opts.mise = Some(crate::template::mise_enabled(&config));
+            Ok(opts)
         })
         .await
         .map_err(|e| miette::miette!("rendering daemon config panicked: {e}"))?

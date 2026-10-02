@@ -493,11 +493,18 @@ pub const TEMPLATE_CONTEXT_ENV: &str = "PITCHFORK_TEMPLATE_CONTEXT";
 /// too; a command deferred to a launch without mise would reach the shell with its
 /// template tags unrendered.
 fn runs_under_mise(config: &PitchforkTomlDaemon) -> bool {
-    let enabled = config.mise.unwrap_or_else(|| {
+    mise_enabled(config) && settings().resolve_mise_bin().is_some()
+}
+
+/// Whether the daemon asks for `mise x`: its own `mise`, else `general.mise` as set
+/// for the daemon's project. A start that does not go through a client's request
+/// must use this same answer, or it would launch without the wrapper that a
+/// deferred command needs.
+pub(crate) fn mise_enabled(config: &PitchforkTomlDaemon) -> bool {
+    config.mise.unwrap_or_else(|| {
         let dir = crate::ipc::batch::resolve_config_base_dir(config.path.as_deref());
         crate::settings::Settings::load_from_dir(&dir).general.mise
-    });
-    enabled && settings().resolve_mise_bin().is_some()
+    })
 }
 
 fn contains_template_syntax(template: &str) -> bool {
