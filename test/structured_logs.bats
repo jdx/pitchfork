@@ -197,6 +197,8 @@ EOF
   cat > "$PWD/emit.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' 'level=info msg=hi id=007 code="42" status=500'
+# What the old parsing made of the line above: it must match neither filter.
+printf '%s\n' 'level=info msg=bye id=7 code=42 status=200'
 sleep 3600
 EOF
   chmod +x "$PWD/emit.sh"
@@ -211,14 +213,16 @@ log_format = "logfmt"
 EOF
 
   pitchfork start logfmt_types
-  wait_for_logs logfmt_types "msg=hi" 10
+  wait_for_logs logfmt_types "msg=bye" 10
 
   PITCHFORK_LOG=error run pitchfork logs logfmt_types --raw --no-timestamp --field id=007
   assert_success
   assert_output --partial "msg=hi"
+  refute_output --partial "msg=bye"
   PITCHFORK_LOG=error run pitchfork logs logfmt_types --raw --no-timestamp --jq '.fields.code == "42" and .fields.status >= 500'
   assert_success
   assert_output --partial "msg=hi"
+  refute_output --partial "msg=bye"
 
   pitchfork stop logfmt_types
 }

@@ -65,7 +65,7 @@ fn parse_json(line: &str) -> Option<ParsedLog> {
     let value: Value = serde_json::from_str(line.trim()).ok()?;
     let obj = value.as_object()?;
 
-    let level = extract_level(obj);
+    let level = extract_level(obj, false);
     let msg = extract_msg(obj);
     let logger = extract_logger(obj);
 
@@ -102,7 +102,8 @@ fn parse_logfmt(line: &str) -> Option<ParsedLog> {
         obj.insert(key.clone(), json_val);
     }
 
-    let level = extract_level(&obj);
+    // Logfmt has no numbers of its own, so `level="30"` is pino's info.
+    let level = extract_level(&obj, true);
     let msg = extract_msg(&obj);
     let logger = extract_logger(&obj);
     let value = Value::Object(obj);
@@ -158,9 +159,22 @@ fn unquoted_logfmt_value(value: &str) -> Value {
             }),
     };
     match typed {
-        Some(typed) if serde_json::to_string(&typed).is_ok_and(|text| text == value) => typed,
+        Some(typed) if json_spelling_is(&typed, value) => typed,
         _ => Value::String(value.to_string()),
     }
+}
+
+/// Whether `typed` is written as JSON exactly as `text`, checked in a stack
+/// buffer: this runs for every numeric field of every logfmt line.
+fn json_spelling_is(typed: &Value, text: &str) -> bool {
+    // Longer than any number, boolean or null serde_json writes.
+    let mut buf = [0u8; 40];
+    let mut cursor = std::io::Cursor::new(&mut buf[..]);
+    if serde_json::to_writer(&mut cursor, typed).is_err() {
+        return false;
+    }
+    let len = cursor.position() as usize;
+    &buf[..len] == text.as_bytes()
 }
 
 /// Returns `None` if the line doesn't look like logfmt (no `=` found, or
@@ -302,10 +316,12 @@ fn unescape_logfmt_value(s: &str) -> String {
 ///
 /// Handles both string values (case-insensitive) and integer values
 /// (pino/syslog style). See `normalize_level_value` for the mapping.
-fn extract_level(obj: &Map<String, Value>) -> Option<String> {
+/// `numeric_text` also reads a string of digits as an integer level, for
+/// formats like logfmt whose values are all text.
+fn extract_level(obj: &Map<String, Value>, numeric_text: bool) -> Option<String> {
     for key in &["level", "severity", "lvl", "PRIORITY", "@level"] {
         if let Some(val) = obj.get(*key)
-            && let Some(level) = normalize_level_value(val)
+            && let Some(level) = normalize_level_value(val, numeric_text)
         {
             return Some(level);
         }
@@ -317,26 +333,34 @@ fn extract_level(obj: &Map<String, Value>) -> Option<String> {
 ///
 /// String matching is case-insensitive. Integer values follow pino
 /// (10-60) and syslog/RFC 5424 (0-7) conventions.
-fn normalize_level_value(val: &Value) -> Option<String> {
+fn normalize_level_value(val: &Value, numeric_text: bool) -> Option<String> {
     match val {
-        Value::String(s) => normalize_level_str(s),
-        Value::Number(n) => {
-            let n = n.as_i64()?;
-            // pino: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
-            match n {
-                50 | 60 => Some("error".into()),
-                40 => Some("warn".into()),
-                30 => Some("info".into()),
-                20 => Some("debug".into()),
-                10 => Some("trace".into()),
-                // syslog/RFC 5424: 0=emerg..7=debug
-                0..=3 => Some("error".into()),
-                4 | 5 => Some("warn".into()),
-                6 => Some("info".into()),
-                7 => Some("debug".into()),
-                _ => None,
-            }
-        }
+        Value::String(s) => normalize_level_str(s).or_else(|| {
+            numeric_text
+                .then(|| s.parse::<i64>().ok())
+                .flatten()
+                .and_then(normalize_level_number)
+        }),
+        Value::Number(n) => normalize_level_number(n.as_i64()?),
+        _ => None,
+    }
+}
+
+/// Normalize an integer level, following pino (10-60) and syslog/RFC 5424
+/// (0-7).
+fn normalize_level_number(n: i64) -> Option<String> {
+    // pino: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
+    match n {
+        50 | 60 => Some("error".into()),
+        40 => Some("warn".into()),
+        30 => Some("info".into()),
+        20 => Some("debug".into()),
+        10 => Some("trace".into()),
+        // syslog/RFC 5424: 0=emerg..7=debug
+        0..=3 => Some("error".into()),
+        4 | 5 => Some("warn".into()),
+        6 => Some("info".into()),
+        7 => Some("debug".into()),
         _ => None,
     }
 }
@@ -458,6 +482,35 @@ mod tests {
         assert_eq!(fields["code"], Value::String("007".into()));
         assert_eq!(fields["count"], Value::String("42".into()));
         assert_eq!(fields["ok"], Value::String("true".into()));
+    }
+
+    /// A numeric level keeps its text in the fields but is still mapped to a
+    /// severity, quoted or not, as it was when it was stored as a number.
+    #[test]
+    fn test_logfmt_numeric_level_text_is_normalized() {
+        for (line, level) in [
+            (r#"level="30" msg=hi"#, "info"),
+            ("level=50 msg=hi", "error"),
+            (r#"PRIORITY="3" msg=hi"#, "error"),
+            ("level=03 msg=hi", "error"),
+        ] {
+            assert_eq!(
+                parse(line, "logfmt").level.as_deref(),
+                Some(level),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            logfmt_fields(r#"level="30" msg=hi"#)["level"],
+            Value::String("30".into())
+        );
+    }
+
+    /// JSON keeps its own types, so a level written as a string is not read
+    /// as a number.
+    #[test]
+    fn test_json_numeric_level_string_is_not_normalized() {
+        assert_eq!(parse(r#"{"level":"30","msg":"hi"}"#, "json").level, None);
     }
 
     #[test]
