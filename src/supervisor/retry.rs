@@ -89,7 +89,7 @@ impl Supervisor {
             fire_hook(
                 HookType::OnRetry,
                 id.clone(),
-                dir.clone(),
+                super::hooks::HookDirs::new(dir.clone(), daemon.watch_base_dir.clone()),
                 daemon.retry_count + 1,
                 daemon.env.clone(),
                 // Per-attempt value: run_once clears the record when an

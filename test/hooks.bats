@@ -664,3 +664,58 @@ EOF
   run cat "$marker"
   assert_output "18191"
 }
+
+# A daemon's hooks live in its project's config, wherever `dir` runs it.
+@test "hooks fire for a daemon whose dir is outside its project" {
+  local elsewhere
+  elsewhere="$(normalize_path "$TEST_TEMP_DIR/elsewhere")"
+  mkdir -p "$TEST_TEMP_DIR/elsewhere" "$TEST_TEMP_DIR/project"
+  cd "$TEST_TEMP_DIR/project"
+
+  create_pitchfork_toml <<EOF
+[daemons.away]
+run = "sleep 60"
+dir = "$elsewhere"
+ready_delay = 1
+
+[daemons.away.hooks]
+on_ready = "touch $TEST_TEMP_DIR/away_ready"
+on_stop = "touch $TEST_TEMP_DIR/away_stop"
+EOF
+
+  pitchfork supervisor start
+  pitchfork start away
+  wait_for_file "$TEST_TEMP_DIR/away_ready"
+
+  pitchfork stop away
+  wait_for_file "$TEST_TEMP_DIR/away_stop"
+}
+
+@test "on_output keeps firing after a retry of a daemon whose dir is outside its project" {
+  local elsewhere
+  elsewhere="$(normalize_path "$TEST_TEMP_DIR/elsewhere")"
+  mkdir -p "$TEST_TEMP_DIR/elsewhere" "$TEST_TEMP_DIR/project"
+  cd "$TEST_TEMP_DIR/project"
+
+  create_pitchfork_toml <<EOF
+[daemons.away_out]
+run = "echo away_line; sleep 1; exit 1"
+dir = "$elsewhere"
+retry = 1
+ready_delay = 0
+
+[daemons.away_out.hooks]
+on_output = { filter = "away_line", run = "echo fired >> $TEST_TEMP_DIR/away_out" }
+EOF
+
+  pitchfork supervisor start
+  pitchfork start away_out || true
+
+  # One firing per attempt: the first run and its retry.
+  for _ in $(seq 1 50); do
+    [[ "$(grep -c fired "$TEST_TEMP_DIR/away_out" 2>/dev/null || true)" -ge 2 ]] && break
+    sleep 0.2
+  done
+  run grep -c fired "$TEST_TEMP_DIR/away_out"
+  assert_output "2"
+}

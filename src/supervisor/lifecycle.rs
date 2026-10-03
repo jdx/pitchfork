@@ -655,7 +655,10 @@ impl Supervisor {
                             fire_hook(
                                 HookType::OnRetry,
                                 id.clone(),
-                                opts.dir.0.clone(),
+                                super::hooks::HookDirs::new(
+                                    opts.dir.0.clone(),
+                                    opts.watch_base_dir.clone(),
+                                ),
                                 attempt + 1,
                                 opts.env.clone(),
                                 resolved_ports,
@@ -1420,6 +1423,8 @@ impl Supervisor {
             .or(implicit_ready_port);
         let ready_cmd = (!opts.oneshot).then(|| opts.ready_cmd.clone()).flatten();
         let daemon_dir = opts.dir.0.clone();
+        let hook_dirs =
+            super::hooks::HookDirs::new(daemon_dir.clone(), opts.watch_base_dir.clone());
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
         let hook_daemon_env = opts.env.clone();
@@ -1788,7 +1793,7 @@ impl Supervisor {
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
-                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                            fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                             stop_cmd_probe_state(&mut cmd_probe);
                             http_deadline = None;
                             cmd_deadline = None;
@@ -1822,7 +1827,7 @@ impl Supervisor {
                                 let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
                                 if elapsed.is_none_or(|e| e >= on_output_debounce) {
                                     on_output_last_fired = Some(now);
-                                    hooks::fire_output_hook(id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), hook.run.clone(), line_clean.clone()).await;
+                                    hooks::fire_output_hook(id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), hook.run.clone(), line_clean.clone()).await;
                                 }
                             }
                         }
@@ -1908,7 +1913,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                                    fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                                     http_check_interval = None;
                                     http_deadline = None;
                                     stop_cmd_probe_state(&mut cmd_probe);
@@ -1976,7 +1981,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                                    fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                                     // Stop checking once ready
                                     port_check_interval = None;
                                     port_deadline = None;
@@ -2057,7 +2062,7 @@ impl Supervisor {
                                 if let Some(tx) = ready_tx.take() {
                                     let _ = tx.send(Ok(()));
                                 }
-                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                                fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                                 cmd_respawn_delay = None;
                                 cmd_deadline = None;
                                 http_deadline = None;
@@ -2139,7 +2144,7 @@ impl Supervisor {
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
-                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                            fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                             if !active_port_spawned && has_port_config {
                                 active_port_spawned = true;
                                 detect_and_store_active_port(id.clone(), daemon_pid);
@@ -2394,7 +2399,7 @@ impl Supervisor {
                 fire_hook(
                     hook_type,
                     id.clone(),
-                    daemon_dir.clone(),
+                    hook_dirs.clone(),
                     hook_retry_count,
                     hook_daemon_env.clone(),
                     hook_resolved_ports.clone(),

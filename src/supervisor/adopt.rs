@@ -457,10 +457,13 @@ impl Supervisor {
                 .await;
         }
         let id = daemon.id.clone();
-        let daemon_dir = daemon
-            .dir
-            .clone()
-            .unwrap_or_else(|| crate::env::CWD.clone());
+        let hook_dirs = super::hooks::HookDirs::new(
+            daemon
+                .dir
+                .clone()
+                .unwrap_or_else(|| crate::env::CWD.clone()),
+            daemon.watch_base_dir.clone(),
+        );
         let hook_env = daemon.env.clone();
         let hook_resolved_ports = daemon.resolved_port.clone();
         let hook_retry = daemon.retry;
@@ -650,7 +653,7 @@ impl Supervisor {
                 fire_hook(
                     hook_type,
                     id.clone(),
-                    daemon_dir.clone(),
+                    hook_dirs.clone(),
                     hook_retry_count,
                     hook_env.clone(),
                     hook_resolved_ports.clone(),

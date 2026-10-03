@@ -51,6 +51,32 @@ fn get_hook_cmd(
     })
 }
 
+/// Where a run's hooks are read from and run, fixed when that run starts.
+///
+/// They are read from the directory of the config that defines the daemon,
+/// rather than its working directory, which `dir` can put outside the project
+/// where that config is not found. They run in the working directory. Fixed
+/// per run rather than looked up from the daemon's record when a hook fires,
+/// so a run's `on_stop` or `on_exit` is not read from a replacement's project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HookDirs {
+    run_dir: PathBuf,
+    config_root: PathBuf,
+}
+
+impl HookDirs {
+    /// `project_dir` is the directory of the config that defines the daemon,
+    /// recorded as `watch_base_dir`. An ad-hoc daemon has none, so its hooks
+    /// are read from its working directory.
+    pub(crate) fn new(run_dir: PathBuf, project_dir: Option<PathBuf>) -> Self {
+        let config_root = project_dir.unwrap_or_else(|| run_dir.clone());
+        Self {
+            run_dir,
+            config_root,
+        }
+    }
+}
+
 async fn load_hook_config(daemon_dir: PathBuf) -> Result<PitchforkToml> {
     tokio::task::spawn_blocking(move || PitchforkToml::all_merged_all_namespaces_from(&daemon_dir))
         .await
@@ -85,7 +111,7 @@ fn inject_port_env(command: &mut tokio::process::Command, resolved_ports: &[u16]
 
 /// Fire a hook command as a fire-and-forget tokio task.
 ///
-/// Reads the hook command from fresh config rooted at the daemon's directory,
+/// Reads the hook command from fresh config rooted at the daemon's project,
 /// then spawns it in the background. Errors are logged but never block the caller.
 ///
 /// `resolved_ports` must be snapshotted by the caller before spawning this
@@ -98,14 +124,14 @@ fn inject_port_env(command: &mut tokio::process::Command, resolved_ports: &[u16]
 pub(crate) async fn fire_hook(
     hook_type: HookType,
     daemon_id: DaemonId,
-    daemon_dir: PathBuf,
+    dirs: HookDirs,
     retry_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
     resolved_ports: Vec<u16>,
     extra_env: Vec<(String, String)>,
 ) {
     let handle = tokio::spawn(async move {
-        let pt = load_hook_config(daemon_dir.clone())
+        let pt = load_hook_config(dirs.config_root.clone())
             .await
             .unwrap_or_else(|e| {
                 warn!("Failed to load config for hook '{hook_type}': {e}");
@@ -137,7 +163,7 @@ pub(crate) async fn fire_hook(
             }
         };
         command
-            .current_dir(&daemon_dir)
+            .current_dir(&dirs.run_dir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
@@ -192,7 +218,7 @@ pub(crate) async fn fire_hook(
 /// (same contract as `fire_hook`).
 pub(crate) async fn fire_output_hook(
     daemon_id: DaemonId,
-    daemon_dir: PathBuf,
+    dirs: HookDirs,
     retry_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
     resolved_ports: Vec<u16>,
@@ -201,7 +227,7 @@ pub(crate) async fn fire_output_hook(
 ) {
     let handle = tokio::spawn(async move {
         // Render Tera templates in output hook command
-        let pt = load_hook_config(daemon_dir.clone())
+        let pt = load_hook_config(dirs.config_root.clone())
             .await
             .unwrap_or_default();
         let cmd = match render_hook_template(&cmd, &daemon_id, &pt).await {
@@ -222,7 +248,7 @@ pub(crate) async fn fire_output_hook(
             }
         };
         command
-            .current_dir(&daemon_dir)
+            .current_dir(&dirs.run_dir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
@@ -323,6 +349,16 @@ async fn render_hook_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hooks_are_read_from_the_project_of_a_daemon_running_elsewhere() {
+        let dirs = HookDirs::new(PathBuf::from("/elsewhere"), Some(PathBuf::from("/project")));
+        assert_eq!(dirs.config_root, PathBuf::from("/project"));
+        assert_eq!(dirs.run_dir, PathBuf::from("/elsewhere"));
+        // An ad-hoc daemon has no project; its working directory is used.
+        let dirs = HookDirs::new(PathBuf::from("/elsewhere"), None);
+        assert_eq!(dirs.config_root, PathBuf::from("/elsewhere"));
+    }
 
     #[tokio::test]
     async fn hook_config_is_loaded_from_each_daemon_directory() {
