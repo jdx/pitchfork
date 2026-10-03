@@ -1046,7 +1046,7 @@ EOF2
 [daemons.cron_retries]
 run = "echo attempt=$PITCHFORK_RETRY_COUNT; sleep 1; exit 1"
 retry = 2
-cron = { schedule = "*/15 * * * * *", retrigger = "always" }
+cron = { schedule = "*/15 * * * * *", retrigger = "finish" }
 EOF2
   run pitchfork start cron_retries
   # The start itself used up the retries.
