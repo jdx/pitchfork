@@ -79,7 +79,8 @@ _wait_for_port_bound() {
 }
 
 @test "port conflict detection fails without auto-bump" {
-  local port=45678
+  local port
+  port="$(free_port)"
   local blocker_pid
   blocker_pid=$(occupy_port "$port")
   _wait_for_port_bound "$port" || true
@@ -101,7 +102,9 @@ EOF
 }
 
 @test "port auto-bump succeeds when expected port is occupied" {
-  local port=45679
+  # The daemon is bumped to the next port, so that one is claimed too.
+  local port
+  port="$(free_port_run 2)"
   local blocker_pid
   blocker_pid=$(occupy_port "$port")
 
@@ -141,7 +144,8 @@ EOF
 }
 
 @test "PORT environment variable is injected into daemon" {
-  local port=45800
+  local port
+  port="$(free_port)"
   local marker="$TEST_TEMP_DIR/port_test_marker"
 
   cat > test_port.sh <<'EOF'
@@ -168,7 +172,8 @@ EOF
 }
 
 @test "CLI --expected-port and --bump with occupied port" {
-  local port=45681
+  local port
+  port="$(free_port_run 2)"
   local blocker_pid
   blocker_pid=$(occupy_port "$port")
   _wait_for_port_bound "$port" || true
@@ -190,7 +195,9 @@ EOF
 }
 
 @test "PITCHFORK_PORT_BUMP_ATTEMPTS env var limits bump attempts" {
-  local base_port=45710
+  # Three occupied ports, then the one the daemon is bumped to.
+  local base_port
+  base_port="$(free_port_run 4)"
   local pids=()
   pids+=("$(occupy_port "$base_port")")
   pids+=("$(occupy_port "$((base_port + 1))")")
@@ -258,7 +265,8 @@ time.sleep(300)
 # restart that finds the expected port free again must probe that port, not
 # the one the last run bumped it to.
 @test "restarting a bumped ad-hoc daemon probes the port it starts on" {
-  local port=45695
+  local port
+  port="$(free_port_run 2)"
   kill_port "$port"
   kill_port "$((port + 1))"
   local blocker_pid
@@ -290,7 +298,8 @@ EOF
 # A ready port outside the expected ports is not bumped, even when it is the
 # number a bump would produce. A restart keeps probing it as given.
 @test "restarting a bumped ad-hoc daemon keeps a ready port given as another port" {
-  local port=45700
+  local port
+  port="$(free_port_run 2)"
   kill_port "$port"
   kill_port "$((port + 1))"
   local blocker_pid
