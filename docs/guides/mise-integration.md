@@ -51,6 +51,22 @@ mise = true
 mise_bin = "/opt/tools/mise"
 ```
 
+`mise_bin` in a project's `pitchfork.toml` applies to that project's daemons,
+whichever directory the supervisor was started in. A relative path is taken
+from the project's directory, so a project can point at a mise it ships:
+
+```toml
+[settings.general]
+mise = true
+mise_bin = "tools/mise"
+```
+
+`PITCHFORK_MISE_BIN` in the environment of the `pitchfork` command that starts a
+daemon takes precedence over the project's files. When the project does not set
+`mise_bin`, the supervisor uses its own setting, with a relative path taken from
+the directory the supervisor was started in, and otherwise searches the
+locations above.
+
 If mise cannot be found, pitchfork logs a warning and runs without it. Check
 the supervisor logs if a daemon cannot find its runtime.
 

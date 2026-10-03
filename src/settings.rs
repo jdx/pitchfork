@@ -199,6 +199,14 @@ pub struct SettingsGeneral {
     /// - on Windows, `mise.exe` on `PATH`
     ///
     /// Set this to an absolute path if mise is installed elsewhere.
+    ///
+    /// For a daemon defined in a project's `pitchfork.toml`, the value comes
+    /// from that project, read when the daemon is started, and a relative path
+    /// is taken from the project's directory. `PITCHFORK_MISE_BIN` in the
+    /// environment of the `pitchfork` command that starts the daemon takes
+    /// precedence over the project's files. When the project does not set it,
+    /// the supervisor uses its own value, where a relative path is taken from
+    /// the directory the supervisor was started in.
     #[usage(env = "PITCHFORK_MISE_BIN", default = "")]
     pub mise_bin: String,
 
