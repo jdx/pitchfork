@@ -10,6 +10,7 @@ pub mod daemon;
 pub mod daemon_id;
 pub mod daemon_list;
 pub mod daemon_status;
+pub mod deprecated;
 pub mod deps;
 pub mod env;
 pub mod error;

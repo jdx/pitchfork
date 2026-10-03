@@ -1,4 +1,5 @@
 use crate::daemon_id::DaemonId;
+use crate::deprecated_at;
 use crate::error::{ConfigParseError, DependencyError, FileError, find_similar_daemon};
 use crate::settings::SettingsPartial;
 use crate::settings::settings;
@@ -1393,8 +1394,11 @@ impl PitchforkToml {
                 }
                 (Some(port), None) => Some(port),
                 (None, Some(deprecated)) => {
-                    warn!(
-                        "daemon {short_name}: expected_port/auto_bump_port/port_bump_attempts are deprecated, use [daemons.{short_name}.port] instead"
+                    deprecated_at!(
+                        "2026-10-03",
+                        "2027-10-03",
+                        format!("port-fields:{id}"),
+                        "daemon {short_name}: expected_port/auto_bump_port/port_bump_attempts are deprecated, use [daemons.{short_name}.port] instead."
                     );
                     Some(deprecated)
                 }

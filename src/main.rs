@@ -10,6 +10,7 @@ mod daemon;
 mod daemon_id;
 mod daemon_list;
 mod daemon_status;
+mod deprecated;
 mod deps;
 mod env;
 mod error;
