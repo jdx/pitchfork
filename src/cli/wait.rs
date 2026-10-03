@@ -84,19 +84,21 @@ impl Wait {
         // resolved target in argument order. The (possibly stale) state
         // snapshot is only used to learn the initial pids.
         let sf = StateFile::get();
+        let supervisor_live = supervisor_is_live(sf);
         let mut watched_ids: Vec<DaemonId> = Vec::new();
-        let mut polled: Vec<(DaemonId, u32)> = Vec::new();
+        let mut polled: Vec<Watched> = Vec::new();
         for id in &ids {
             match sf.daemons.get(id) {
-                Some(daemon) if !is_terminal_status(&daemon.status) => {
-                    // Non-terminal: evaluate the daemon after it stops and
-                    // poll its pid to learn when; a missing pid means the
-                    // process is already gone, which the bounded re-read
-                    // after the poll loop resolves (missing maps to 1).
+                Some(daemon)
+                    if !is_terminal_status(&daemon.status)
+                        || retry_pending(sf, daemon, supervisor_live) =>
+                {
+                    // Not finished: evaluate the daemon after it stops for
+                    // good. Its pid, when it has one, tells when the current
+                    // attempt ends; the state then tells whether another
+                    // attempt follows.
                     watched_ids.push(id.clone());
-                    if let Some(pid) = daemon.pid {
-                        polled.push((id.clone(), pid));
-                    }
+                    polled.push(Watched::new(id.clone(), daemon.pid));
                 }
                 Some(_) => {
                     // Already terminal: evaluate immediately, its exit
@@ -165,7 +167,7 @@ impl Wait {
                                 // were not running at snapshot time must not be
                                 // killed here either.
                                 let stop_ids: Vec<DaemonId> =
-                                    remaining.iter().map(|(id, _)| id.clone()).collect();
+                                    remaining.iter().map(|w| w.id.clone()).collect();
                                 let ipc = ipc.as_ref().expect("--kill connects IPC upfront");
                                 if let Err(e) = ipc.stop_daemons(&stop_ids).await {
                                     warn!("failed to stop waited daemons on signal: {e}");
@@ -183,14 +185,12 @@ impl Wait {
                         }
                     }
                     _ = interval.tick() => {
-                        let mut i = 0;
-                        while i < remaining.len() {
-                            let (_, pid) = &remaining[i];
-                            if !PROCS.is_running(*pid) {
-                                remaining.remove(i);
-                            } else {
-                                i += 1;
-                            }
+                        // The state is read only once a watched process has
+                        // gone, to learn whether the daemon is done.
+                        if remaining.iter().any(|w| !w.process_running()) {
+                            let sf = StateFile::read(&*env::PITCHFORK_STATE_FILE).ok();
+                            let supervisor_live = sf.as_ref().is_some_and(supervisor_is_live);
+                            remaining.retain_mut(|w| w.still_running(sf.as_ref(), supervisor_live));
                         }
                         if remaining.is_empty() {
                             break;
@@ -305,6 +305,89 @@ fn status_exit_code(status: &DaemonStatus) -> i32 {
     }
 }
 
+/// How long a daemon whose process has gone may keep a non-final status
+/// before it is evaluated anyway. The supervisor records the exit, or starts
+/// the next attempt, only after reading the output left in the process's pipe
+/// (which a child holding it open can drag out to the drain timeout), and the
+/// state file shows it at the next flush. Evaluated sooner, a failed attempt
+/// whose retry has yet to start would be reported as the result.
+const SETTLE_TIMEOUT: time::Duration = crate::supervisor::EXIT_OUTPUT_DRAIN_TIMEOUT
+    .saturating_add(crate::supervisor::STATE_FLUSH_INTERVAL)
+    .saturating_add(time::Duration::from_secs(2));
+
+/// A daemon being waited on, and the process of its current attempt.
+struct Watched {
+    id: DaemonId,
+    pid: Option<u32>,
+    /// When its process was first seen gone while the record was not final.
+    gone_since: Option<time::Instant>,
+}
+
+impl Watched {
+    fn new(id: DaemonId, pid: Option<u32>) -> Self {
+        Self {
+            id,
+            pid,
+            gone_since: None,
+        }
+    }
+
+    fn process_running(&self) -> bool {
+        self.pid.is_some_and(|pid| PROCS.is_running(pid))
+    }
+
+    /// Whether to keep waiting: the current attempt is still running, the
+    /// next one has started or will start, or the supervisor has not yet
+    /// recorded how the last one ended.
+    fn still_running(&mut self, sf: Option<&StateFile>, supervisor_live: bool) -> bool {
+        if self.process_running() {
+            return true;
+        }
+        let Some(sf) = sf else { return false };
+        let Some(daemon) = sf.daemons.get(&self.id) else {
+            return false;
+        };
+        if let Some(pid) = daemon.pid
+            && Some(pid) != self.pid
+            && PROCS.is_running(pid)
+        {
+            // The next attempt has started.
+            self.pid = Some(pid);
+            self.gone_since = None;
+            return true;
+        }
+        if is_terminal_status(&daemon.status) {
+            if retry_pending(sf, daemon, supervisor_live) {
+                self.pid = None;
+                self.gone_since = None;
+                return true;
+            }
+            return false;
+        }
+        let gone_since = *self.gone_since.get_or_insert_with(time::Instant::now);
+        gone_since.elapsed() < SETTLE_TIMEOUT
+    }
+}
+
+/// Whether the supervisor will start this daemon again: it failed with no
+/// process left and has retries to spare, which the supervisor's retry
+/// checker (or a start sleeping out a backoff) still runs. A disabled
+/// daemon, or one whose supervisor is gone, is not retried.
+fn retry_pending(sf: &StateFile, daemon: &crate::daemon::Daemon, supervisor_live: bool) -> bool {
+    supervisor_live
+        && daemon.status.is_errored()
+        && daemon.pid.is_none()
+        && daemon.retry.count() > 0
+        && daemon.retry_count < daemon.retry.count()
+        && !sf.disabled.contains(&daemon.id)
+}
+
+fn supervisor_is_live(sf: &StateFile) -> bool {
+    sf.daemons
+        .get(&DaemonId::pitchfork())
+        .is_some_and(crate::supervisor::supervisor_record_is_live)
+}
+
 /// Whether the supervisor has recorded a final status for the daemon, as
 /// opposed to the transient Running/Waiting/Stopping states.
 fn is_terminal_status(status: &DaemonStatus) -> bool {
@@ -338,4 +421,72 @@ async fn read_terminal_statuses(ids: &[DaemonId]) -> Vec<(DaemonId, DaemonStatus
         time::sleep(time::Duration::from_millis(50)).await;
     }
     fresh_statuses(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::Daemon;
+
+    fn failed(retry: u32, retry_count: u32) -> Daemon {
+        Daemon {
+            id: DaemonId::new("proj", "api"),
+            status: DaemonStatus::Errored(3),
+            retry: crate::config_types::Retry(retry),
+            retry_count,
+            ..Default::default()
+        }
+    }
+
+    fn state_with(daemon: &Daemon) -> StateFile {
+        let mut sf = StateFile::new(std::path::PathBuf::from("state.toml"));
+        sf.daemons.insert(daemon.id.clone(), daemon.clone());
+        sf
+    }
+
+    #[test]
+    fn a_failed_attempt_with_retries_left_is_not_the_end() {
+        let daemon = failed(2, 0);
+        let sf = state_with(&daemon);
+        assert!(retry_pending(&sf, &daemon, true));
+
+        let mut watched = Watched::new(daemon.id.clone(), None);
+        assert!(watched.still_running(Some(&sf), true));
+    }
+
+    #[test]
+    fn the_last_attempt_failing_is_the_end() {
+        let daemon = failed(2, 2);
+        let sf = state_with(&daemon);
+        assert!(!retry_pending(&sf, &daemon, true));
+
+        let mut watched = Watched::new(daemon.id.clone(), None);
+        assert!(!watched.still_running(Some(&sf), true));
+    }
+
+    #[test]
+    fn no_retry_follows_without_a_supervisor_or_when_disabled() {
+        let daemon = failed(2, 0);
+        let mut sf = state_with(&daemon);
+        assert!(!retry_pending(&sf, &daemon, false));
+
+        sf.disabled.insert(daemon.id.clone());
+        assert!(!retry_pending(&sf, &daemon, true));
+    }
+
+    #[test]
+    fn an_exit_not_yet_recorded_is_waited_out() {
+        // The process is gone but the record still says running.
+        let daemon = Daemon {
+            id: DaemonId::new("proj", "api"),
+            status: DaemonStatus::Running,
+            ..Default::default()
+        };
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), None);
+        assert!(watched.still_running(Some(&sf), true));
+
+        watched.gone_since = Some(time::Instant::now() - SETTLE_TIMEOUT);
+        assert!(!watched.still_running(Some(&sf), true));
+    }
 }

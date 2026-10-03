@@ -206,6 +206,13 @@ pub async fn start_if_not_running() -> Result<()> {
 /// have stopped, which can take a while.
 pub(crate) const IPC_SOCKET_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a daemon's monitor keeps reading output left in its pipe after
+/// the process exits, before it records the exit. A child that inherited the
+/// pipe can hold it open for all of that.
+pub(crate) const EXIT_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often changes to the state are written to the state file.
+pub(crate) const STATE_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+
 /// How long `close()` waits for the LAN IP monitor to stop on its own.
 const LAN_MONITOR_STOP_WAIT: Duration = Duration::from_secs(1);
 /// How long `close()` waits for the DNS resolver to stop on its own.
@@ -1227,7 +1234,7 @@ impl Supervisor {
         let cancel = tokio_util::sync::CancellationToken::new();
         *self.flush_cancel.lock().unwrap() = Some(cancel.clone());
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(1));
+            let mut interval = time::interval(STATE_FLUSH_INTERVAL);
             interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {

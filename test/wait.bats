@@ -101,6 +101,42 @@ EOF
   assert_failure 7
 }
 
+@test "wait follows a failed daemon through its retries" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_retry]
+run = "echo attempt; if [ ! -f $TEST_TEMP_DIR/retried ]; then touch $TEST_TEMP_DIR/retried; sleep 2; exit 3; fi; sleep 2; echo retry_done"
+retry = 2
+ready_delay = 1
+EOF
+
+  run pitchfork start wait_retry
+  assert_success
+
+  # The first attempt exits 3; the retry that follows succeeds, so `wait`
+  # must not report the first attempt's failure.
+  run pitchfork wait wait_retry
+  assert_success
+  run pitchfork logs wait_retry --raw
+  assert_output --partial "retry_done"
+}
+
+@test "wait reports the last attempt's failure once the retries run out" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_retry_fail]
+run = "echo attempt; sleep 2; exit 5"
+retry = 1
+ready_delay = 1
+EOF
+
+  run pitchfork start wait_retry_fail
+  assert_success
+
+  run pitchfork wait wait_retry_fail
+  assert_failure 5
+  run bash -c "pitchfork logs wait_retry_fail --raw 2>/dev/null | grep -c attempt"
+  assert_output "2"
+}
+
 @test "wait propagates an early failure even when a later daemon stops cleanly" {
   create_pitchfork_toml <<EOF
 [daemons.wait_fail_early]
