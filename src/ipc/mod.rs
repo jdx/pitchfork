@@ -48,6 +48,10 @@ pub enum IpcRequest {
     },
     GetActiveDaemons,
     GetDisabledDaemons,
+    /// Shut the supervisor down gracefully, as on SIGTERM, for
+    /// `supervisor stop`. Answered with `ShuttingDown` once new starts are
+    /// frozen; an older supervisor answers `Error`, and is sent the signal.
+    Shutdown,
     Run(RunOptions),
     Enable {
         id: DaemonId,
@@ -157,6 +161,11 @@ pub enum IpcResponse {
     Notifications(Vec<(log::LevelFilter, String)>),
     ActiveDaemons(Vec<Daemon>),
     DisabledDaemons(Vec<DaemonId>),
+    /// The supervisor is stopping its daemons and will exit; `budget_ms` is
+    /// how long that may take, after which it may be killed.
+    ShuttingDown {
+        budget_ms: u64,
+    },
     DaemonAlreadyRunning,
     DaemonStart {
         daemon: Daemon,

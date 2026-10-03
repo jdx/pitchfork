@@ -39,7 +39,6 @@ use duct::cmd;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-#[cfg(unix)]
 use std::collections::HashSet;
 use std::fs;
 #[cfg(unix)]
@@ -147,6 +146,10 @@ pub struct Supervisor {
     /// Set when `close()` begins. From then on this supervisor's own
     /// state-file record is on its way out and must not be restored.
     pub(crate) shutting_down: AtomicBool,
+    /// Set once the starts under way when shutdown began have finished (see
+    /// `freeze_starts`). Everyone who needs the final list of daemons waits
+    /// on the same freeze.
+    starts_frozen: tokio::sync::OnceCell<()>,
 }
 
 /// A line of daemon output on its way to the monitoring task.
@@ -202,6 +205,27 @@ pub async fn start_if_not_running() -> Result<()> {
 /// replaces to stop serving IPC. A supervisor being stopped keeps its socket until its daemons
 /// have stopped, which can take a while.
 pub(crate) const IPC_SOCKET_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long `close()` waits for the LAN IP monitor to stop on its own.
+const LAN_MONITOR_STOP_WAIT: Duration = Duration::from_secs(1);
+/// How long `close()` waits for the DNS resolver to stop on its own.
+const DNS_STOP_WAIT: Duration = Duration::from_secs(5);
+/// How long `close()` waits for the proxy: longer than its own drain budget,
+/// so it finishes on its own terms rather than being cut off mid-drain.
+const PROXY_STOP_WAIT: Duration =
+    Duration::from_secs(crate::proxy::server::SHUTDOWN_DRAIN_BUDGET.as_secs() + 2);
+/// The longest `close()` can spend before it starts stopping daemons.
+const SHUTDOWN_PRE_STOP_BUDGET: Duration = Duration::from_secs(
+    LAN_MONITOR_STOP_WAIT.as_secs() + DNS_STOP_WAIT.as_secs() + PROXY_STOP_WAIT.as_secs(),
+);
+/// How long `close()` waits, once the daemons are stopped, for their
+/// monitoring tasks to register the hooks they fire.
+const MONITOR_DRAIN_WAIT: Duration = Duration::from_secs(5);
+/// How long `close()` then waits for those hooks to finish, all together.
+const HOOK_DRAIN_WAIT: Duration = Duration::from_secs(30);
+/// The longest `close()` can spend after stopping daemons.
+const SHUTDOWN_POST_STOP_BUDGET: Duration =
+    Duration::from_secs(MONITOR_DRAIN_WAIT.as_secs() + HOOK_DRAIN_WAIT.as_secs());
 
 /// Wait until no supervisor is listening on the IPC socket, failing if one
 /// still is after [`IPC_SOCKET_RELEASE_TIMEOUT`].
@@ -568,6 +592,70 @@ fn should_remove_liveness_session(
     }
 }
 
+/// How long stopping `daemons` can take on shutdown, on top of `base`.
+///
+/// The supervisor stops its daemons dependents first, one level after
+/// another, and each can take its whole stop timeout plus the wait after
+/// SIGKILL. Killed before it is done, the supervisor leaves the daemons of the
+/// later levels running with no supervisor. So `base` (the
+/// `supervisor.stop_timeout` setting, also each daemon's default timeout) is
+/// extended by every running daemon's stop in turn: an upper bound, since the
+/// daemons of one level stop at the same time.
+pub(crate) fn daemons_stop_budget<'a>(
+    daemons: impl IntoIterator<Item = &'a crate::daemon::Daemon>,
+    base: std::time::Duration,
+) -> std::time::Duration {
+    let pitchfork_id = DaemonId::pitchfork();
+    daemons
+        .into_iter()
+        .filter(|d| d.pid.is_some() && d.id != pitchfork_id)
+        .map(|d| {
+            // A daemon without its own timeout is given the supervisor's.
+            let timeout = d.stop_signal.and_then(|s| s.timeout).unwrap_or(base);
+            timeout + crate::procs::PROCESS_GROUP_SIGKILL_WAIT
+        })
+        .fold(base, |total, stop| total.saturating_add(stop))
+}
+
+/// The longest the supervisor's whole shutdown can take with `daemons` to
+/// stop, so `supervisor stop` can allow for it before killing the supervisor:
+/// the daemons' stops (see [`daemons_stop_budget`]) and what `close()` does
+/// before and after them.
+pub(crate) fn shutdown_budget<'a>(
+    daemons: impl IntoIterator<Item = &'a crate::daemon::Daemon>,
+    base: std::time::Duration,
+) -> std::time::Duration {
+    daemons_stop_budget(daemons, base)
+        .saturating_add(SHUTDOWN_PRE_STOP_BUDGET)
+        .saturating_add(SHUTDOWN_POST_STOP_BUDGET)
+}
+
+/// Set when a graceful shutdown begins, by a signal or a `Shutdown` request.
+/// A signal received after that forces the exit (see `force_exit`).
+static SHUTDOWN_BEGUN: AtomicBool = AtomicBool::new(false);
+
+/// Taken by whichever exit ends the process: a graceful stop once `close()`
+/// has returned, or a forced exit as soon as it starts. The other then waits
+/// for the process to end instead of exiting with its own status, so a forced
+/// exit's status cannot be overtaken by a graceful exit with success.
+static EXIT_CLAIMED: AtomicBool = AtomicBool::new(false);
+
+/// Wait for an exit another path has claimed; it ends the process.
+async fn wait_for_claimed_exit() -> ! {
+    loop {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// End a graceful stop with success, unless a forced exit claimed the process
+/// first.
+async fn exit_gracefully() -> ! {
+    if EXIT_CLAIMED.swap(true, atomic::Ordering::SeqCst) {
+        wait_for_claimed_exit().await
+    }
+    exit(0)
+}
+
 impl Supervisor {
     pub fn new() -> Result<Self> {
         Ok(Self {
@@ -597,6 +685,7 @@ impl Supervisor {
             sink_output: std::sync::Mutex::new(HashMap::new()),
             stop_locks: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
+            starts_frozen: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -1429,7 +1518,6 @@ impl Supervisor {
             SignalKind::user_defined1(),
             SignalKind::user_defined2(),
         ];
-        static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
         for signal in signals {
             let stream = match signal::unix::signal(signal) {
                 Ok(s) => s,
@@ -1442,10 +1530,13 @@ impl Supervisor {
                 let mut stream = stream;
                 loop {
                     stream.recv().await;
-                    if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
-                        exit(1);
+                    if SHUTDOWN_BEGUN.swap(true, atomic::Ordering::SeqCst) {
+                        SUPERVISOR.force_exit().await;
                     } else {
-                        SUPERVISOR.handle_signal().await;
+                        // Spawned, so this loop keeps receiving: a second
+                        // signal of the same kind must reach `force_exit`
+                        // rather than wait for the graceful stop to finish.
+                        tokio::spawn(SUPERVISOR.handle_signal());
                     }
                 }
             });
@@ -1456,16 +1547,15 @@ impl Supervisor {
     #[cfg(windows)]
     fn signals(&self) -> Result<()> {
         tokio::spawn(async move {
-            static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
             loop {
                 if let Err(e) = signal::ctrl_c().await {
                     error!("Failed to wait for ctrl-c: {}", e);
                     return;
                 }
-                if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
-                    exit(1);
+                if SHUTDOWN_BEGUN.swap(true, atomic::Ordering::SeqCst) {
+                    SUPERVISOR.force_exit().await;
                 } else {
-                    SUPERVISOR.handle_signal().await;
+                    tokio::spawn(SUPERVISOR.handle_signal());
                 }
             }
         });
@@ -1475,7 +1565,160 @@ impl Supervisor {
     async fn handle_signal(&self) {
         info!("received signal, stopping");
         self.close().await;
-        exit(0)
+        exit_gracefully().await
+    }
+
+    /// A second signal while `close()` is still stopping daemons: exit now,
+    /// but kill the daemons not stopped yet first. They run in their own
+    /// sessions, so exiting without this would leave them running with no
+    /// supervisor.
+    async fn force_exit(&self) -> ! {
+        if EXIT_CLAIMED.swap(true, atomic::Ordering::SeqCst) {
+            // The graceful stop has finished and is exiting already.
+            wait_for_claimed_exit().await
+        }
+        // Set by `close()` too, but this may run first: from now on a start
+        // that takes its daemon's lock does not spawn (see `run_once`).
+        self.shutting_down.store(true, atomic::Ordering::Release);
+        warn!("received another signal while stopping; killing the remaining daemons and exiting");
+        let mut killed = HashSet::new();
+        self.kill_active_daemons(&mut killed).await;
+        // A start that passed its check before the flag holds its daemon's
+        // stop lock until the daemon's PID is recorded. Its process is killed
+        // above if it has already spawned (it is monitored from the moment it
+        // spawns); wait the locks out for one still on its way, then kill
+        // again. The stops `close()` holds locks for end quickly now that
+        // their daemons are killed; the wait is bounded all the same, by one
+        // deadline for all the locks so a forced exit is not held up by each.
+        let locks: Vec<_> = self.stop_locks.lock().await.values().cloned().collect();
+        let deadline = time::Instant::now() + Duration::from_secs(5);
+        for lock in locks {
+            let _ = time::timeout_at(deadline, lock.lock()).await;
+        }
+        self.kill_active_daemons(&mut killed).await;
+        exit(1)
+    }
+
+    /// Kill the process group of every active daemon not in `killed` at once,
+    /// with no grace period, adding each one dealt with to `killed`.
+    ///
+    /// Daemons being monitored count as well: a start registers its process
+    /// for monitoring as soon as it spawns, before its PID is recorded in
+    /// state, and that can take a while (a cron start writes the state file
+    /// first).
+    ///
+    /// The group is killed even when its leader, the PID on record, has
+    /// already exited: the graceful stop may have ended a shell whose children
+    /// ignore the signal. While the group has members its ID cannot be reused,
+    /// so it is still this daemon's; a live leader is checked against its
+    /// recorded start time, as `stop` does. A kill that fails is not counted,
+    /// so a later pass tries again.
+    async fn kill_active_daemons(&self, killed: &mut HashSet<(DaemonId, u32)>) {
+        let mut kills = tokio::task::JoinSet::new();
+        let mut targets: Vec<((DaemonId, u32), Option<u64>)> = self
+            .active_daemons()
+            .await
+            .into_iter()
+            .filter_map(|d| Some(((d.id, d.pid?), d.start_time)))
+            .collect();
+        let monitored: Vec<_> = self
+            .monitored
+            .lock()
+            .expect("monitored lock poisoned")
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.pid))
+            .collect();
+        for key in monitored {
+            if !targets.iter().any(|(k, _)| *k == key) {
+                // Not recorded yet, so there is no start time to check it
+                // against; it is a child this supervisor has just spawned.
+                targets.push((key, None));
+            }
+        }
+        for (key, start_time) in targets {
+            let pid = key.1;
+            if killed.contains(&key) {
+                continue;
+            }
+            if PROCS.is_running(pid) {
+                if !signalling_pid_is_authorized(start_time, PROCS.start_time(pid)) {
+                    // Recycled: not the daemon's process any more.
+                    killed.insert(key);
+                    continue;
+                }
+            } else if !PROCS.process_group_alive(pid) {
+                // Leader and group both gone: nothing left to kill.
+                killed.insert(key);
+                continue;
+            }
+            kills.spawn(async move {
+                // The stop signal is followed by SIGKILL at once.
+                let result = PROCS
+                    .kill_process_group_async(
+                        pid,
+                        crate::config_types::StopSignal::default().into(),
+                        Some(Duration::from_millis(1)),
+                    )
+                    .await;
+                if let Err(e) = &result {
+                    error!("failed to kill daemon {}: {e}", key.0);
+                }
+                (key, result.is_ok())
+            });
+        }
+        for (key, ok) in kills.join_all().await {
+            if ok {
+                killed.insert(key);
+            }
+        }
+    }
+
+    /// Stop new daemons from starting, and wait for the starts already under
+    /// way to finish, so the active daemons can be listed for good.
+    ///
+    /// A start that took its daemon's stop lock before `shutting_down` was set
+    /// may still be spawning; its daemon must be in the list. A start that
+    /// takes a lock from now on sees the flag and does not spawn (see
+    /// `run_once`).
+    ///
+    /// Done once: a caller that comes while the freeze is under way waits for
+    /// it to finish, and one that comes later returns at once. By then the
+    /// locks may be held by `close()`'s stops, which waiting for would hold a
+    /// `Shutdown` reply until those stops end.
+    async fn freeze_starts(&self) {
+        self.shutting_down.store(true, atomic::Ordering::Release);
+        self.starts_frozen
+            .get_or_init(|| async {
+                let locks: Vec<_> = self.stop_locks.lock().await.values().cloned().collect();
+                for lock in locks {
+                    drop(lock.lock().await);
+                }
+            })
+            .await;
+    }
+
+    /// Begin a graceful shutdown for `supervisor stop` and return how long it
+    /// may take: the client waits that long before killing the supervisor.
+    ///
+    /// The budget is computed here rather than by the client: only the
+    /// supervisor knows its own settings, and only once new starts are frozen
+    /// is the list of daemons to stop final.
+    pub(crate) async fn begin_shutdown(&self) -> Duration {
+        // Under way already, the freeze is waited for rather than skipped: a
+        // daemon whose start it waits for is not listed until that start ends.
+        // A shutdown that has frozen starts already answers at once, and the
+        // daemons it has yet to stop are still active.
+        self.freeze_starts().await;
+        let base = settings().supervisor_stop_timeout();
+        let budget = shutdown_budget(&self.active_daemons().await, base);
+        if !SHUTDOWN_BEGUN.swap(true, atomic::Ordering::SeqCst) {
+            tokio::spawn(async {
+                info!("stop requested, stopping");
+                SUPERVISOR.close().await;
+                exit_gracefully().await
+            });
+        }
+        budget
     }
 
     pub(crate) async fn close(&self) {
@@ -1491,7 +1734,7 @@ impl Supervisor {
         // cancelled, so give it a moment to come back on its own rather than
         // cutting it off mid-iteration the instant after asking it to stop.
         if let Some(mut monitor_task) = self.lan_monitor_task.lock().await.take()
-            && tokio::time::timeout(Duration::from_secs(1), &mut monitor_task)
+            && tokio::time::timeout(LAN_MONITOR_STOP_WAIT, &mut monitor_task)
                 .await
                 .is_err()
         {
@@ -1504,7 +1747,7 @@ impl Supervisor {
         }
 
         if let Some(mut dns_task) = self.dns_task.lock().await.take()
-            && tokio::time::timeout(Duration::from_secs(5), &mut dns_task)
+            && tokio::time::timeout(DNS_STOP_WAIT, &mut dns_task)
                 .await
                 .is_err()
         {
@@ -1514,13 +1757,7 @@ impl Supervisor {
         }
 
         if let Some(proxy_task) = self.proxy_task.lock().await.take() {
-            // Longer than the proxy's own drain budget, so the task finishes on
-            // its own terms rather than being cut off mid-drain.
-            let _ = tokio::time::timeout(
-                crate::proxy::server::SHUTDOWN_DRAIN_BUDGET + Duration::from_secs(2),
-                proxy_task,
-            )
-            .await;
+            let _ = tokio::time::timeout(PROXY_STOP_WAIT, proxy_task).await;
         }
 
         // Clean up /etc/hosts entries managed by pitchfork
@@ -1528,6 +1765,8 @@ impl Supervisor {
         if s.proxy.enable && s.proxy.sync_hosts {
             crate::proxy::hosts::clean_hosts_file();
         }
+
+        self.freeze_starts().await;
 
         let pitchfork_id = DaemonId::pitchfork();
         let active = self.active_daemons().await;
@@ -1562,6 +1801,13 @@ impl Supervisor {
                 let _ = task.await;
             }
         }
+        // A forced exit kills the daemons, so the stops above can finish
+        // before it has. Shutting the IPC server down next would let the
+        // supervisor return and exit with success, so leave the exit to it.
+        // (A graceful stop claims the exit only after this returns.)
+        if EXIT_CLAIMED.load(atomic::Ordering::SeqCst) {
+            wait_for_claimed_exit().await
+        }
         let _ = self.remove_daemon(&pitchfork_id).await;
 
         // Signal the background state flush task to exit so it doesn't
@@ -1591,7 +1837,7 @@ impl Supervisor {
         // its process exits, and decrements it (+ notifies `monitor_done`)
         // after all fire_hook() calls complete. This replaces the old
         // yield_now() approach which had a race window.
-        let drain_timeout = time::sleep(Duration::from_secs(5));
+        let drain_timeout = time::sleep(MONITOR_DRAIN_WAIT);
         tokio::pin!(drain_timeout);
         loop {
             if self.active_monitors.load(atomic::Ordering::Acquire) == 0 {
@@ -1605,14 +1851,17 @@ impl Supervisor {
                 }
             }
         }
+        // The hooks run at the same time, so they are given one deadline
+        // together: `supervisor stop` allows for this wait, and must not be
+        // outlasted by it.
         let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.hook_tasks.lock().await);
-        let hook_timeout = Duration::from_secs(30);
+        let hook_deadline = time::Instant::now() + HOOK_DRAIN_WAIT;
         for handle in handles {
-            match time::timeout(hook_timeout, handle).await {
+            match time::timeout_at(hook_deadline, handle).await {
                 Ok(_) => {} // Hook completed (success or error, doesn't matter)
                 Err(_) => {
                     warn!(
-                        "hook task did not complete within {hook_timeout:?} during shutdown, skipping"
+                        "hook task did not complete within {HOOK_DRAIN_WAIT:?} during shutdown, skipping"
                     );
                 }
             }
@@ -2576,5 +2825,50 @@ mod tests {
         }
         assert!(without_scan, "control: child should inherit fd {fd}");
         assert!(!with_scan, "fd {fd} leaked past cloexec_fd_scan");
+    }
+
+    fn budget_daemon(
+        name: &str,
+        pid: Option<u32>,
+        timeout: Option<std::time::Duration>,
+    ) -> crate::daemon::Daemon {
+        crate::daemon::Daemon {
+            id: crate::daemon_id::DaemonId::new("proj", name),
+            pid,
+            stop_signal: timeout.map(|timeout| crate::config_types::StopConfig {
+                timeout: Some(timeout),
+                ..crate::config_types::StopConfig::default()
+            }),
+            ..crate::daemon::Daemon::default()
+        }
+    }
+
+    #[test]
+    fn stop_budget_covers_each_running_daemon_in_turn() {
+        let base = std::time::Duration::from_secs(5);
+        let sigkill = crate::procs::PROCESS_GROUP_SIGKILL_WAIT;
+        let daemons = [
+            budget_daemon("db", Some(1), Some(std::time::Duration::from_secs(4))),
+            budget_daemon("app", Some(2), Some(std::time::Duration::from_secs(4))),
+            // No timeout of its own: the supervisor's applies.
+            budget_daemon("worker", Some(3), None),
+            // Not running: nothing to stop.
+            budget_daemon("idle", None, Some(std::time::Duration::from_secs(60))),
+            crate::daemon::Daemon {
+                id: crate::daemon_id::DaemonId::pitchfork(),
+                pid: Some(4),
+                ..crate::daemon::Daemon::default()
+            },
+        ];
+        assert_eq!(
+            super::daemons_stop_budget(&daemons, base),
+            base + (std::time::Duration::from_secs(4) + sigkill) * 2 + (base + sigkill)
+        );
+    }
+
+    #[test]
+    fn stop_budget_is_the_base_with_no_running_daemons() {
+        let base = std::time::Duration::from_secs(5);
+        assert_eq!(super::daemons_stop_budget(&[], base), base);
     }
 }
