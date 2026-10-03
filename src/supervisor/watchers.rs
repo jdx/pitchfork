@@ -1002,6 +1002,9 @@ impl Supervisor {
                         let force =
                             matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
                         opts.force = force;
+                        // Each scheduled run gets its full retries, not those
+                        // the previous run left over.
+                        opts.retry_count = 0;
                         opts.wait_ready = false;
                         opts.cron_schedule = Some(schedule_str.clone());
                         opts.cron_retrigger = Some(retrigger);

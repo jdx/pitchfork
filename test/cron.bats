@@ -1038,3 +1038,33 @@ EOF2
   run grep -c -e cfg_tick -e cfg_env_value "$PITCHFORK_STATE_DIR/state.toml"
   assert_output "0"
 }
+
+# A scheduled run gets its full retries, even after an earlier run of a
+# daemon started by hand used them all up.
+@test "a cron run of a started daemon starts its retries afresh" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_retries]
+run = "echo attempt=$PITCHFORK_RETRY_COUNT; sleep 1; exit 1"
+retry = 2
+cron = { schedule = "*/15 * * * * *", retrigger = "finish" }
+EOF2
+  run pitchfork start cron_retries
+  # The start itself used up the retries.
+  wait_for_logs cron_retries "attempt=2" 10
+
+  # The next scheduled run begins again at attempt 0 and is retried through
+  # its last attempt.
+  local first=0 retried=0 exhausted=0
+  for _ in $(seq 1 60); do
+    first=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=0' || true)
+    retried=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=1' || true)
+    exhausted=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=2' || true)
+    [[ "$first" -ge 2 && "$retried" -ge 2 && "$exhausted" -ge 2 ]] && break
+    sleep 1
+  done
+  [[ "$first" -ge 2 ]]
+  [[ "$retried" -ge 2 ]]
+  [[ "$exhausted" -ge 2 ]]
+
+  pitchfork stop cron_retries || true
+}
