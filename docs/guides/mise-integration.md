@@ -65,7 +65,8 @@ mise_bin = "tools/mise"
 daemon takes precedence over the project's files. When the project does not set
 `mise_bin`, the supervisor uses its own setting, with a relative path taken from
 the directory the supervisor was started in, and otherwise searches the
-locations above.
+locations above. A `mise_bin` in your user or system configuration file is
+treated as the supervisor's setting, not the project's.
 
 If mise cannot be found, pitchfork logs a warning and runs without it. Check
 the supervisor logs if a daemon cannot find its runtime.

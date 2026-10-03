@@ -129,9 +129,8 @@ pub(crate) fn project_mise_options(config: &PitchforkTomlDaemon) -> (bool, Optio
         return (false, None);
     }
     let project_dir = resolve_config_base_dir(config.path.as_deref());
-    let mise_bin =
-        crate::settings::Settings::load_from_dir(&project_dir).explicit_mise_bin(&project_dir);
-    (true, mise_bin)
+    let (settings, resolved) = crate::settings::Settings::resolve_from_dir(&project_dir);
+    (true, settings.project_mise_bin(&resolved, &project_dir))
 }
 
 /// Build RunOptions from a daemon configuration and start options.
@@ -212,9 +211,10 @@ pub async fn build_run_options(
         || should_inject_default_ready_delay(&run_opts)
     {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
-        let settings_dir = project_dir.clone();
-        let project_settings = tokio::task::spawn_blocking(move || {
-            crate::settings::Settings::load_from_dir(&settings_dir)
+        let (project_settings, project_mise_bin) = tokio::task::spawn_blocking(move || {
+            let (settings, resolved) = crate::settings::Settings::resolve_from_dir(&project_dir);
+            let mise_bin = settings.project_mise_bin(&resolved, &project_dir);
+            (settings, mise_bin)
         })
         .await
         .map_err(|e| format!("Failed to load project settings: {e}"))?;
@@ -224,7 +224,7 @@ pub async fn build_run_options(
         // Only an explicit setting: searching for mise when none is set stays
         // with the supervisor, which is where the command runs.
         if run_opts.mise == Some(true) {
-            run_opts.mise_bin = project_settings.explicit_mise_bin(&project_dir);
+            run_opts.mise_bin = project_mise_bin;
         }
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
