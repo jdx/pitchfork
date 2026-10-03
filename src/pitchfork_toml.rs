@@ -1395,8 +1395,8 @@ impl PitchforkToml {
                 (Some(port), None) => Some(port),
                 (None, Some(deprecated)) => {
                     deprecated_at!(
-                        "2.29.0",
-                        "3.0.0",
+                        "2026-10-03",
+                        "2027-10-03",
                         format!("port-fields:{short_name}"),
                         "daemon {short_name}: expected_port/auto_bump_port/port_bump_attempts are deprecated, use [daemons.{short_name}.port] instead."
                     );

@@ -2864,7 +2864,6 @@ dependencies = [
  "rustls-pemfile",
  "rustls-platform-verifier",
  "schemars",
- "semver",
  "serde",
  "serde_json",
  "shell-words",
