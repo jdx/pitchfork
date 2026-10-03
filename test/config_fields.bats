@@ -180,15 +180,25 @@ EOF
 
   run pitchfork start keeps_spawning
   assert_success
-  sleep 3
-  run _windows_count_running "$marker"
-  [[ "$output" -gt 0 ]]
+  # The spawner starts after the parent is ready, so wait for its first child.
+  local count=0
+  for _ in $(seq 1 30); do
+    count=$(_windows_count_running "$marker")
+    [[ "$count" -gt 0 ]] && break
+    sleep 1
+  done
+  [[ "$count" -gt 0 ]]
 
   run pitchfork stop keeps_spawning
   assert_success
-  sleep 2
-  run _windows_count_running "$marker"
-  assert_output "0"
+  # Terminating the job does not wait for its processes to finish exiting.
+  # Each would otherwise run for 60s, so this still tells a stopped job apart.
+  for _ in $(seq 1 20); do
+    count=$(_windows_count_running "$marker")
+    [[ "$count" == 0 ]] && break
+    sleep 0.5
+  done
+  assert_equal "$count" "0"
 }
 
 # The default stop terminates the daemon's tree outright. A grandchild whose

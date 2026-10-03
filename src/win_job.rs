@@ -29,8 +29,9 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, OpenJobObjectW,
-    SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation, OpenJobObjectW,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, GetCurrentProcess, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
@@ -39,6 +40,9 @@ use windows_sys::Win32::System::Threading::{
 /// `JOB_OBJECT_TERMINATE`, the access right `TerminateJobObject` needs. It lives
 /// in windows-sys' `SystemServices`, too large a feature for one constant.
 const JOB_OBJECT_TERMINATE: u32 = 0x0008;
+
+/// `JOB_OBJECT_QUERY`, the access right for reading the job's process count.
+const JOB_OBJECT_QUERY: u32 = 0x0004;
 
 /// The exit code a process ended by its job's termination reports.
 const TERMINATED_EXIT_CODE: u32 = 1;
@@ -153,7 +157,8 @@ impl DaemonJob {
     /// could not be put in a job, has none.
     pub(crate) fn open(pid: u32, process: HANDLE) -> Option<Self> {
         let name = job_name(pid, process).ok()?;
-        let job = unsafe { OpenJobObjectW(JOB_OBJECT_TERMINATE, 0, name.as_ptr()) };
+        let job =
+            unsafe { OpenJobObjectW(JOB_OBJECT_TERMINATE | JOB_OBJECT_QUERY, 0, name.as_ptr()) };
         (!job.is_null()).then(|| Self(OwnedHandle(job)))
     }
 
@@ -168,6 +173,38 @@ impl DaemonJob {
         }
         ok
     }
+
+    /// Wait up to `timeout` for the job to hold no running process, true once
+    /// it does. Terminating a job does not wait for its processes to finish
+    /// exiting, and one still exiting can hold the port a restart is about to
+    /// bind.
+    pub(crate) fn wait_until_empty(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match active_processes(&self.0) {
+                Some(0) => return true,
+                // Unreadable: nothing to wait on.
+                None => return false,
+                Some(_) if std::time::Instant::now() >= deadline => return false,
+                Some(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+    }
+}
+
+/// How many processes are running in the job `job`, opened with query access.
+fn active_processes(job: &OwnedHandle) -> Option<u32> {
+    let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        QueryInformationJobObject(
+            job.0,
+            JobObjectBasicAccountingInformation,
+            (&raw mut info).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(info.ActiveProcesses)
 }
 
 /// The name of the job for the process `pid` started at the time `process`
@@ -213,31 +250,8 @@ mod tests {
         assert_ne!(format_job_name(1234, 1), format_job_name(1234, 2));
     }
 
-    /// How many processes are in the job `job`, opened with query access.
-    fn active_processes(job: &OwnedHandle) -> u32 {
-        use windows_sys::Win32::System::JobObjects::{
-            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
-            QueryInformationJobObject,
-        };
-        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
-        let ok = unsafe {
-            QueryInformationJobObject(
-                job.0,
-                JobObjectBasicAccountingInformation,
-                (&raw mut info).cast(),
-                std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-                std::ptr::null_mut(),
-            )
-        };
-        assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
-        info.ActiveProcesses
-    }
-
     #[test]
     fn terminating_the_job_ends_a_child_whose_parent_has_exited() {
-        /// `JOB_OBJECT_QUERY`, for reading the job's process count.
-        const JOB_OBJECT_QUERY: u32 = 0x0004;
-
         // `cmd /c start /b` leaves a ping running after cmd itself exits, so
         // the ping's parent is gone, the case walking the tree misses.
         let mut cmd = tokio::process::Command::new("cmd");
@@ -263,17 +277,17 @@ mod tests {
             child.wait().await.unwrap();
 
             // cmd has exited; the ping it started is still in the job.
-            assert!(active_processes(&query) >= 1, "ping is not in the job");
+            assert!(
+                active_processes(&query).unwrap() >= 1,
+                "ping is not in the job"
+            );
 
             assert!(job.terminate());
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while active_processes(&query) > 0 {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "the ping outlived its job"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
+            assert!(
+                job.wait_until_empty(std::time::Duration::from_secs(10)),
+                "the ping outlived its job"
+            );
+            assert_eq!(active_processes(&query), Some(0));
         });
     }
 }

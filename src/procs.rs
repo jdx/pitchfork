@@ -701,26 +701,20 @@ impl Procs {
                 if interrupt_and_wait(pid, stop_timeout) {
                     debug!("process {pid} exited after Ctrl+C");
                     // Whatever it started and left running goes with it.
-                    if let Some(job) = &job {
-                        job.terminate();
+                    if let Some(job) = &job
+                        && job.terminate()
+                    {
+                        job.wait_until_empty(std::time::Duration::from_millis(
+                            JOB_EXIT_WAIT_MS.into(),
+                        ));
                     }
                     return Ok(true);
                 }
             }
-            // Terminating the job ends every process in it at once, including
-            // ones whose parent has already exited, which taskkill /T cannot
-            // reach from the daemon.
-            if let Some(job) = &job
-                && job.terminate()
-                && wait_for_exit(pid, JOB_EXIT_WAIT_MS)
-            {
-                debug!("terminated the job of process {pid}");
-                // As below: let the monitor task see the exit first.
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                return Ok(true);
-            }
-            // A daemon without a job: use taskkill /F /T to kill the entire
-            // process tree.
+            // Walk the tree first, while the daemon is still there to walk it
+            // from: the processes an MSYS or Cygwin shell starts are not in
+            // the daemon's job, so terminating the job alone leaves them (and
+            // the ports they hold) behind.
             // sysinfo's process.kill() only kills the main process, leaving
             // child processes (e.g. python3 spawned by sh -c) orphaned and
             // still holding ports. The /T flag kills all descendant processes.
@@ -747,6 +741,14 @@ impl Procs {
                     false
                 }
             };
+            // Then the job, for what the walk cannot reach: a process whose
+            // parent has already exited is still in it.
+            if let Some(job) = &job
+                && job.terminate()
+            {
+                job.wait_until_empty(std::time::Duration::from_millis(JOB_EXIT_WAIT_MS.into()));
+                debug!("terminated the job of process {pid}");
+            }
             // Brief sleep to let the OS signal the process handle, giving
             // tokio's child.wait() in the monitor task a chance to detect
             // the exit and fire on_stop/on_exit hooks.
@@ -1172,23 +1174,10 @@ fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
     Ok(ProcessHandle(handle))
 }
 
-/// How long a daemon whose job was terminated is given to finish exiting
-/// before taskkill gets a try.
+/// How long the processes in a terminated daemon's job are given to finish
+/// exiting, and so to release what they hold, before the stop returns.
 #[cfg(windows)]
 const JOB_EXIT_WAIT_MS: u32 = 5000;
-
-/// Wait up to `millis` for process `pid` to exit; true if it has, or is gone.
-#[cfg(windows)]
-fn wait_for_exit(pid: u32, millis: u32) -> bool {
-    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
-    use windows_sys::Win32::System::Threading::{PROCESS_SYNCHRONIZE, WaitForSingleObject};
-    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-    if handle.is_null() {
-        return true;
-    }
-    let handle = ProcessHandle(handle);
-    unsafe { WaitForSingleObject(handle.0, millis) == WAIT_OBJECT_0 }
-}
 
 /// Send Ctrl+C to the console of `pid` and wait up to `timeout` for it to exit.
 ///
