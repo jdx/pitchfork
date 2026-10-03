@@ -282,6 +282,46 @@ EOF
   [[ "$count" -eq 2 ]]
 }
 
+# A config daemon recorded before `watch_base_dir` was stored, retried by the
+# supervisor's retry checker: its on_retry is read from its project, not from
+# a `dir` outside it.
+@test "the retry checker fires on_retry for a daemon recorded without its project dir" {
+  local marker elsewhere
+  marker="$(to_shell_path "$TEST_TEMP_DIR/legacy_retry_marker")"
+  elsewhere="$(normalize_path "$TEST_TEMP_DIR/elsewhere")"
+  mkdir -p "$TEST_TEMP_DIR/elsewhere" "$TEST_TEMP_DIR/project"
+  cd "$TEST_TEMP_DIR/project"
+
+  create_pitchfork_toml <<EOF
+[daemons.legacy_retry]
+run = "exit 3"
+dir = "$elsewhere"
+ready_delay = 0
+
+[daemons.legacy_retry.hooks]
+on_retry = "echo retry >> \"$marker\""
+EOF
+
+  pitchfork supervisor start
+  run pitchfork start legacy_retry
+  wait_for_status legacy_retry errored
+  pitchfork supervisor stop
+
+  # Rewrite the record as an older version stored it, with a retry left for
+  # the retry checker to run.
+  grep -v '^watch_base_dir = ' "$PITCHFORK_STATE_DIR/state.toml" |
+    sed 's/^retry = 0$/retry = 1/' >"$PITCHFORK_STATE_DIR/state.toml.tmp"
+  mv "$PITCHFORK_STATE_DIR/state.toml.tmp" "$PITCHFORK_STATE_DIR/state.toml"
+  run grep -c "^watch_base_dir = " "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "0"
+  run grep -c "^retry = 1$" "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "1"
+
+  PITCHFORK_INTERVAL=1s pitchfork supervisor start
+  wait_for_file "$marker"
+  assert_file_exists "$marker"
+}
+
 # ===========================================================================
 # Lifecycle hooks – environment variables
 # ===========================================================================

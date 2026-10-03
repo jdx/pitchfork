@@ -790,6 +790,55 @@ EOF
   assert_file_exists "$exit_marker"
 }
 
+# A config daemon recorded before `watch_base_dir` was stored, adopted by a
+# new supervisor: its hooks are still read from its project, not from a `dir`
+# outside it.
+@test "an adopted daemon recorded without its project dir reads hooks from its project" {
+  local stop_marker elsewhere
+  stop_marker="$(to_shell_path "$TEST_TEMP_DIR/adopt_legacy_stop")"
+  elsewhere="$(normalize_path "$TEST_TEMP_DIR/elsewhere")"
+  mkdir -p "$TEST_TEMP_DIR/elsewhere" "$TEST_TEMP_DIR/project"
+  cd "$TEST_TEMP_DIR/project"
+
+  create_pitchfork_toml <<EOF
+[daemons.adopt_legacy]
+run = "sleep 120"
+dir = "$elsewhere"
+ready_delay = 1
+
+[daemons.adopt_legacy.hooks]
+on_stop = "touch \"$stop_marker\""
+EOF
+
+  run pitchfork start adopt_legacy
+  assert_success
+  wait_for_status adopt_legacy running
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+  kill_pid "$sup_pid"
+  sleep 1
+
+  # Rewrite the record as an older version stored it.
+  grep -v '^watch_base_dir = ' "$PITCHFORK_STATE_DIR/state.toml" >"$PITCHFORK_STATE_DIR/state.toml.tmp"
+  mv "$PITCHFORK_STATE_DIR/state.toml.tmp" "$PITCHFORK_STATE_DIR/state.toml"
+  run grep -c "^watch_base_dir = " "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "0"
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+  wait_for_status adopt_legacy running
+
+  run pitchfork stop adopt_legacy
+  assert_success
+  wait_for_status adopt_legacy stopped
+
+  wait_for_file "$stop_marker"
+  assert_file_exists "$stop_marker"
+}
+
 # ============================================================================
 # Group B: Lifecycle operations
 # ============================================================================

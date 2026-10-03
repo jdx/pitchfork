@@ -4,9 +4,9 @@
 
 use super::Supervisor;
 use super::hooks::{HookType, fire_hook};
+use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::supervisor::state::UpsertDaemonOpts;
-use crate::{Result, env};
 
 impl Supervisor {
     /// Check for daemons that need retrying and attempt to restart them
@@ -85,11 +85,10 @@ impl Supervisor {
                     continue;
                 }
             };
-            let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
             fire_hook(
                 HookType::OnRetry,
                 id.clone(),
-                super::hooks::HookDirs::new(dir.clone(), daemon.watch_base_dir.clone()),
+                super::hooks::HookDirs::for_record(&daemon).await,
                 daemon.retry_count + 1,
                 daemon.env.clone(),
                 // Per-attempt value: run_once clears the record when an

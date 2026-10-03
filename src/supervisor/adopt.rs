@@ -457,13 +457,7 @@ impl Supervisor {
                 .await;
         }
         let id = daemon.id.clone();
-        let hook_dirs = super::hooks::HookDirs::new(
-            daemon
-                .dir
-                .clone()
-                .unwrap_or_else(|| crate::env::CWD.clone()),
-            daemon.watch_base_dir.clone(),
-        );
+        let hook_dirs = super::hooks::HookDirs::for_record(daemon).await;
         let hook_env = daemon.env.clone();
         let hook_resolved_ports = daemon.resolved_port.clone();
         let hook_retry = daemon.retry;
