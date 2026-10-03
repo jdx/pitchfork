@@ -1752,11 +1752,17 @@ fn project_mise_bin_from(value: &str, origin: &Origin, project_dir: &Path) -> Op
         .then(|| project_dir.join(value))
 }
 
-/// An explicitly configured `mise_bin`, if the file exists. A missing file is
-/// warned about and gives `None`, not a search for another mise.
+/// An explicitly configured `mise_bin`, if the file exists, as an absolute
+/// path. A missing file is warned about and gives `None`, not a search for
+/// another mise.
+///
+/// A relative path is taken from this process's working directory, which is
+/// where it is checked; the daemon it wraps runs in a directory of its own,
+/// where the same relative path could name another file or none.
 fn configured_mise_bin(path: &Path) -> Option<PathBuf> {
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     if path.is_file() {
-        return Some(path.to_path_buf());
+        return Some(path);
     }
     warn!("mise_bin is set to {path:?} but the file does not exist");
     None
@@ -2162,6 +2168,16 @@ mod tests {
         );
         assert_eq!(find_in_path("missing.exe", Some(&path)), None);
         assert_eq!(find_in_path("mise.exe", None), None);
+    }
+
+    #[test]
+    fn configured_mise_bin_is_absolute() {
+        // Tests run from the crate root, where `Cargo.toml` is.
+        let relative = Path::new("Cargo.toml");
+        assert_eq!(
+            configured_mise_bin(relative),
+            Some(std::env::current_dir().unwrap().join(relative))
+        );
     }
 
     #[test]
