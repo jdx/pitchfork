@@ -51,8 +51,56 @@ mise = true
 mise_bin = "/opt/tools/mise"
 ```
 
+`mise_bin` in a project's `pitchfork.toml` applies to that project's daemons,
+whichever directory the supervisor was started in. A relative path is taken
+from the project's directory, so a project can point at a mise it ships:
+
+```toml
+[settings.general]
+mise = true
+mise_bin = "tools/mise"
+```
+
+`PITCHFORK_MISE_BIN` in the environment of the `pitchfork` command that starts a
+daemon takes precedence over the project's files. When the project does not set
+`mise_bin`, the supervisor uses its own setting, with a relative path taken from
+the directory the supervisor was started in, and otherwise searches the
+locations above. A `mise_bin` in your user or system configuration file is
+treated as the supervisor's setting, not the project's.
+
 If mise cannot be found, pitchfork logs a warning and runs without it. Check
 the supervisor logs if a daemon cannot find its runtime.
+
+## Templates that use mise variables
+
+A `run` command can use [templates](/guides/configuration-templates). Pitchfork renders
+the variables it defines, such as `daemons.*`, `url`, and `name`. When pitchfork cannot
+render a command, for example because it uses a mise `[vars]` entry or a filter
+pitchfork does not provide, and `mise x` will wrap the daemon, the command is passed
+through unrendered and `mise x` finishes it with mise's own variables and filters:
+
+```toml
+[daemons.api]
+run = "exec node server.js --port {{ daemons.redis.port }} --title {{ vars.title | quote }}"
+mise = true
+```
+
+Pitchfork gives `mise x` its template variables, so `{{ daemons.redis.port }}` above
+still resolves. It passes them in the `PITCHFORK_TEMPLATE_CONTEXT` environment variable
+as JSON, which mise reads and removes before running the command.
+
+::: warning Requires a mise that renders deferred commands
+Only a mise release that reads `PITCHFORK_TEMPLATE_CONTEXT` (jdx/mise#13894) renders a
+deferred command. With an older mise the command reaches the shell with its template
+tags unrendered, so update mise before relying on this.
+:::
+
+Deferral applies only when `mise x` will actually wrap the daemon: `mise = true` on the
+daemon, or `general.mise = true` in the settings of the daemon's project. Otherwise an
+unresolved variable is a render error, as before. If mise is enabled but its binary
+cannot be found when the daemon starts, the start fails rather than running the
+command with unrendered tags. Only `run` is deferred; other fields, including `env`, must use variables
+pitchfork defines.
 
 ## Run a mise task
 

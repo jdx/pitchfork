@@ -842,6 +842,253 @@ EOF
   pitchfork stop adhoc_test
 }
 
+@test "restarting an ad-hoc daemon waits for the ready output it was run with" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  # READY comes 4s after each start, later than the default ready delay.
+  run pitchfork run adhoc_ready --output READY -- sh -c 'sleep 4; echo READY; sleep 60'
+  assert_success
+
+  run pitchfork restart adhoc_ready
+  assert_success
+  # Both runs were judged ready by their output, not by a delay. Only the file
+  # logger's timestamped lines count: on Unix the supervisor's stderr goes to
+  # the same file, so each message appears there a second time without one.
+  local sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+  run grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} .*adhoc_ready ready: output matched pattern' "$sup_log"
+  assert_output "2"
+  run grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} .*adhoc_ready ready: delay elapsed' "$sup_log"
+  assert_output "0"
+  # Logs reach the store asynchronously; wait for the restarted run's line.
+  local count=0
+  for _ in $(seq 1 50); do
+    count=$(pitchfork logs adhoc_ready --raw 2>/dev/null | grep -c READY || true)
+    [[ "$count" -ge 2 ]] && break
+    sleep 0.2
+  done
+  [[ "$count" -eq 2 ]]
+
+  pitchfork stop adhoc_ready
+}
+
+@test "restarting an ad-hoc daemon keeps the port and retry it was run with" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  local port=45810
+  run pitchfork run adhoc_port --expected-port "$port" --retry 2 --delay 1 -- sh -c 'echo "PORT=[$PORT]"; sleep 60'
+  assert_success
+
+  run pitchfork restart adhoc_port
+  assert_success
+
+  # Logs reach the store asynchronously; wait for the restarted run's line.
+  local count=0
+  for _ in $(seq 1 50); do
+    count=$(pitchfork logs adhoc_port --raw 2>/dev/null | grep -c "PORT=\[$port\]" || true)
+    [[ "$count" -ge 2 ]] && break
+    sleep 0.2
+  done
+  [[ "$count" -eq 2 ]]
+  run awk '/^\[daemons\."[^"]*\/adhoc_port"\]/{on=1; next} /^\[/{on=0} on && /^retry =/' "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "retry = 2"
+
+  pitchfork stop adhoc_port
+}
+
+@test "a readiness flag on an ad-hoc restart replaces the saved ready check" {
+  kill_port 18086
+  local http_script
+  http_script="$(script_path http_server.py)"
+  create_pitchfork_toml <<EOF
+EOF
+
+  # The server listens 10s after each start.
+  run pitchfork run adhoc_http --http http://localhost:18086/health -- python3 -u "$http_script" 10 18086
+  assert_success
+
+  run pitchfork restart adhoc_http --delay 1
+  assert_success
+  # Ready after the delay, without waiting for the restarted server.
+  run bash -c "pitchfork logs adhoc_http --raw 2>/dev/null | grep -c 'Starting HTTP server'"
+  assert_output "1"
+
+  # The delay is now how the daemon is waited for: a later restart without
+  # flags does not bring the replaced HTTP check back.
+  run pitchfork restart adhoc_http
+  assert_success
+  run bash -c "pitchfork logs adhoc_http --raw 2>/dev/null | grep -c 'Starting HTTP server'"
+  assert_output "1"
+
+  pitchfork stop adhoc_http
+}
+
+@test "overriding one port setting on an ad-hoc restart keeps the other" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run adhoc_bump --expected-port 45840 --bump 5 --delay 1 -- sleep 60
+  assert_success
+
+  run pitchfork start adhoc_bump --force --expected-port 45841
+  assert_success
+  run bash -c "grep -A3 '/adhoc_bump\"\.port\]' \"\$PITCHFORK_STATE_DIR/state.toml\" | grep -E '^(expect|bump) =' | tr '\n' ' '"
+  assert_output "expect = [45841] bump = 5 "
+
+  run pitchfork start adhoc_bump --force --bump 3
+  assert_success
+  run bash -c "grep -A3 '/adhoc_bump\"\.port\]' \"\$PITCHFORK_STATE_DIR/state.toml\" | grep -E '^(expect|bump) =' | tr '\n' ' '"
+  assert_output "expect = [45841] bump = 3 "
+
+  pitchfork stop adhoc_bump
+}
+
+@test "a stopped ad-hoc daemon can be started again" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run adhoc_again --delay 1 -- sleep 60
+  assert_success
+  local original_pid
+  original_pid=$(get_daemon_pid adhoc_again)
+  run pitchfork stop adhoc_again
+  assert_success
+  wait_for_status adhoc_again stopped
+
+  run pitchfork start adhoc_again
+  assert_success
+  wait_for_status adhoc_again running
+  local new_pid
+  new_pid=$(get_daemon_pid adhoc_again)
+  [[ -n "$new_pid" && "$new_pid" != "$original_pid" ]]
+
+  run pitchfork stop adhoc_again
+  assert_success
+  wait_for_status adhoc_again stopped
+
+  run pitchfork restart adhoc_again
+  assert_success
+  wait_for_status adhoc_again running
+
+  pitchfork stop adhoc_again
+}
+
+@test "a daemon removed from config is not started again as ad-hoc" {
+  create_pitchfork_toml <<EOF
+[daemons.removed]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start removed
+  assert_success
+  run pitchfork stop removed
+  assert_success
+  wait_for_status removed stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork start removed
+  assert_failure
+  assert_output --partial "is in state but has no config entry"
+  run pitchfork status removed
+  refute_output --partial "running"
+}
+
+@test "a former config cron daemon run ad hoc can be started again from its command" {
+  # Keep the schedule sync from clearing the old schedule first.
+  export PITCHFORK_CRON_CHECK_INTERVAL=60s
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&-
+
+  create_pitchfork_toml <<EOF
+[daemons.former_cron]
+run = "sleep 60"
+cron = "0 0 0 1 1 *"
+ready_delay = 1
+EOF
+
+  run pitchfork start former_cron
+  assert_success
+  run pitchfork stop former_cron
+  assert_success
+  wait_for_status former_cron stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run former_cron --delay 1 -- sleep 61
+  assert_success
+  run pitchfork stop former_cron
+  assert_success
+  wait_for_status former_cron stopped
+
+  run pitchfork start former_cron
+  assert_success
+  wait_for_status former_cron running
+
+  pitchfork stop former_cron
+}
+
+@test "starting a daemon that never existed fails" {
+  create_pitchfork_toml <<EOF
+EOF
+
+  # A short name is resolved, and rejected, before the start.
+  run pitchfork start never_existed
+  assert_failure
+  assert_output --partial "daemon 'never_existed' not found"
+  # A qualified id reaches the start itself.
+  run pitchfork start global/never_existed
+  assert_failure
+  assert_output --partial "global/never_existed not found in config or state"
+}
+
+@test "a start naming a known daemon and an unknown one starts the known one and fails" {
+  create_pitchfork_toml <<EOF
+[daemons.good]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start good global/typo
+  assert_failure
+  assert_output --partial "global/typo not found in config or state"
+  wait_for_status good running
+
+  pitchfork stop good
+}
+
+@test "a former config daemon run ad hoc can be started again from its command" {
+  create_pitchfork_toml <<EOF
+[daemons.former]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start former
+  assert_success
+  run pitchfork stop former
+  assert_success
+  wait_for_status former stopped
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  run pitchfork run former --delay 1 -- sleep 61
+  assert_success
+  run pitchfork stop former
+  assert_success
+  wait_for_status former stopped
+
+  run pitchfork start former
+  assert_success
+  wait_for_status former running
+
+  pitchfork stop former
+}
+
 @test "restart all includes ad-hoc daemons" {
   create_pitchfork_toml <<EOF
 [daemons.config_daemon]

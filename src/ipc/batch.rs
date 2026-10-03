@@ -13,7 +13,6 @@ use crate::pitchfork_toml::{
     ReadyOutput, ReadyPort, project_dir_for_config,
 };
 use chrono::{DateTime, Local};
-use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -119,6 +118,21 @@ pub struct StartOptions {
     pub proxy_idle: Option<HashMap<DaemonId, u64>>,
 }
 
+/// Whether a daemon started from config runs under mise, and the project's
+/// `general.mise_bin` when it does, both from the daemon's project settings.
+///
+/// For the starts the supervisor makes from config by itself (scheduled runs
+/// of a config-only cron daemon, `boot_start`), which do not go through
+/// [`build_run_options`] and would otherwise use the supervisor's settings.
+pub(crate) fn project_mise_options(config: &PitchforkTomlDaemon) -> (bool, Option<PathBuf>) {
+    if !crate::template::mise_enabled(config) {
+        return (false, None);
+    }
+    let project_dir = resolve_config_base_dir(config.path.as_deref());
+    let (settings, resolved) = crate::settings::Settings::resolve_from_dir(&project_dir);
+    (true, settings.project_mise_bin(&resolved, &project_dir))
+}
+
 /// Build RunOptions from a daemon configuration and start options.
 ///
 /// This is a shared helper used by both IpcClient batch operations and Web UI.
@@ -192,15 +206,25 @@ pub async fn build_run_options(
     // Resolve project-scoped defaults in the client process after all readiness
     // overrides are merged. The supervisor is long-lived and may have been
     // started from a different directory.
-    if run_opts.mise.is_none() || run_opts.oneshot || should_inject_default_ready_delay(&run_opts) {
+    if run_opts.mise != Some(false)
+        || run_opts.oneshot
+        || should_inject_default_ready_delay(&run_opts)
+    {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
-        let project_settings = tokio::task::spawn_blocking(move || {
-            crate::settings::Settings::load_from_dir(&project_dir)
+        let (project_settings, project_mise_bin) = tokio::task::spawn_blocking(move || {
+            let (settings, resolved) = crate::settings::Settings::resolve_from_dir(&project_dir);
+            let mise_bin = settings.project_mise_bin(&resolved, &project_dir);
+            (settings, mise_bin)
         })
         .await
         .map_err(|e| format!("Failed to load project settings: {e}"))?;
         if run_opts.mise.is_none() {
             run_opts.mise = Some(project_settings.general.mise);
+        }
+        // Only an explicit setting: searching for mise when none is set stays
+        // with the supervisor, which is where the command runs.
+        if run_opts.mise == Some(true) {
+            run_opts.mise_bin = project_mise_bin;
         }
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
@@ -217,6 +241,60 @@ pub async fn build_run_options(
     Ok(run_opts)
 }
 
+/// The requested ids a start has nothing to run from yet: neither in config
+/// nor among the running daemons. Only these need the supervisor's records of
+/// stopped daemons, so a start that names nothing else never asks for them.
+fn ids_without_a_source(
+    ids: &[DaemonId],
+    pt: &PitchforkToml,
+    adhoc_daemons: &HashMap<DaemonId, crate::daemon::Daemon>,
+) -> Vec<DaemonId> {
+    ids.iter()
+        .filter(|id| !pt.daemons.contains_key(*id) && !adhoc_daemons.contains_key(*id))
+        .cloned()
+        .collect()
+}
+
+/// Whether a start can run this record again from its saved command: a
+/// stopped daemon that `pitchfork run` made and config does not define.
+fn restartable_adhoc(daemon: &crate::daemon::Daemon, pt: &PitchforkToml) -> bool {
+    daemon.id != DaemonId::pitchfork()
+        && daemon.pid.is_none()
+        && daemon.cmd.is_some()
+        && daemon.is_adhoc()
+        && !pt.daemons.contains_key(&daemon.id)
+}
+
+/// Add the stopped `pitchfork run` daemons among `records` to the ad-hoc
+/// daemons a start can run, without replacing a running one. Returns the ids
+/// of the records that cannot be started this way.
+fn add_stopped_adhoc_daemons(
+    adhoc_daemons: &mut HashMap<DaemonId, crate::daemon::Daemon>,
+    records: Vec<crate::daemon::Daemon>,
+    pt: &PitchforkToml,
+) -> HashSet<DaemonId> {
+    let mut unstartable = HashSet::new();
+    for daemon in records {
+        if restartable_adhoc(&daemon, pt) {
+            adhoc_daemons.entry(daemon.id.clone()).or_insert(daemon);
+        } else {
+            unstartable.insert(daemon.id);
+        }
+    }
+    unstartable
+}
+
+/// Why a requested daemon cannot be started.
+fn not_startable_reason(id: &DaemonId, in_state: bool) -> String {
+    if in_state {
+        format!(
+            "Daemon {id} is in state but has no config entry and no `pitchfork run` command to start it from; run it with `pitchfork run {id} -- <command>` or add it back to config"
+        )
+    } else {
+        format!("Daemon {id} not found in config or state")
+    }
+}
+
 fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
     // A oneshot's readiness is its exit, so a delay would only be a second,
     // conflicting answer to the same question.
@@ -226,6 +304,30 @@ fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
         && opts.ready_http.is_none()
         && opts.ready_port.is_none()
         && opts.ready_cmd.is_none()
+}
+
+/// The ready port an ad-hoc daemon was run with, for a restart that keeps it.
+///
+/// A record saved before `configured_ready_port` existed has only
+/// `ready_port`, the port the last run checked. When that run's ports were
+/// bumped and it checked one of them, the record cannot tell a ready port
+/// bumped along with the expected ports from one given as the bumped number,
+/// so no port is kept rather than possibly the wrong one.
+fn saved_ready_port(saved: &crate::daemon::Daemon) -> Option<ReadyPort> {
+    if saved.configured_ready_port.is_some() {
+        return saved.configured_ready_port.clone();
+    }
+    let ready_port = saved.ready_port.clone()?;
+    let expected = saved
+        .port
+        .as_ref()
+        .map(|p| p.expect.as_slice())
+        .unwrap_or_default();
+    let bumped = !expected.is_empty() && saved.resolved_port.as_slice() != expected;
+    let checked_a_resolved_port = ready_port
+        .port
+        .is_some_and(|port| saved.resolved_port.contains(&port));
+    (!(bumped && checked_a_resolved_port)).then_some(ready_port)
 }
 
 /// Render Tera templates for a single daemon config before starting it.
@@ -596,11 +698,22 @@ impl IpcClient {
 
         // Get all active daemons for ad-hoc restart support
         let all_daemons = self.active_daemons().await?;
-        let adhoc_daemons: HashMap<DaemonId, crate::daemon::Daemon> = all_daemons
+        let mut adhoc_daemons: HashMap<DaemonId, crate::daemon::Daemon> = all_daemons
             .into_iter()
             .filter(|d| !pt.daemons.contains_key(&d.id))
             .map(|d| (d.id.clone(), d))
             .collect();
+        // A stopped `pitchfork run` daemon starts again from its saved command,
+        // as a stopped config daemon does from its config. Its record comes
+        // from the supervisor, which owns the state; it is asked only for the
+        // requested daemons that are neither in config nor running.
+        let without_source = ids_without_a_source(ids, &pt, &adhoc_daemons);
+        let unstartable = if without_source.is_empty() {
+            HashSet::new()
+        } else {
+            let records = self.daemons(&without_source).await?;
+            add_stopped_adhoc_daemons(&mut adhoc_daemons, records, &pt)
+        };
 
         // Filter out disabled daemons from the requested list
         let requested_ids: Vec<DaemonId> = ids
@@ -883,21 +996,23 @@ impl IpcClient {
                         let task = Self::spawn_adhoc_start_task(
                             id,
                             cmd.clone(),
-                            adhoc_daemon.dir.clone().unwrap_or_default(),
-                            adhoc_daemon.env.clone(),
-                            adhoc_daemon.ready_http.clone(),
-                            adhoc_daemon.health_cmd.clone(),
-                            adhoc_daemon.health_http.clone(),
-                            adhoc_daemon.health_port.clone(),
+                            adhoc_daemon,
                             is_explicit,
                             &opts,
                         );
                         tasks.push(task);
                     } else {
-                        warn!("Ad-hoc daemon {id} has no saved command, cannot restart");
+                        let reason =
+                            format!("Ad-hoc daemon {id} has no saved command, cannot restart");
+                        warn!("{reason}");
+                        any_failed = true;
+                        failed.push((id, reason));
                     }
                 } else {
-                    warn!("Daemon {id} not found in config or state");
+                    let reason = not_startable_reason(&id, unstartable.contains(&id));
+                    warn!("{reason}");
+                    any_failed = true;
+                    failed.push((id, reason));
                 }
             }
 
@@ -1041,35 +1156,58 @@ impl IpcClient {
     /// Spawn a task to start an ad-hoc daemon using saved command
     ///
     /// This handles restarting ad-hoc daemons that were originally started
-    /// via `pitchfork run` command.
+    /// via `pitchfork run` command. `saved` is the daemon's record, whose
+    /// settings from that run apply again unless `opts` overrides them.
     ///
     /// Each task uses its own dedicated IPC connection so concurrent responses
     /// are attributed deterministically (see [`Self::connect_dedicated`]).
-    #[allow(clippy::too_many_arguments)]
     fn spawn_adhoc_start_task(
         id: DaemonId,
         cmd: Vec<String>,
-        dir: PathBuf,
-        env: Option<IndexMap<String, String>>,
-        ready_http: Option<ReadyHttp>,
-        health_cmd: Option<HealthCmd>,
-        health_http: Option<HealthHttp>,
-        health_port: Option<HealthPort>,
+        saved: &crate::daemon::Daemon,
         is_explicitly_requested: bool,
         opts: &StartOptions,
     ) -> tokio::task::JoinHandle<SpawnTaskResult> {
         let force = opts.force && is_explicitly_requested;
-        let delay = opts.delay;
-        let output = opts.output.clone();
-        let http = merge_ready_http_override(ready_http, opts.http.clone());
-        let port = opts.port;
-        let ready_cmd = opts.cmd.clone().map(ReadyCmd::new);
-        let health_cmd = merge_health_cmd_override(health_cmd, opts.health_cmd.clone());
-        let health_http = merge_health_http_override(health_http, opts.health_http.clone());
-        let health_port = merge_health_port_override(health_port, opts.health_port);
-        let expected_port = opts.expected_port.clone();
-        let auto_bump_port = opts.auto_bump_port;
-        let retry = opts.retry.unwrap_or_default();
+        let dir = saved.dir.clone().unwrap_or_default();
+        let env = saved.env.clone();
+        // Readiness flags replace how the daemon was waited for; without any,
+        // it is waited for the way `pitchfork run` was asked to.
+        let ready_flags = opts.delay.is_some()
+            || opts.output.is_some()
+            || opts.http.is_some()
+            || opts.port.is_some()
+            || opts.cmd.is_some();
+        let (delay, output, http, port, ready_cmd) = if ready_flags {
+            (
+                opts.delay,
+                opts.output.clone().map(ReadyOutput::new),
+                merge_ready_http_override(None, opts.http.clone()),
+                opts.port.map(ReadyPort::new),
+                opts.cmd.clone().map(ReadyCmd::new),
+            )
+        } else {
+            (
+                saved.ready_delay,
+                saved.ready_output.clone(),
+                saved.ready_http.clone(),
+                saved_ready_port(saved),
+                saved.ready_cmd.clone(),
+            )
+        };
+        let health_cmd =
+            merge_health_cmd_override(saved.health_cmd.clone(), opts.health_cmd.clone());
+        let health_http =
+            merge_health_http_override(saved.health_http.clone(), opts.health_http.clone());
+        let health_port = merge_health_port_override(saved.health_port.clone(), opts.health_port);
+        // `restart` offers no flags for these, so they stay as `run` set them;
+        // `start` may override the expected ports or the bump, each on its own.
+        let saved_port = saved.port.clone().unwrap_or_default();
+        let port_config = crate::config_types::PortConfig::from_parts(
+            opts.expected_port.clone().unwrap_or(saved_port.expect),
+            opts.auto_bump_port.unwrap_or(saved_port.bump),
+        );
+        let retry = opts.retry.unwrap_or(saved.retry);
         let shell_pid = opts.shell_pid;
         let quiet = opts.quiet;
 
@@ -1082,17 +1220,15 @@ impl IpcClient {
                 dir: crate::config_types::Dir(dir),
                 retry,
                 ready_delay: delay,
-                ready_output: output.map(ReadyOutput::new),
+                ready_output: output,
                 ready_http: http,
-                ready_port: port.map(ReadyPort::new),
+                ready_port: port,
                 ready_cmd,
                 health_cmd,
                 health_http,
                 health_port,
-                port: crate::config_types::PortConfig::from_parts(
-                    expected_port.unwrap_or_default(),
-                    auto_bump_port.unwrap_or_default(),
-                ),
+                port: port_config,
+                replaces_ready_checks: ready_flags,
                 wait_ready: true,
                 env,
                 watch: vec![],
@@ -1100,6 +1236,8 @@ impl IpcClient {
                 mise: None,
                 slug: None,
                 proxy: None,
+                // Only part of the saved record: what it leaves unset is kept.
+                replaces_saved_record: false,
                 ..RunOptions::default()
             };
             if should_inject_default_ready_delay(&run_opts) {
@@ -1359,6 +1497,9 @@ impl IpcClient {
             mise: None,
             slug: None,
             proxy: None,
+            // An ad-hoc run is the whole daemon: nothing a config daemon of
+            // the same id set carries over.
+            replaces_saved_record: true,
             ..RunOptions::default()
         };
         if should_inject_default_ready_delay(&run_opts) {
@@ -1416,6 +1557,164 @@ mod tests {
     use crate::env;
 
     use super::*;
+
+    fn saved_with_ports(
+        configured: Option<u16>,
+        checked: Option<u16>,
+        expected: &[u16],
+        resolved: &[u16],
+    ) -> crate::daemon::Daemon {
+        crate::daemon::Daemon {
+            configured_ready_port: configured.map(ReadyPort::new),
+            ready_port: checked.map(ReadyPort::new),
+            port: (!expected.is_empty()).then(|| crate::config_types::PortConfig {
+                expect: expected.to_vec(),
+                ..Default::default()
+            }),
+            resolved_port: resolved.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saved_ready_port_prefers_the_port_as_given() {
+        let saved = saved_with_ports(Some(3000), Some(3004), &[3000], &[3004]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(3000)));
+    }
+
+    #[test]
+    fn saved_ready_port_falls_back_to_an_older_record_s_checked_port() {
+        // No expected ports: the checked port is the one given.
+        let saved = saved_with_ports(None, Some(8080), &[], &[]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(8080)));
+        // Expected ports that were not bumped.
+        let saved = saved_with_ports(None, Some(3000), &[3000], &[3000]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(3000)));
+    }
+
+    #[test]
+    fn saved_ready_port_drops_an_older_record_s_ambiguous_bumped_port() {
+        // `--port 3000` bumped to 3001, or `--port 3001` given as it is: the
+        // two runs leave the same record, so neither port is assumed.
+        let saved = saved_with_ports(None, Some(3001), &[3000], &[3001]);
+        assert_eq!(saved_ready_port(&saved), None);
+        let saved = saved_with_ports(None, Some(4003), &[3000, 4000], &[3003, 4003]);
+        assert_eq!(saved_ready_port(&saved), None);
+    }
+
+    #[test]
+    fn saved_ready_port_keeps_an_older_record_s_port_outside_the_bumped_ones() {
+        let saved = saved_with_ports(None, Some(8080), &[3000], &[3001]);
+        assert_eq!(saved_ready_port(&saved), Some(ReadyPort::new(8080)));
+    }
+
+    #[test]
+    fn saved_ready_port_is_none_without_a_ready_port() {
+        let saved = saved_with_ports(None, None, &[3000], &[3004]);
+        assert_eq!(saved_ready_port(&saved), None);
+    }
+
+    fn saved_daemon(
+        name: &str,
+        set: impl FnOnce(&mut crate::daemon::Daemon),
+    ) -> crate::daemon::Daemon {
+        let mut d = crate::daemon::Daemon {
+            id: DaemonId::new("global", name),
+            cmd: Some(vec!["sleep".to_string(), "60".to_string()]),
+            ..Default::default()
+        };
+        set(&mut d);
+        d
+    }
+
+    fn config_with(names: &[&str]) -> PitchforkToml {
+        let mut pt = PitchforkToml::new(PathBuf::from("pitchfork.toml"));
+        for &name in names {
+            pt.daemons.insert(
+                DaemonId::new("global", name),
+                PitchforkTomlDaemon::default(),
+            );
+        }
+        pt
+    }
+
+    #[test]
+    fn only_stopped_records_made_by_run_are_started_from_their_command() {
+        let pt = config_with(&["in_config"]);
+        let mut adhoc = HashMap::new();
+        let unstartable = add_stopped_adhoc_daemons(
+            &mut adhoc,
+            vec![
+                saved_daemon("adhoc", |_| {}),
+                saved_daemon("running", |d| d.pid = Some(1234)),
+                saved_daemon("no_cmd", |d| d.cmd = None),
+                saved_daemon("from_removed_config", |d| {
+                    d.watch_base_dir = Some(PathBuf::from("/project"));
+                }),
+                // A config daemon recorded before `watch_base_dir` was stored.
+                saved_daemon("old_cron", |d| d.cron_schedule = Some("0 * * * * *".into())),
+                saved_daemon("in_config", |_| {}),
+                saved_daemon("unused", |d| d.id = DaemonId::pitchfork()),
+            ],
+            &pt,
+        );
+
+        assert_eq!(
+            adhoc.keys().cloned().collect::<Vec<_>>(),
+            vec![DaemonId::new("global", "adhoc")]
+        );
+        let mut unstartable: Vec<_> = unstartable.into_iter().collect();
+        unstartable.sort();
+        let mut expected = vec![
+            DaemonId::new("global", "running"),
+            DaemonId::new("global", "no_cmd"),
+            DaemonId::new("global", "from_removed_config"),
+            DaemonId::new("global", "old_cron"),
+            DaemonId::new("global", "in_config"),
+            DaemonId::pitchfork(),
+        ];
+        expected.sort();
+        assert_eq!(unstartable, expected);
+    }
+
+    #[test]
+    fn a_running_daemon_is_kept_over_its_stopped_record() {
+        let running = saved_daemon("adhoc", |d| d.pid = Some(1234));
+        let mut adhoc = HashMap::from([(running.id.clone(), running)]);
+        add_stopped_adhoc_daemons(
+            &mut adhoc,
+            vec![saved_daemon("adhoc", |d| {
+                d.cmd = Some(vec!["other".into()])
+            })],
+            &config_with(&[]),
+        );
+        assert_eq!(adhoc[&DaemonId::new("global", "adhoc")].pid, Some(1234));
+    }
+
+    #[test]
+    fn records_are_asked_for_only_for_daemons_with_nothing_to_start_from() {
+        let pt = config_with(&["configured"]);
+        let running = saved_daemon("running", |d| d.pid = Some(1234));
+        let adhoc = HashMap::from([(running.id.clone(), running)]);
+        let configured = DaemonId::new("global", "configured");
+        let running_id = DaemonId::new("global", "running");
+        let unknown = DaemonId::new("global", "unknown");
+
+        assert!(
+            ids_without_a_source(&[configured.clone(), running_id.clone()], &pt, &adhoc).is_empty()
+        );
+        assert_eq!(
+            ids_without_a_source(&[configured, unknown.clone(), running_id], &pt, &adhoc),
+            vec![unknown]
+        );
+    }
+
+    #[test]
+    fn a_record_in_state_is_not_reported_as_missing() {
+        let id = DaemonId::new("global", "removed");
+        assert!(not_startable_reason(&id, true).contains("is in state"));
+        assert!(not_startable_reason(&id, false).contains("not found in config or state"));
+    }
 
     #[test]
     fn http_override_preserves_configured_status_codes() {
@@ -1487,16 +1786,117 @@ mod tests {
         run_project_mise_test_in_sanitized_child("dot-config").await;
     }
 
+    #[tokio::test]
+    async fn build_run_options_passes_project_mise_bin() {
+        run_sanitized_child(
+            "ipc::batch::tests::build_run_options_passes_project_mise_bin_in_sanitized_child",
+            "project-mise-bin-sanitized-child-ran",
+            "project",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn build_run_options_passes_project_mise_bin_in_sanitized_child() {
+        if std::env::var("PITCHFORK_TEST_PROJECT_MISE_MODE").is_err() {
+            return;
+        }
+        eprintln!("project-mise-bin-sanitized-child-ran");
+
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("pitchfork.toml");
+        let mise_bin = project.path().join("bin").join("mise");
+        tokio::fs::write(
+            &config_path,
+            format!(
+                "[settings.general]\nmise_bin = {:?}\n",
+                mise_bin.to_string_lossy()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let id = DaemonId::try_new("other-project", "api").unwrap();
+        let daemon = |mise| PitchforkTomlDaemon {
+            run: "echo ready".into(),
+            path: Some(config_path.clone()),
+            mise,
+            ..PitchforkTomlDaemon::default()
+        };
+
+        // `mise = true` on the daemon used to skip reading the project
+        // settings altogether.
+        let run_opts = build_run_options(&id, &daemon(Some(true)), None)
+            .await
+            .unwrap();
+        assert_eq!(run_opts.mise_bin, Some(mise_bin));
+
+        // Not run under mise: there is no binary to hand over.
+        let run_opts = build_run_options(&id, &daemon(Some(false)), None)
+            .await
+            .unwrap();
+        assert_eq!(run_opts.mise_bin, None);
+    }
+
+    #[tokio::test]
+    async fn project_mise_options_reads_the_daemon_project() {
+        run_sanitized_child(
+            "ipc::batch::tests::project_mise_options_reads_the_daemon_project_in_sanitized_child",
+            "project-mise-options-sanitized-child-ran",
+            "project",
+        )
+        .await;
+    }
+
+    #[test]
+    fn project_mise_options_reads_the_daemon_project_in_sanitized_child() {
+        if std::env::var("PITCHFORK_TEST_PROJECT_MISE_MODE").is_err() {
+            return;
+        }
+        eprintln!("project-mise-options-sanitized-child-ran");
+
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("pitchfork.toml");
+        let project_dir = resolve_config_base_dir(Some(&config_path));
+        std::fs::write(
+            &config_path,
+            "[settings.general]\nmise = true\nmise_bin = \"tools/mise\"\n",
+        )
+        .unwrap();
+        let daemon = |mise| PitchforkTomlDaemon {
+            run: "echo ready".into(),
+            path: Some(config_path.clone()),
+            mise,
+            ..PitchforkTomlDaemon::default()
+        };
+
+        // The project's `general.mise`, and its relative mise_bin from the
+        // project's directory.
+        assert_eq!(
+            project_mise_options(&daemon(None)),
+            (true, Some(project_dir.join("tools/mise")))
+        );
+        // A daemon turning mise off has no binary to hand over.
+        assert_eq!(project_mise_options(&daemon(Some(false))), (false, None));
+    }
+
     async fn run_project_mise_test_in_sanitized_child(mode: &str) {
-        const CHILD_SENTINEL: &str = "project-mise-sanitized-child-ran";
+        run_sanitized_child(
+            "ipc::batch::tests::build_run_options_resolves_mise_in_sanitized_child",
+            "project-mise-sanitized-child-ran",
+            mode,
+        )
+        .await;
+    }
+
+    /// Run `test` in a child test process without the environment overrides
+    /// that would take precedence over the project's settings file.
+    async fn run_sanitized_child(test: &str, sentinel: &str, mode: &str) {
         let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "ipc::batch::tests::build_run_options_resolves_mise_in_sanitized_child",
-                "--nocapture",
-            ])
+            .args(["--exact", test, "--nocapture"])
             .env("PITCHFORK_TEST_PROJECT_MISE_MODE", mode)
             .env_remove("PITCHFORK_MISE")
+            .env_remove("PITCHFORK_MISE_BIN")
             .output()
             .await
             .unwrap();
@@ -1508,7 +1908,7 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains(CHILD_SENTINEL),
+            String::from_utf8_lossy(&output.stderr).contains(sentinel),
             "sanitized child test did not run:\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)

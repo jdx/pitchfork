@@ -147,14 +147,29 @@ impl TemplateContext {
     /// Convert this context into a Tera Context for rendering.
     pub fn to_tera_context(&self) -> tera::Context {
         let mut ctx = tera::Context::new();
+        for (key, value) in self.to_json_map() {
+            ctx.insert(key, &value);
+        }
+        ctx
+    }
+
+    /// The variables templates can reference, as JSON.
+    fn to_json_map(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        let mut insert = |key: &str, value: serde_json::Value| {
+            map.insert(key.to_string(), value);
+        };
 
         // Self variables
-        ctx.insert("name", &self.self_state.name);
-        ctx.insert("namespace", &self.self_state.namespace);
-        ctx.insert("id", &self.self_state.id);
-        ctx.insert("slug", &self.self_state.slug);
-        ctx.insert("host", &self.self_state.host);
-        ctx.insert("dir", &self.self_state.dir.to_string_lossy().to_string());
+        insert("name", self.self_state.name.clone().into());
+        insert("namespace", self.self_state.namespace.clone().into());
+        insert("id", self.self_state.id.clone().into());
+        insert("slug", serde_json::json!(self.self_state.slug));
+        insert("host", serde_json::json!(self.self_state.host));
+        insert(
+            "dir",
+            self.self_state.dir.to_string_lossy().to_string().into(),
+        );
 
         // Daemons
         let mut daemons_map = serde_json::Map::new();
@@ -164,13 +179,13 @@ impl TemplateContext {
             }
             daemons_map.insert(name.clone(), daemon_state_to_json(state));
         }
-        ctx.insert("daemons", &serde_json::Value::Object(daemons_map));
+        insert("daemons", serde_json::Value::Object(daemons_map));
 
         // Settings
         let s = settings();
-        ctx.insert(
+        insert(
             "settings",
-            &serde_json::json!({
+            serde_json::json!({
                 "proxy": {
                     "enable": s.proxy.enable,
                     "tld": s.proxy.tld,
@@ -183,20 +198,20 @@ impl TemplateContext {
         // Always expose proxy_url so templates can distinguish an unroutable daemon
         // via a strict null value instead of an undefined-variable error.
         let proxy_url = crate::proxy::build_proxy_url(self.self_state.host.as_deref(), &s);
-        ctx.insert("proxy_url", &proxy_url);
+        insert("proxy_url", serde_json::json!(proxy_url));
         // `url` is the current spelling; `proxy_url` stays for existing configs.
-        ctx.insert("url", &proxy_url);
+        insert("url", serde_json::json!(proxy_url));
 
         // Rendered env for this daemon (set via set_env after env rendering)
         if let Some(ref env) = self.env {
-            let map: serde_json::Map<String, serde_json::Value> = env
+            let env: serde_json::Map<String, serde_json::Value> = env
                 .iter()
                 .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                 .collect();
-            ctx.insert("env", &serde_json::Value::Object(map));
+            insert("env", serde_json::Value::Object(env));
         }
 
-        ctx
+        map
     }
 }
 
@@ -295,13 +310,23 @@ pub fn render_daemon_templates(
     context: &mut TemplateContext,
     top_env: Option<&IndexMap<String, String>>,
 ) -> Result<(), RenderError> {
+    render_daemon_templates_with(config, context, top_env, runs_under_mise)
+}
+
+/// [`render_daemon_templates`] with the decision whether `mise x` will wrap the
+/// daemon given, so a test does not depend on a mise installation.
+fn render_daemon_templates_with(
+    config: &mut PitchforkTomlDaemon,
+    context: &mut TemplateContext,
+    top_env: Option<&IndexMap<String, String>>,
+    runs_under_mise: impl Fn(&PitchforkTomlDaemon) -> bool,
+) -> Result<(), RenderError> {
     // Phase 1: merge top-level env into the daemon's env (per-daemon wins) and
     // render env values. `env` is NOT yet in the context, so env values cannot
     // reference {{ env.* }} (preventing cycles). render_env builds its own
     // short-lived renderer without env in scope.
     let rendered_env = render_env(top_env, config.env.as_ref(), context)?;
     config.env = rendered_env;
-
     // Phase 2: expose the rendered env on the context as the authoritative
     // state, so to_tera_context() (used by TemplateRenderer::new) includes it.
     if let Some(ref env) = config.env {
@@ -312,7 +337,26 @@ pub fn render_daemon_templates(
 
     // In the argv form each argument is rendered on its own, so a rendered
     // value with spaces stays one argument.
-    config.run = config.run.try_map(|arg| renderer.render(arg))?;
+    //
+    // A command that `mise x` wraps can reference variables only mise knows, such
+    // as `{{ vars.name }}` from mise.toml. When this context cannot render such a
+    // command it is passed through unrendered, and `mise x` renders it with this
+    // context plus its own, or reports the error itself.
+    let mut defers_to_mise = None;
+    let mut deferred = false;
+    config.run = config.run.try_map(|arg| match renderer.render(arg) {
+        Ok(rendered) => Ok(rendered),
+        Err(err) => {
+            if *defers_to_mise.get_or_insert_with(|| runs_under_mise(config)) {
+                deferred = true;
+                Ok(arg.to_string())
+            } else {
+                Err(err)
+            }
+        }
+    })?;
+    config.deferred_template_context =
+        deferred.then(|| serde_json::Value::Object(context.to_json_map()).to_string());
 
     if let Some(ref hooks) = config.hooks {
         let rendered = crate::config_types::PitchforkTomlHooks {
@@ -434,6 +478,29 @@ pub fn render_daemon_templates(
     Ok(())
 }
 
+/// Environment variable carrying the template context to the `mise x` wrapper of a
+/// daemon whose command it has to finish rendering.
+pub const TEMPLATE_CONTEXT_ENV: &str = "PITCHFORK_TEMPLATE_CONTEXT";
+
+/// Whether `mise x` is meant to wrap this daemon's command, which is what can finish
+/// rendering a command this context could not. Whether the binary can be found is
+/// decided at launch, by the supervisor that looks for it: a client rendering the
+/// command may not see the same installation.
+fn runs_under_mise(config: &PitchforkTomlDaemon) -> bool {
+    mise_enabled(config)
+}
+
+/// Whether the daemon asks for `mise x`: its own `mise`, else `general.mise` as set
+/// for the daemon's project. A start that does not go through a client's request
+/// must use this same answer, or it would launch without the wrapper that a
+/// deferred command needs.
+pub(crate) fn mise_enabled(config: &PitchforkTomlDaemon) -> bool {
+    config.mise.unwrap_or_else(|| {
+        let dir = crate::ipc::batch::resolve_config_base_dir(config.path.as_deref());
+        crate::settings::Settings::load_from_dir(&dir).general.mise
+    })
+}
+
 fn contains_template_syntax(template: &str) -> bool {
     template.contains("{{") || template.contains("{%") || template.contains("{#")
 }
@@ -469,20 +536,24 @@ impl TemplateRenderer {
         }
     }
 
-    fn render(&mut self, template: &str) -> Result<String, RenderError> {
-        if !contains_template_syntax(template) {
-            return Ok(template.to_string());
-        }
-
+    fn add_template(&mut self, template: &str) -> Result<String, RenderError> {
         let template_name = format!("config_{}", self.next_template_id);
         self.next_template_id += 1;
-
         self.tera
             .add_raw_template(&template_name, template)
             .map_err(|e| RenderError::TemplateSyntax {
                 template: template.to_string(),
                 source: e,
             })?;
+        Ok(template_name)
+    }
+
+    fn render(&mut self, template: &str) -> Result<String, RenderError> {
+        if !contains_template_syntax(template) {
+            return Ok(template.to_string());
+        }
+
+        let template_name = self.add_template(template)?;
 
         self.tera
             .render(&template_name, &self.context)
@@ -698,6 +769,81 @@ mod tests {
         };
         render_daemon_templates(&mut config, &mut ctx, None).unwrap();
         assert_eq!(config.run, "redis-cli -p 6379");
+    }
+
+    #[test]
+    fn test_run_with_unknown_variable_is_deferred_to_mise() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "redis-cli -p {{ daemons.redis.port }} {{ vars.greeting | quote }}".into(),
+            ..Default::default()
+        };
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
+        // The whole command is left for `mise x`, which receives the context.
+        assert_eq!(
+            config.run,
+            "redis-cli -p {{ daemons.redis.port }} {{ vars.greeting | quote }}"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(config.deferred_template_context.as_ref().unwrap()).unwrap();
+        assert_eq!(json["daemons"]["redis"]["port"], 6379);
+        assert_eq!(json["name"], "self");
+    }
+
+    #[test]
+    fn test_unknown_variable_is_an_error_without_mise() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo {{ vars.greeting }}".into(),
+            ..Default::default()
+        };
+        // mise is off, so nothing could finish it.
+        assert!(render_daemon_templates_with(&mut config, &mut ctx, None, |_| false).is_err());
+        assert!(config.deferred_template_context.is_none());
+    }
+
+    #[test]
+    fn test_user_declared_context_variable_is_left_alone() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "redis-cli -p {{ daemons.redis.port }}".into(),
+            env: Some(IndexMap::from([(
+                TEMPLATE_CONTEXT_ENV.to_string(),
+                "mine".to_string(),
+            )])),
+            ..Default::default()
+        };
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
+        // Not a deferral, and the user's own value is untouched.
+        assert!(config.deferred_template_context.is_none());
+        assert_eq!(config.env.as_ref().unwrap()[TEMPLATE_CONTEXT_ENV], "mine");
+    }
+
+    #[test]
+    fn test_known_variables_are_not_deferred() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "redis-cli -p {{ daemons.redis.port }}".into(),
+            ..Default::default()
+        };
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
+        assert_eq!(config.run, "redis-cli -p 6379");
+        assert!(config.deferred_template_context.is_none());
+    }
+
+    #[test]
+    fn test_missing_nested_variable_is_deferred_when_env_is_defined() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo {{ env.MISE_ONLY }}".into(),
+            env: Some(IndexMap::from([("OWN".to_string(), "x".to_string())])),
+            ..Default::default()
+        };
+        render_daemon_templates_with(&mut config, &mut ctx, None, |_| true).unwrap();
+        assert_eq!(config.run, "echo {{ env.MISE_ONLY }}");
+        let json: serde_json::Value =
+            serde_json::from_str(config.deferred_template_context.as_ref().unwrap()).unwrap();
+        assert_eq!(json["env"]["OWN"], "x");
     }
 
     #[test]

@@ -72,6 +72,34 @@ EOF
   assert_success
 }
 
+@test "slug that is not a valid daemon name still resolves" {
+  local proj="$TEST_TEMP_DIR/invalid-name-slug"
+  local other_dir="$TEST_TEMP_DIR/invalid-name-other"
+  mkdir -p "$proj" "$other_dir"
+
+  cd "$proj"
+  create_pitchfork_toml <<'EOF'
+[daemons.backend]
+run = "sleep 60"
+EOF
+
+  # `--` is allowed in a slug but not in a daemon name.
+  run pitchfork proxy add my--alias --daemon backend
+  assert_success
+
+  run pitchfork start my--alias
+  assert_success
+
+  cd "$other_dir"
+  run pitchfork status my--alias
+  assert_success
+  assert_output --partial "invalid-name-slug/backend"
+  assert_output --partial "running"
+
+  run pitchfork stop my--alias
+  assert_success
+}
+
 @test "slug takes priority over daemon name in another namespace" {
   local proj_a="$TEST_TEMP_DIR/proj-a"
   local proj_b="$TEST_TEMP_DIR/proj-b"
@@ -112,6 +140,44 @@ EOF
   run pitchfork stop web || true
   cd "$proj_b"
   run pitchfork stop frontend || true
+}
+
+@test "local daemon takes priority over another project's slug of the same name" {
+  local proj_a="$TEST_TEMP_DIR/slug-owner"
+  local proj_b="$TEST_TEMP_DIR/slug-local"
+  mkdir -p "$proj_a" "$proj_b"
+
+  cd "$proj_a"
+  create_pitchfork_toml <<'EOF'
+[daemons.api]
+run = "sleep 60"
+EOF
+  run pitchfork proxy add api --daemon api
+  assert_success
+
+  cd "$proj_b"
+  create_pitchfork_toml <<'EOF'
+[daemons.api]
+run = "sleep 60"
+EOF
+
+  run pitchfork start api
+  assert_success
+  refute_output --partial "not found"
+
+  run pitchfork status api
+  assert_success
+  assert_output --partial "slug-local/api"
+  assert_output --partial "running"
+
+  run pitchfork stop api
+  assert_success
+
+  cd "$proj_a"
+  run pitchfork status api
+  assert_success
+  assert_output --partial "slug-owner/api"
+  refute_output --partial "running"
 }
 
 @test "slug takes priority over same-named daemon in another namespace" {

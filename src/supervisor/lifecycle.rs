@@ -403,7 +403,7 @@ pub(crate) struct RetryingGuard {
 }
 
 impl RetryingGuard {
-    /// Whether a `stop` has asked this retry sequence to end.
+    /// Whether a `stop` or a `disable` has asked this retry sequence to end.
     fn is_cancelled(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -539,6 +539,15 @@ impl Supervisor {
             info!("daemon {id} was stopped after this retry was decided on; not starting it");
             return Ok(IpcResponse::DaemonNotRunning);
         }
+        // Likewise a disable, for every start the supervisor makes on its own
+        // (retries, the schedule, boot): each read the disabled set before
+        // waiting for this lock, and `disable` takes it too.
+        if (approved_at.is_some() || !opts.requested_by_client)
+            && self.state_file.lock().await.disabled.contains(id)
+        {
+            info!("daemon {id} was disabled before this start; not starting it");
+            return Ok(IpcResponse::DaemonNotRunning);
+        }
         if let Some(response) = self.claim_or_defer(&opts, &mut stop_guard).await? {
             return Ok(response);
         }
@@ -589,6 +598,17 @@ impl Supervisor {
                 {
                     info!("daemon {id} completed while waiting to retry; not running it again");
                     return Ok(IpcResponse::DaemonReady { daemon });
+                }
+                // A disable during the backoff ends the sequence, checked under
+                // the guard `disable` takes. It wakes the backoff the way a stop
+                // does, so it is checked first to report what happened.
+                if attempt > 0 && self.state_file.lock().await.disabled.contains(id) {
+                    info!(
+                        "daemon {id} was disabled while waiting to retry; abandoning its retries"
+                    );
+                    return Ok(IpcResponse::DaemonFailed {
+                        error: "disabled while retrying".to_string(),
+                    });
                 }
                 // A stop that arrived during the backoff ends the sequence.
                 // Without this the loop would start the next attempt on a
@@ -841,8 +861,13 @@ impl Supervisor {
                     // sleeps out its backoff, so an errored record with
                     // attempts left is a gap between tries rather than the
                     // result. Same condition `check_retry` uses to decide
-                    // whether another attempt is still owed.
-                    if daemon.retry.count() > 0 && daemon.retry_count < daemon.retry.count() {
+                    // whether another attempt is still owed. A disabled daemon
+                    // is owed none: every retry path checks the disabled set,
+                    // under the lock `disable` takes, before starting one.
+                    if daemon.retry.count() > 0
+                        && daemon.retry_count < daemon.retry.count()
+                        && !self.state_file.lock().await.disabled.contains(id)
+                    {
                         debug!(
                             "daemon {id}: in-flight oneshot failed attempt {} of {}; still waiting",
                             daemon.retry_count + 1,
@@ -1032,7 +1057,7 @@ impl Supervisor {
         };
 
         let mise_bin = if opts.mise.unwrap_or(settings().general.mise) {
-            let mise_bin = settings().resolve_mise_bin();
+            let mise_bin = settings().resolve_daemon_mise_bin(opts.mise_bin.as_deref());
             if mise_bin.is_none() {
                 warn!("daemon {id}: mise=true but mise binary not found, running without mise");
             }
@@ -1040,6 +1065,16 @@ impl Supervisor {
         } else {
             None
         };
+        // A command left unrendered for `mise x` is not runnable without it: the
+        // shell would see the template tags. Fail here, where the binary is
+        // actually looked up, rather than guessing at render time.
+        if mise_bin.is_none() && opts.deferred_template_context.is_some() {
+            return Ok(IpcResponse::DaemonFailed {
+                error: format!(
+                    "daemon {id}: the command uses template variables only mise can render, but mise is not enabled or its binary was not found"
+                ),
+            });
+        }
         // Started directly, the shell gets its script from `shell_script`.
         // Under mise it goes in as an ordinary argument: mise starts the shell
         // itself, re-quoting each argument, so the raw command line cmd.exe
@@ -1200,6 +1235,10 @@ impl Supervisor {
             opts.env.as_ref(),
             &resolved_ports,
         );
+        // After the daemon's own env, since `mise x` needs exactly this value.
+        if let Some(context) = &opts.deferred_template_context {
+            cmd.env(crate::template::TEMPLATE_CONTEXT_ENV, context);
+        }
 
         // Inject proxy-related environment variables
         inject_proxy_env(&mut cmd, &daemon_proxy_host(&opts).await);
@@ -1548,12 +1587,11 @@ impl Supervisor {
                 .as_ref()
                 .and_then(|h| h.timeout)
                 .map(|d| Box::pin(time::sleep(d)));
-            let http_client = ready_http.as_ref().map(|_| {
-                reqwest::Client::builder()
-                    .timeout(http_client_timeout)
-                    .build()
-                    .unwrap_or_default()
-            });
+            let http_client = if ready_http.is_some() {
+                Some(crate::supervisor::health::supervisor_http_client().await)
+            } else {
+                None
+            };
 
             // Setup TCP port readiness check interval and deadline
             let mut port_check_interval =
@@ -1844,7 +1882,7 @@ impl Supervisor {
                         }
                     }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
                         if let (Some(http), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(&http.url).send().await {
+                            match client.get(&http.url).timeout(http_client_timeout).send().await {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;

@@ -81,7 +81,9 @@ impl Status {
                     let config = PitchforkToml::all_merged_all_namespaces()?;
                     match config.daemons.get(&qualified_id) {
                         Some(dc) => (build_placeholder_daemon(&qualified_id, dc), true),
-                        None => miette::bail!("Daemon {} not found", qualified_id),
+                        None => {
+                            miette::bail!("Daemon {} not found", qualified_id);
+                        }
                     }
                 }
             };

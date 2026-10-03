@@ -27,6 +27,8 @@ impl Supervisor {
                         // its retries. Starting an attempt out from under one
                         // leaves its caller reporting on a run it does not own.
                         && !self.is_retrying(id)
+                        // `pitchfork disable` stops the retries too.
+                        && !state_file.disabled.contains(id)
                 })
                 .map(|(id, _d)| id.clone())
                 .collect()
@@ -50,7 +52,8 @@ impl Supervisor {
                             // Re-checked here as well: a foreground run can
                             // claim these retries while this loop is awaiting
                             // `run` for an earlier daemon.
-                            && !self.is_retrying(&id) =>
+                            && !self.is_retrying(&id)
+                            && !state_file.disabled.contains(&id) =>
                     {
                         d.clone()
                     }

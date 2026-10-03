@@ -238,3 +238,84 @@ EOF
   done
   run pitchfork stop env_bump || true
 }
+
+# Hold $1 until the returned PID is killed. `occupy_port` lets go after five
+# seconds, which a slow start could outlast.
+_occupy_port_until_killed() {
+  local port="$1"
+  nohup python3 -c "
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('0.0.0.0', $port))
+s.listen(1)
+time.sleep(300)
+" >/dev/null 2>&1 &
+  echo $!
+}
+
+# A ready port given with `--port` is bumped along with the expected ports. A
+# restart that finds the expected port free again must probe that port, not
+# the one the last run bumped it to.
+@test "restarting a bumped ad-hoc daemon probes the port it starts on" {
+  local port=45695
+  kill_port "$port"
+  kill_port "$((port + 1))"
+  local blocker_pid
+  blocker_pid=$(_occupy_port_until_killed "$port")
+  _wait_for_port_bound "$port" || true
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  local http_script
+  http_script="$(script_path http_server.py)"
+  run pitchfork run adhoc_bumped --expected-port "$port" --bump 5 --port "$port" -- \
+    sh -c 'python3 -u "$0" 0 "$PORT"' "$http_script"
+  assert_success
+  wait_for_logs adhoc_bumped "Starting HTTP server on port $((port + 1))\."
+
+  kill "$blocker_pid" 2>/dev/null || true
+  wait "$blocker_pid" 2>/dev/null || true
+
+  run timeout 20 pitchfork restart adhoc_bumped
+  assert_success
+  wait_for_logs adhoc_bumped "Starting HTTP server on port $port\."
+
+  run pitchfork stop adhoc_bumped || true
+  kill_port "$port"
+  kill_port "$((port + 1))"
+}
+
+# A ready port outside the expected ports is not bumped, even when it is the
+# number a bump would produce. A restart keeps probing it as given.
+@test "restarting a bumped ad-hoc daemon keeps a ready port given as another port" {
+  local port=45700
+  kill_port "$port"
+  kill_port "$((port + 1))"
+  local blocker_pid
+  blocker_pid=$(_occupy_port_until_killed "$port")
+  _wait_for_port_bound "$port" || true
+
+  create_pitchfork_toml <<EOF
+EOF
+
+  # The server always listens on port + 1, the ready port given.
+  local http_script
+  http_script="$(script_path http_server.py)"
+  run pitchfork run adhoc_ready_other --expected-port "$port" --bump 5 --port "$((port + 1))" -- \
+    python3 -u "$http_script" 0 "$((port + 1))"
+  assert_success
+
+  kill "$blocker_pid" 2>/dev/null || true
+  wait "$blocker_pid" 2>/dev/null || true
+
+  run timeout 20 pitchfork restart adhoc_ready_other
+  assert_success
+  run pitchfork status adhoc_ready_other
+  assert_output --partial "running"
+
+  run pitchfork stop adhoc_ready_other || true
+  kill_port "$port"
+  kill_port "$((port + 1))"
+}

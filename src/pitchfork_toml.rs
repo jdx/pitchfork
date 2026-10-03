@@ -795,6 +795,16 @@ impl PitchforkToml {
         user_id: &str,
         current_namespace: &str,
     ) -> Result<DaemonId> {
+        // A daemon in the current namespace comes first, so another project's
+        // slug of the same name does not take over a local daemon. A slug can
+        // be a name no daemon can have (e.g. `my--alias`), so an invalid name
+        // only skips this check and is rejected after the slug lookup.
+        if let Ok(preferred_id) = DaemonId::try_new(current_namespace, user_id)
+            && self.daemons.contains_key(&preferred_id)
+        {
+            return Ok(preferred_id);
+        }
+
         // Check for slug match in global slugs registry
         let global_slugs = Self::read_global_slugs();
         if let Some(entry) = global_slugs.get(user_id) {
@@ -826,12 +836,8 @@ impl PitchforkToml {
             }
         }
 
-        // Try to find the daemon in the current namespace first
         // Use try_new to validate user input
-        let preferred_id = DaemonId::try_new(current_namespace, user_id)?;
-        if self.daemons.contains_key(&preferred_id) {
-            return Ok(preferred_id);
-        }
+        DaemonId::try_new(current_namespace, user_id)?;
 
         // Fall back to any matching daemon
         let matches = self.resolve_daemon_id(user_id)?;
@@ -1508,6 +1514,7 @@ impl PitchforkToml {
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
+                deferred_template_context: None,
                 user: raw_daemon.user,
                 memory_limit: raw_daemon.memory_limit,
                 cpu_limit: raw_daemon.cpu_limit,
@@ -2194,6 +2201,10 @@ pub struct PitchforkTomlDaemon {
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
+    /// Pitchfork's template context as JSON, set while rendering when `run` was left
+    /// unrendered for `mise x` to finish. Never read from or written to a file.
+    #[schemars(skip)]
+    pub deferred_template_context: Option<String>,
     /// Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.
     pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
@@ -2301,6 +2312,7 @@ impl PitchforkTomlDaemon {
             cmd,
             run: self.run.shell_script().map(str::to_string),
             no_shell: self.run.is_argv(),
+            replaces_ready_checks: false,
             // Set by the IPC handler for a client's own request.
             requested_by_client: false,
             force: false,
@@ -2339,6 +2351,9 @@ impl PitchforkTomlDaemon {
                 self.path.as_deref(),
             )),
             mise: self.mise,
+            deferred_template_context: self.deferred_template_context.clone(),
+            // Resolved from the project settings by `build_run_options`.
+            mise_bin: None,
             slug,
             proxy: None,
             user: self.user.clone(),
@@ -2355,6 +2370,7 @@ impl PitchforkTomlDaemon {
             pty: self.pty,
             // Explicit unless the proxy's start marks it otherwise.
             proxy_idle_timeout_ms: None,
+            replaces_saved_record: true,
         }
     }
 }
@@ -2484,6 +2500,8 @@ user = "postgres"
 
         let opts = daemon.to_run_options(&id, vec!["node".to_string(), "server.js".to_string()]);
         assert_eq!(opts.user.as_deref(), Some("postgres"));
+        // A start from config describes the daemon in full.
+        assert!(opts.replaces_saved_record);
     }
 
     #[test]

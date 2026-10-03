@@ -790,3 +790,281 @@ EOF2
   after=$(pitchfork logs cron_last --raw 2>/dev/null | grep -c "last_tick" || true)
   [[ "$after" -eq "$before" ]]
 }
+
+# An ad-hoc run is not a config daemon, even under the id of one: a schedule
+# later added to config must not start firing the ad-hoc command.
+@test "a cron schedule added to config does not fire an ad-hoc run of the same id" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.anchor]
+run = "sleep 60"
+EOF2
+  run pitchfork start anchor
+  assert_success
+
+  run pitchfork run adhoc_job -- echo adhoc_tick
+  assert_success
+  wait_for_logs adhoc_job "adhoc_tick" 10
+
+  create_pitchfork_toml <<'EOF2'
+[daemons.anchor]
+run = "sleep 60"
+
+[daemons.adhoc_job]
+run = "echo cfg_tick"
+cron = "* * * * * *"
+EOF2
+
+  # Several cron checks later, the ad-hoc command has still run only once.
+  sleep 6
+  run bash -c "pitchfork logs adhoc_job --raw 2>/dev/null | grep -c adhoc_tick"
+  assert_output "1"
+  run pitchfork status adhoc_job
+  refute_output --partial "Cron:"
+}
+
+# A config daemon recorded before `watch_base_dir` was stored has only the
+# schedule it was started with; that schedule still follows config.
+@test "a started cron daemon recorded without its project dir still follows config" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_legacy]
+run = "echo legacy_tick"
+cron = "0 0 0 1 1 *"
+EOF2
+  run pitchfork start cron_legacy
+  assert_success
+
+  # Rewrite the record as an older version stored it.
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+  grep -v '^watch_base_dir = ' "$PITCHFORK_STATE_DIR/state.toml" >"$PITCHFORK_STATE_DIR/state.toml.tmp"
+  mv "$PITCHFORK_STATE_DIR/state.toml.tmp" "$PITCHFORK_STATE_DIR/state.toml"
+  run grep -c "^watch_base_dir = " "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "0"
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&-
+  _wait_for_cron_schedule cron_legacy "0 0 0 1 1 *"
+
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_legacy]
+run = "echo legacy_tick"
+cron = "0 0 0 2 2 *"
+EOF2
+  _wait_for_cron_schedule cron_legacy "0 0 0 2 2 *"
+}
+
+@test "a disabled cron daemon is not started on schedule until it is enabled" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_disabled]
+run = "echo disabled_tick"
+cron = "*/10 * * * * *"
+EOF2
+
+  run pitchfork start cron_disabled
+  assert_success
+  wait_for_logs cron_disabled "disabled_tick" 10
+
+  run pitchfork disable cron_disabled
+  assert_success
+  _wait_for_cron_run_to_end cron_disabled
+  local before after
+  before=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+  sleep 4
+  after=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+  [[ "$after" -eq "$before" ]]
+
+  # Enable two seconds past a scheduled time the disabled daemon skipped. It
+  # does not make up for that run: nothing starts before the next one.
+  local now
+  now=$(date +%s)
+  sleep $((10 - now % 10 + 2))
+  run pitchfork enable cron_disabled
+  assert_success
+  sleep 2
+  after=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+  [[ "$after" -eq "$before" ]]
+
+  for _ in $(seq 1 50); do
+    after=$(pitchfork logs cron_disabled --raw 2>/dev/null | grep -c "disabled_tick" || true)
+    [[ "$after" -gt "$before" ]] && break
+    sleep 0.2
+  done
+  [[ "$after" -gt "$before" ]]
+}
+
+@test "a disabled daemon is not retried after it fails" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.retry_disabled]
+run = "echo retry_attempt; sleep 2; exit 1"
+ready_delay = 1
+retry = 10
+EOF2
+
+  run pitchfork start retry_disabled
+  assert_success
+  run pitchfork disable retry_disabled
+  assert_success
+
+  wait_for_status retry_disabled errored 15
+  sleep 4
+  local attempts
+  attempts=$(pitchfork logs retry_disabled --raw 2>/dev/null | grep -c "retry_attempt" || true)
+  [[ "$attempts" -eq 1 ]]
+}
+
+# `pitchfork start` retries a failing daemon itself while it waits for it to
+# become ready. A disable during the backoff ends those retries too.
+@test "a disabled daemon is not retried by a start waiting for it" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.fg_retry_disabled]
+run = "echo fg_attempt; exit 1"
+retry = 5
+EOF2
+
+  pitchfork start fg_retry_disabled >/dev/null 2>&1 3>&- 4>&- &
+  local start_pid=$!
+
+  # Two attempts have run; the backoff before the third is two seconds.
+  local attempts=0
+  for _ in $(seq 1 50); do
+    attempts=$(pitchfork logs fg_retry_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+    [[ "$attempts" -ge 2 ]] && break
+    sleep 0.2
+  done
+  [[ "$attempts" -eq 2 ]]
+  run pitchfork disable fg_retry_disabled
+  assert_success
+
+  wait "$start_pid" || true
+  sleep 3
+  attempts=$(pitchfork logs fg_retry_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+  [[ "$attempts" -eq 2 ]]
+}
+
+# A dependent waiting on an in-flight oneshot treats a failed attempt with
+# retries left as a gap between tries. Once the oneshot is disabled no further
+# try comes, so the dependent must stop waiting instead of until its deadline.
+@test "disabling a daemon ends a start waiting out a long retry backoff" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.fg_backoff_disabled]
+run = "echo fg_attempt; exit 1"
+retry = 10
+EOF2
+
+  pitchfork start fg_backoff_disabled >/dev/null 2>&1 3>&- 4>&- &
+  local start_pid=$!
+
+  # Five attempts have run; the backoff before the sixth is 16 seconds.
+  local attempts=0
+  for _ in $(seq 1 200); do
+    attempts=$(pitchfork logs fg_backoff_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+    [[ "$attempts" -ge 5 ]] && break
+    sleep 0.2
+  done
+  [[ "$attempts" -eq 5 ]]
+  sleep 1
+  run pitchfork disable fg_backoff_disabled
+  assert_success
+
+  # The start gives up when the daemon is disabled, not when the backoff ends.
+  local before after
+  before=$(date +%s)
+  wait "$start_pid" || true
+  after=$(date +%s)
+  [[ $((after - before)) -lt 8 ]]
+  attempts=$(pitchfork logs fg_backoff_disabled --raw 2>/dev/null | grep -c "fg_attempt" || true)
+  [[ "$attempts" -eq 5 ]]
+}
+
+@test "a start waiting on a oneshot that is disabled between retries stops waiting" {
+  create_pitchfork_toml <<TOML
+[daemons.migrate_disabled]
+run = "echo migrate_attempt; sleep 3; exit 1"
+oneshot = true
+retry = 3
+
+[daemons.api_after]
+run = "echo api started && $(default_shell_sleep_command)"
+depends = ["migrate_disabled"]
+ready_delay = 1
+TOML
+
+  pitchfork start migrate_disabled >/dev/null 2>&1 3>&- 4>&- &
+  local migrate_job=$!
+  wait_for_status migrate_disabled running 10
+
+  pitchfork start api_after >/dev/null 2>&1 3>&- 4>&- &
+  local api_job=$!
+
+  # The first attempt fails; disable during the backoff before the second.
+  wait_for_status migrate_disabled errored 15
+  run pitchfork disable migrate_disabled
+  assert_success
+
+  local done=false
+  for _ in $(seq 1 75); do
+    if ! kill -0 "$api_job" 2>/dev/null; then
+      done=true
+      break
+    fi
+    sleep 0.2
+  done
+  kill "$api_job" 2>/dev/null || true
+  wait "$migrate_job" || true
+  [[ "$done" == true ]]
+
+  run pitchfork status api_after
+  refute_output --partial "running"
+  pitchfork stop --all || true
+}
+
+# An ad-hoc run under the id of a config daemon replaces its record: nothing
+# the config set — the command, the schedule, the environment — carries over.
+@test "an ad-hoc run over a config daemon's record keeps none of its config" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.adhoc_over]
+run = "echo cfg_tick"
+cron = "0 0 3 * * *"
+env = { CFG_ONLY = "cfg_env_value" }
+EOF2
+  run pitchfork start adhoc_over
+  assert_success
+  _wait_for_cron_schedule adhoc_over "0 0 3 * * *"
+  wait_for_logs adhoc_over "cfg_tick" 10
+  _wait_for_cron_run_to_end adhoc_over
+
+  run pitchfork run adhoc_over -- echo adhoc_tick
+  assert_success
+  wait_for_logs adhoc_over "adhoc_tick" 10
+
+  _wait_for_cron_schedule adhoc_over ""
+  run grep -c -e cfg_tick -e cfg_env_value "$PITCHFORK_STATE_DIR/state.toml"
+  assert_output "0"
+}
+
+# A scheduled run gets its full retries, even after an earlier run of a
+# daemon started by hand used them all up.
+@test "a cron run of a started daemon starts its retries afresh" {
+  create_pitchfork_toml <<'EOF2'
+[daemons.cron_retries]
+run = "echo attempt=$PITCHFORK_RETRY_COUNT; sleep 1; exit 1"
+retry = 2
+cron = { schedule = "*/15 * * * * *", retrigger = "finish" }
+EOF2
+  run pitchfork start cron_retries
+  # The start itself used up the retries.
+  wait_for_logs cron_retries "attempt=2" 10
+
+  # The next scheduled run begins again at attempt 0 and is retried through
+  # its last attempt.
+  local first=0 retried=0 exhausted=0
+  for _ in $(seq 1 60); do
+    first=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=0' || true)
+    retried=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=1' || true)
+    exhausted=$(pitchfork logs cron_retries --raw 2>/dev/null | grep -c 'attempt=2' || true)
+    [[ "$first" -ge 2 && "$retried" -ge 2 && "$exhausted" -ge 2 ]] && break
+    sleep 1
+  done
+  [[ "$first" -ge 2 ]]
+  [[ "$retried" -ge 2 ]]
+  [[ "$exhausted" -ge 2 ]]
+
+  pitchfork stop cron_retries || true
+}

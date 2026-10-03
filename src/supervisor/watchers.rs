@@ -934,13 +934,22 @@ impl Supervisor {
                     // background flush task creates a window where a supervisor
                     // crash-then-restart will see the stale timestamp from disk and
                     // re-fire the cron job immediately.
-                    {
+                    //
+                    // A disabled daemon still records the time, so enabling it
+                    // later waits for the next scheduled time instead of making
+                    // up for one it skipped.
+                    let disabled = {
                         let mut state_file = self.state_file.lock().await;
                         if state_file.set_last_cron_triggered(&id, now)
                             && let Err(e) = state_file.write()
                         {
                             error!("failed to persist last_cron_triggered for daemon {id}: {e}");
                         }
+                        state_file.disabled.contains(&id)
+                    };
+                    if disabled {
+                        debug!("cron: daemon {id} is disabled, skipping scheduled run");
+                        continue;
                     }
 
                     let should_run = match retrigger {
@@ -993,6 +1002,9 @@ impl Supervisor {
                         let force =
                             matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
                         opts.force = force;
+                        // Each scheduled run gets its full retries, not those
+                        // the previous run left over.
+                        opts.retry_count = 0;
                         opts.wait_ready = false;
                         opts.cron_schedule = Some(schedule_str.clone());
                         opts.cron_retrigger = Some(retrigger);
@@ -1056,10 +1068,15 @@ impl Supervisor {
     /// fire from that copy, so without this an edit to `cron` in config — a new
     /// expression, a new `retrigger`, removing it, adding it back — would not
     /// reach a daemon that had been started until it was started again.
-    /// Ad-hoc runs have no schedule, so every stored one came from config.
+    ///
+    /// A record without `watch_base_dir`, the directory of the project whose
+    /// config defined it (whether or not it watches files), is synced only if
+    /// it already has a schedule. An ad-hoc `pitchfork run` has no such
+    /// directory, and giving it the schedule of a config daemon with the same
+    /// id would fire its own command on that schedule. A config daemon
+    /// recorded before that directory was stored has none either, but has the
+    /// schedule it was started with, which must still follow config.
     async fn sync_cron_schedules_with_config(&self) {
-        // `watch_base_dir` is the directory of the project whose config defined
-        // the daemon, whether or not it watches files.
         // Each record's schedule is noted as read, so a result is only applied
         // to a record nothing has changed since: a daemon started meanwhile
         // stores the schedule of the config it was started from, which may be
@@ -1069,6 +1086,7 @@ impl Supervisor {
             state
                 .daemons
                 .iter()
+                .filter(|(_, d)| !d.is_adhoc())
                 .map(|(id, d)| {
                     (
                         id.clone(),

@@ -5,7 +5,7 @@ license = "MIT"
 version = "2.29.0"
 edition = "2024"
 resolver = "3"
-rust-version = "1.91"
+rust-version = "1.95"
 homepage = "https://pitchfork.jdx.dev"
 repository = "https://github.com/jdx/pitchfork"
 documentation = "https://pitchfork.jdx.dev"
@@ -81,6 +81,8 @@ rcgen = { version = "0.14", optional = true, features = ["x509-parser"] }
 tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 semver = "1"
+# The verifier reqwest uses, built once for the probe clients' shared TLS settings.
+rustls-platform-verifier = "0.6"
 # Force hyper-rustls (pulled in by reqwest) to use ring instead of aws-lc-rs.
 hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "http2", "tls12"] }
 rustls-pemfile = { version = "2", optional = true }

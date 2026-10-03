@@ -129,6 +129,20 @@ pub struct Daemon {
     ///   Any daemon that relied on the global setting would silently stop using mise after a downgrade.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// Template context handed to `mise x` for a `run` command left unrendered, kept
+    /// so a restart rebuilt from this record can pass it again.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deferred_template_context: Option<String>,
+    /// The mise binary the daemon's project set with `general.mise_bin`, kept
+    /// so a retry or a cron run wraps the command with the same mise. `None`
+    /// leaves it to the supervisor's own settings and search.
+    ///
+    /// # Schema compatibility note
+    /// Omitted when `None`, and read as `None` when missing, so state files
+    /// from older binaries load unchanged. An older binary reading a newer
+    /// file ignores the key and falls back to its own `mise_bin` lookup.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mise_bin: Option<PathBuf>,
     /// Unix user to run this daemon as.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user: Option<String>,
@@ -186,6 +200,14 @@ pub struct Daemon {
     /// Appended after `no_shell` for the positional IPC encoding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scheduled_from_config: bool,
+    /// The ready port as the start gave it. `ready_port` holds the port the
+    /// run actually checked, moved along with a port bump, so it cannot tell
+    /// a ready port that was bumped from one given as the bumped number. A
+    /// restart of an ad-hoc daemon starts from this one and bumps it afresh.
+    ///
+    /// Appended after `scheduled_from_config` for the positional IPC encoding.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub configured_ready_port: Option<ReadyPort>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -219,6 +241,11 @@ pub struct RunOptions {
     pub depends: Vec<DaemonId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
+    /// Template context for a `run` command left unrendered for `mise x`, which
+    /// is started with it in `PITCHFORK_TEMPLATE_CONTEXT`. Kept apart from `env`
+    /// so a variable of that name the user configured stays theirs.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deferred_template_context: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub watch: Vec<String>,
     #[serde(default)]
@@ -231,6 +258,12 @@ pub struct RunOptions {
     /// See `Daemon::mise` for downgrade implications when this field is `None`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// The mise binary to wrap the command with, from the daemon's project
+    /// settings (`general.mise_bin`). Resolved by the client, because the
+    /// supervisor is long-lived and may have been started from a different
+    /// directory. `None` falls back to the supervisor's `resolve_mise_bin`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mise_bin: Option<PathBuf>,
     /// Optional stable slug alias for this daemon.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub slug: Option<String>,
@@ -261,6 +294,15 @@ pub struct RunOptions {
     /// Allocate a pseudo-terminal for the daemon process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
+    /// This start describes the daemon in full, so the configuration fields
+    /// it leaves unset are cleared from the saved record instead of kept. Set
+    /// by every start except a restart of an ad-hoc daemon, which carries only
+    /// part of its record.
+    ///
+    /// False by default so that a request from an older client, which does
+    /// not send it, keeps merging into the record as it always did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaces_saved_record: bool,
     /// Run-to-completion task rather than a long-running service.
     #[serde(default)]
     pub oneshot: bool,
@@ -298,6 +340,13 @@ pub struct RunOptions {
     /// array. `run` is `None` then, since there is no command line.
     #[serde(default)]
     pub no_shell: bool,
+    /// This start's ready checks are the daemon's only ones: those it leaves
+    /// unset are cleared from the record instead of kept. Set by an ad-hoc
+    /// restart given readiness flags, which replace how it was waited for.
+    ///
+    /// Appended after `no_shell` for the positional IPC encoding.
+    #[serde(default)]
+    pub replaces_ready_checks: bool,
     /// Set by the supervisor on a start a client asked for over IPC; never
     /// sent. See `Daemon::scheduled_from_config`.
     #[serde(skip)]
@@ -305,6 +354,15 @@ pub struct RunOptions {
 }
 
 impl Daemon {
+    /// Whether this record was made by `pitchfork run` rather than from
+    /// config. Every start from config records `watch_base_dir`, the
+    /// directory of the project that defined it; a config daemon recorded
+    /// before that directory was stored still has the cron schedule it was
+    /// started with, which `pitchfork run` never gives a daemon.
+    pub fn is_adhoc(&self) -> bool {
+        self.watch_base_dir.is_none() && self.cron_schedule.is_none()
+    }
+
     /// The next time the cron watcher will consider this daemon due, or
     /// `None` when it has no schedule or the schedule does not parse.
     ///
@@ -371,6 +429,8 @@ impl Daemon {
             // run; only the cron watcher's own call sets this.
             cron_started: false,
             no_shell: self.no_shell,
+            // Built from the whole record, whose ready checks it carries.
+            replaces_ready_checks: false,
             // Set by the IPC handler for a client's own request.
             requested_by_client: false,
             cron_schedule: self.cron_schedule.clone(),
@@ -394,6 +454,8 @@ impl Daemon {
             watch_mode: self.watch_mode,
             watch_base_dir: self.watch_base_dir.clone(),
             mise: self.mise,
+            deferred_template_context: self.deferred_template_context.clone(),
+            mise_bin: self.mise_bin.clone(),
             slug: self.slug.clone(),
             proxy: self.proxy,
             user: self.user.clone(),
@@ -404,6 +466,8 @@ impl Daemon {
             log_format: self.log_format.clone(),
             on_output_hook,
             pty: self.pty,
+            // Built from the whole record, so it describes the daemon in full.
+            replaces_saved_record: true,
         }
     }
 }
@@ -432,6 +496,19 @@ mod tests {
             last_cron_triggered: last_triggered,
             ..Daemon::default()
         }
+    }
+
+    #[test]
+    fn a_restart_from_the_saved_record_keeps_the_deferred_template_context() {
+        let daemon = Daemon {
+            deferred_template_context: Some("{\"name\":\"api\"}".to_string()),
+            ..Daemon::default()
+        };
+        let opts = daemon.to_run_options(vec!["echo".to_string()]);
+        assert_eq!(
+            opts.deferred_template_context.as_deref(),
+            Some("{\"name\":\"api\"}")
+        );
     }
 
     #[test]

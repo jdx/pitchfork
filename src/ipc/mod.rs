@@ -115,6 +115,12 @@ pub enum IpcRequest {
     ClaimDaemons {
         ids: Vec<DaemonId>,
     },
+    /// The supervisor's records of these daemons, whatever their status.
+    /// Missing ids are left out. Appended to preserve the wire indexes of
+    /// existing variants.
+    GetDaemons {
+        ids: Vec<DaemonId>,
+    },
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
@@ -202,6 +208,8 @@ pub enum IpcResponse {
     Cleaned {
         count: u64,
     },
+    /// Records answering `GetDaemons`.
+    Daemons(Vec<Daemon>),
 }
 
 /// Bytes a socket path may occupy in `sockaddr_un.sun_path` on this platform
@@ -451,6 +459,35 @@ mod tests {
         };
         match round_trip(&IpcRequest::Run(opts)) {
             IpcRequest::Run(opts) => assert_eq!(opts.proxy_idle_timeout_ms, Some(900_000)),
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    /// A start replaces the saved record only when it says so: a request from
+    /// an older client, which does not send the flag, keeps merging.
+    #[test]
+    fn replaces_saved_record_is_opt_in_across_ipc() {
+        let full = RunOptions {
+            id: DaemonId::new("proj", "api"),
+            replaces_saved_record: true,
+            ..Default::default()
+        };
+        match round_trip(&IpcRequest::Run(full)) {
+            IpcRequest::Run(opts) => assert!(opts.replaces_saved_record),
+            other => panic!("unexpected request: {other:?}"),
+        }
+
+        let older_client = RunOptions {
+            id: DaemonId::new("proj", "api"),
+            ..Default::default()
+        };
+        let bytes = serialize(&IpcRequest::Run(older_client)).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("replaces_saved_record"));
+        match round_trip(&IpcRequest::Run(RunOptions {
+            id: DaemonId::new("proj", "api"),
+            ..Default::default()
+        })) {
+            IpcRequest::Run(opts) => assert!(!opts.replaces_saved_record),
             other => panic!("unexpected request: {other:?}"),
         }
     }
