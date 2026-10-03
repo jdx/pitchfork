@@ -928,6 +928,21 @@ impl Supervisor {
         stop_guard: tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<IpcResponse> {
         let id = &opts.id;
+        // Checked under the daemon's stop lock, which `close()` waits out
+        // after setting the flag: a start that took the lock first finishes
+        // before `close()` lists the daemons to stop, and one that takes it
+        // later stops here. Otherwise a daemon started during shutdown (an IPC
+        // start, a cron run, a retry) would be left running once the
+        // supervisor has gone.
+        if self
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            info!("not starting daemon {id}: the supervisor is shutting down");
+            return Ok(IpcResponse::DaemonFailed {
+                error: "the supervisor is shutting down".to_string(),
+            });
+        }
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
         // Create channel for readiness notification if wait_ready is true
@@ -1282,6 +1297,18 @@ impl Supervisor {
         // consistently fails to spawn would otherwise accumulate sinks.
         // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
+        let spawned_pid = child.id();
+        // Register the daemon as monitored BEFORE persisting the Running
+        // state. The orphan reconciler treats any running, unmonitored PID
+        // as an orphan; if the state became visible first, a concurrent
+        // reconciliation pass could adopt — or under the kill policy,
+        // terminate — a daemon that was just legitimately started. The RAII
+        // guard unregisters on any early-error path below and is otherwise
+        // handed to the monitoring task. Registered as soon as the process
+        // exists, so a supervisor forced to exit while this start is still
+        // on its way to recording it kills it (see `force_exit`).
+        let monitored_guard =
+            spawned_pid.map(|pid| super::adopt::MonitoredGuard::register(id.clone(), pid));
         // A process now exists, which is exactly what `last_cron_run` records.
         // Written here rather than from the watcher's view of the response
         // because that view cannot tell a start that failed before spawning
@@ -1305,9 +1332,9 @@ impl Supervisor {
                 error!("failed to persist last_cron_run for daemon {id}: {e}");
             }
         }
-        let pid = match child.id() {
-            Some(p) => p,
-            None => {
+        let (pid, monitored_guard) = match (spawned_pid, monitored_guard) {
+            (Some(p), Some(guard)) => (p, guard),
+            _ => {
                 warn!("Daemon {id} exited before PID could be captured");
                 // Unlike a daemon that never started, this one ran and may have
                 // said why it gave up, and its output is the only diagnosis
@@ -1324,14 +1351,6 @@ impl Supervisor {
         };
         info!("started daemon {id} with pid {pid}");
         PROCS.refresh_pids(&[pid]);
-        // Register the daemon as monitored BEFORE persisting the Running
-        // state. The orphan reconciler treats any running, unmonitored PID
-        // as an orphan; if the state became visible first, a concurrent
-        // reconciliation pass could adopt — or under the kill policy,
-        // terminate — a daemon that was just legitimately started. The RAII
-        // guard unregisters on any early-error path below and is otherwise
-        // handed to the monitoring task.
-        let monitored_guard = super::adopt::MonitoredGuard::register(id.clone(), pid);
         let monitor_token = monitored_guard.token();
 
         // Hand the retained read end to a sink and keep one running for as long

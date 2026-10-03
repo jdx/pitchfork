@@ -87,8 +87,7 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
     if !force {
         return Ok(KillOrStopOutcome::StillRunning);
     }
-    debug!("killing pid {existing_pid}");
-    let stop_signal: i32 = StopSignal::default().into();
+    debug!("stopping pid {existing_pid}");
     // Bind the kill to a process generation so a PID recycled between the
     // check above and the signal is still refused. A legacy record without a
     // start time was just verified to be a live pitchfork process, so bind to
@@ -104,12 +103,39 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
             "cannot verify the identity of supervisor pid {existing_pid}: its start time is unreadable; not signalling it. Try rerun with sudo."
         ));
     };
+    // Asked over IPC, the supervisor freezes new starts and then reports how
+    // long its shutdown can take, from its own settings and the final list of
+    // daemons it will stop. Neither is known here: settings can differ
+    // between processes, and a daemon can start until the starts are frozen.
+    #[cfg(unix)]
+    match request_shutdown().await {
+        ShutdownRequest::Accepted(budget) => {
+            return wait_for_exit_or_kill(record, existing_pid, expected_start_time, budget).await;
+        }
+        // Sent, so the supervisor may well be shutting down: a stop signal
+        // now would be taken as a second one and force its exit. It may still
+        // be waiting for a start under way, whose daemon neither its list nor
+        // this one has yet; asked again, it answers once that start is done.
+        ShutdownRequest::Unanswered => {
+            let budget = match request_shutdown().await {
+                ShutdownRequest::Accepted(budget) => budget,
+                _ => estimated_stop_budget().await,
+            };
+            return wait_for_exit_or_kill(record, existing_pid, expected_start_time, budget).await;
+        }
+        ShutdownRequest::NotHandled => {}
+    }
+    // Not reachable over IPC, an older supervisor, or Windows (where the stop
+    // is a forced kill of the supervisor's process tree): send the stop
+    // signal, and wait as long as can be worked out here.
+    let stop_signal: i32 = StopSignal::default().into();
+    let stop_budget = estimated_stop_budget().await;
     let killed = PROCS
         .kill_if_start_time_matches_async(
             existing_pid,
             Some(expected_start_time),
             stop_signal,
-            None,
+            Some(stop_budget),
         )
         .await;
     match killed {
@@ -117,6 +143,95 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
         Ok(false) => Ok(KillOrStopOutcome::AlreadyDead),
         Err(e) => Err(miette::miette!("{e}. Try rerun with sudo.")),
     }
+}
+
+/// What became of a `Shutdown` request.
+#[cfg(unix)]
+enum ShutdownRequest {
+    /// The supervisor is shutting down and may take this long.
+    Accepted(std::time::Duration),
+    /// Sent, but no answer came.
+    Unanswered,
+    /// Not sent (no IPC connection), or the supervisor does not know it.
+    NotHandled,
+}
+
+/// Ask the running supervisor to shut down over IPC, without starting one.
+#[cfg(unix)]
+async fn request_shutdown() -> ShutdownRequest {
+    let connect = IpcClient::connect(false);
+    let Ok(Ok(client)) = tokio::time::timeout(std::time::Duration::from_secs(5), connect).await
+    else {
+        return ShutdownRequest::NotHandled;
+    };
+    match client.shutdown().await {
+        Ok(Some(budget)) => ShutdownRequest::Accepted(budget),
+        Ok(None) => ShutdownRequest::NotHandled,
+        Err(_) => ShutdownRequest::Unanswered,
+    }
+}
+
+/// How long the supervisor's shutdown can take, as far as can be worked out
+/// here: with this process's settings rather than the supervisor's, for the
+/// cases where the supervisor did not report it.
+async fn estimated_stop_budget() -> std::time::Duration {
+    let base = crate::settings::settings().supervisor_stop_timeout();
+    // The supervisor's own list is current; the state file can lag it, missing
+    // a daemon started a moment ago. If neither can be read, the supervisor's
+    // own timeout is all that is waited, as it always was.
+    let daemons = match live_daemons().await {
+        Some(daemons) => daemons,
+        None => StateFile::read(&*env::PITCHFORK_STATE_FILE)
+            .map(|sf| sf.daemons.into_values().collect())
+            .unwrap_or_default(),
+    };
+    crate::supervisor::shutdown_budget(&daemons, base)
+}
+
+/// Wait up to `budget` for the supervisor to exit after a `Shutdown` request,
+/// then kill it. No stop signal is sent: the supervisor would take it as a
+/// second one and force its exit.
+#[cfg(unix)]
+async fn wait_for_exit_or_kill(
+    record: &Daemon,
+    pid: u32,
+    expected_start_time: u64,
+    budget: std::time::Duration,
+) -> Result<KillOrStopOutcome> {
+    let deadline = tokio::time::Instant::now() + budget;
+    while tokio::time::Instant::now() < deadline {
+        if !supervisor_record_is_live(record) {
+            return Ok(KillOrStopOutcome::Killed);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    warn!(
+        "supervisor pid {pid} did not exit within {}ms of the stop request, sending SIGKILL",
+        budget.as_millis()
+    );
+    PROCS
+        .kill_if_start_time_matches_async(
+            pid,
+            Some(expected_start_time),
+            libc::SIGKILL,
+            Some(std::time::Duration::from_secs(1)),
+        )
+        .await
+        .map(|_| KillOrStopOutcome::Killed)
+        .map_err(|e| miette::miette!("{e}. Try rerun with sudo."))
+}
+
+/// The running supervisor's active daemons, asked for over IPC without
+/// starting a supervisor. `None` if it does not answer in time.
+async fn live_daemons() -> Option<Vec<Daemon>> {
+    let ask = async {
+        let client = IpcClient::connect(false).await.ok()?;
+        client.active_daemons().await.ok()
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), ask)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The supervisor's own entry in the state file, if any. The entry may be

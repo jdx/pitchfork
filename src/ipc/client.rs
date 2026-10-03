@@ -502,6 +502,27 @@ impl IpcClient {
         }
     }
 
+    /// Ask the supervisor to shut down, returning how long it may take.
+    /// `Ok(None)` from a supervisor too old to know the request; an error if
+    /// no answer came. Only Unix asks: on Windows `supervisor stop` ends the
+    /// supervisor's process tree.
+    #[cfg(unix)]
+    pub async fn shutdown(&self) -> Result<Option<std::time::Duration>> {
+        // The supervisor answers once the starts already under way are done,
+        // which can take longer than an ordinary request.
+        let timeout = Some(std::time::Duration::from_secs(60));
+        match self
+            .request_with_timeout(IpcRequest::Shutdown, timeout)
+            .await?
+        {
+            IpcResponse::ShuttingDown { budget_ms } => {
+                Ok(Some(std::time::Duration::from_millis(budget_ms)))
+            }
+            IpcResponse::Error(_) => Ok(None),
+            rsp => Err(Self::unexpected_response("ShuttingDown", &rsp).into()),
+        }
+    }
+
     pub async fn active_daemons(&self) -> Result<Vec<Daemon>> {
         let rsp = self.request(IpcRequest::GetActiveDaemons).await?;
         match rsp {
