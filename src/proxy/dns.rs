@@ -660,21 +660,42 @@ pub fn dns_port(s: &crate::settings::Settings) -> u16 {
 /// start [`serve`], which needs one port for both.
 ///
 /// Windows excludes different port ranges for each protocol, so a port that
-/// is free for TCP can be refused for UDP with `WSAEACCES` (10013). The port
-/// is therefore taken from a UDP bind — which the OS never gives out from a
-/// range excluded for UDP — and kept only if TCP can bind it as well.
+/// is free for one can be refused for the other with `WSAEACCES` (10013). The
+/// OS never gives out a port from a range excluded for the protocol it binds,
+/// so each try takes the port from one protocol's bind and keeps it only if
+/// the other can bind it as well.
+///
+/// Windows hands out these ports in sequence, and its excluded ranges come in
+/// blocks of a hundred or more, so once the next port falls in a block excluded
+/// for the other protocol, every try fails until the sequence has walked past
+/// the block. The tries therefore alternate which protocol picks, and there are
+/// enough of them for either sequence to walk past a block.
 #[cfg(test)]
 pub(crate) async fn free_udp_and_tcp_addr() -> SocketAddr {
-    for _ in 0..50 {
-        let udp = tokio::net::UdpSocket::bind("127.0.0.1:0")
-            .await
-            .expect("bind UDP to an OS-chosen port");
-        let addr = udp.local_addr().expect("UDP local address");
-        if tokio::net::TcpListener::bind(addr).await.is_ok() {
-            return addr;
+    const TRIES: usize = 1000;
+    let mut last_error = None;
+    for attempt in 0..TRIES {
+        let result = if attempt % 2 == 0 {
+            let udp = tokio::net::UdpSocket::bind("127.0.0.1:0")
+                .await
+                .expect("bind UDP to an OS-chosen port");
+            let addr = udp.local_addr().expect("UDP local address");
+            tokio::net::TcpListener::bind(addr).await.map(|_| addr)
+        } else {
+            let tcp = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind TCP to an OS-chosen port");
+            let addr = tcp.local_addr().expect("TCP local address");
+            tokio::net::UdpSocket::bind(addr).await.map(|_| addr)
+        };
+        match result {
+            Ok(addr) => return addr,
+            Err(e) => last_error = Some(e),
         }
     }
-    panic!("no loopback port free for both UDP and TCP after 50 tries");
+    panic!(
+        "no loopback port free for both UDP and TCP after {TRIES} tries; last error: {last_error:?}"
+    );
 }
 
 #[cfg(test)]
