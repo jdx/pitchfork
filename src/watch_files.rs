@@ -313,15 +313,24 @@ pub fn insert_watch_target(
 fn watch_targets_for_pattern(pattern: &str, base_dir: &Path) -> Vec<(PathBuf, RecursiveMode)> {
     // Strip leading "./" from patterns to handle relative path prefixes
     let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
-    let full_path = base_dir.join(pattern);
-    let mut components = full_path.components().collect_vec();
+    // base_dir is a path, not a pattern, so only the pattern's own components
+    // can be globs: a project in `app[1]` must not be read as `app1`. A rooted
+    // pattern is joined so Windows' drive-relative `\src` takes base_dir's drive.
+    let rooted = base_dir.join(pattern);
+    let (mut literal_dir, mut components) = if Path::new(pattern).has_root() {
+        (PathBuf::new(), rooted.components().collect_vec())
+    } else {
+        (
+            base_dir.to_path_buf(),
+            Path::new(pattern).components().collect_vec(),
+        )
+    };
     let Some(file_part) = components.pop() else {
         return vec![];
     };
 
     // Directories before the first glob component are fixed.
     let mut dir_parts = components.into_iter().peekable();
-    let mut literal_dir = PathBuf::new();
     while let Some(part) = dir_parts.next_if(|c| !is_glob_component(c)) {
         literal_dir.push(part);
     }
@@ -345,8 +354,7 @@ fn watch_targets_for_pattern(pattern: &str, base_dir: &Path) -> Vec<(PathBuf, Re
             return targets;
         }
         let Some(matcher) = component_matcher(&part) else {
-            let full_pattern = normalize_path_for_glob(&full_path.to_string_lossy());
-            match GlobBuilder::new(&full_pattern).build() {
+            match GlobBuilder::new(&normalize_path_for_glob(pattern)).build() {
                 // A brace or class containing `/` spans components and cannot
                 // be expanded level by level, so watch all it could match.
                 Ok(_) => targets.extend(current.into_iter().map(|d| (d, RecursiveMode::Recursive))),
@@ -426,6 +434,17 @@ fn normalize_path_for_glob(path: &str) -> String {
     }
 }
 
+/// Escape `text` so globset matches it literally. `\` is an escape outside
+/// Windows, where it can also appear in a directory name.
+fn escape_glob_literal(text: &str) -> String {
+    let text = if cfg!(windows) {
+        text.to_string()
+    } else {
+        text.replace('\\', "\\\\")
+    };
+    globset::escape(&text)
+}
+
 /// Check if a changed path matches any of the watch patterns.
 /// Uses globset which properly supports ** for recursive directory matching.
 pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir: &Path) -> bool {
@@ -440,8 +459,15 @@ pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir:
         // Build the full pattern and normalize to use forward slashes
         let full_pattern = if Path::new(normalized_pattern).is_absolute() {
             normalize_path_for_glob(normalized_pattern)
-        } else {
+        } else if Path::new(normalized_pattern).has_root() {
+            // Windows' drive-relative `\src` takes base_dir's drive
             normalize_path_for_glob(&base_dir.join(normalized_pattern).to_string_lossy())
+        } else {
+            // base_dir is a path, not a pattern: escape what globset would
+            // read as syntax in it, then append the pattern.
+            let base = normalize_path_for_glob(&base_dir.to_string_lossy());
+            let base = escape_glob_literal(base.trim_end_matches('/'));
+            format!("{base}/{}", normalize_path_for_glob(normalized_pattern))
         };
 
         // Use globset which properly supports ** for recursive matching
@@ -931,5 +957,45 @@ mod tests {
             dirs,
             HashMap::from([(canon(base_dir), RecursiveMode::NonRecursive)])
         );
+    }
+
+    // The project directory is a path, not a pattern: `[1]` in its name must
+    // not be read as a character class matching `app1`.
+    #[test]
+    fn test_glob_characters_in_base_dir_are_literal() {
+        let temp_dir = TempDir::new().unwrap();
+        for name in ["app[1]", "app{a,b}", "app*"] {
+            if cfg!(windows) && name.contains('*') {
+                continue;
+            }
+            let base_dir = temp_dir.path().join(name);
+            fs::create_dir_all(base_dir.join("src")).unwrap();
+            fs::create_dir_all(temp_dir.path().join("app1")).unwrap();
+            let index = base_dir.join("index.js");
+            fs::write(&index, "").unwrap();
+
+            assert_eq!(
+                expand(&["*.js"], &base_dir),
+                HashMap::from([(canon(&base_dir), RecursiveMode::NonRecursive)]),
+                "{name}"
+            );
+            assert_eq!(
+                expand(&["src/**/*.js"], &base_dir),
+                HashMap::from([(canon(&base_dir.join("src")), RecursiveMode::Recursive)]),
+                "{name}"
+            );
+            assert!(
+                path_matches_patterns(&index, &["*.js".to_string()], &base_dir),
+                "{name}"
+            );
+            assert!(
+                !path_matches_patterns(
+                    &temp_dir.path().join("app1/index.js"),
+                    &["*.js".to_string()],
+                    &base_dir
+                ),
+                "{name}"
+            );
+        }
     }
 }
