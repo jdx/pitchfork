@@ -362,18 +362,12 @@ impl Supervisor {
                 .argv()
                 .map_err(|e| miette::miette!("failed to parse command for daemon {id}: {e}"))?;
             let mut opts = config.to_run_options(&id, cmd);
-            // A client's start resolves this from the daemon's project before it
-            // reaches the supervisor, which would otherwise use its own settings.
-            // Rendering assumed the project's, so launch has to as well.
-            opts.mise = Some(crate::template::mise_enabled(&config));
-            // The project's mise_bin, for the same reason: `build_run_options`
-            // reads it for a client's start.
-            if opts.mise == Some(true) {
-                let project_dir =
-                    crate::ipc::batch::resolve_config_base_dir(config.path.as_deref());
-                opts.mise_bin = crate::settings::Settings::load_from_dir(&project_dir)
-                    .explicit_mise_bin(&project_dir);
-            }
+            // A client's start resolves these from the daemon's project before
+            // it reaches the supervisor, which would otherwise use its own
+            // settings. Rendering assumed the project's, so launch has to as well.
+            let (mise, mise_bin) = crate::ipc::batch::project_mise_options(&config);
+            opts.mise = Some(mise);
+            opts.mise_bin = mise_bin;
             Ok(opts)
         })
         .await
