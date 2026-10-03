@@ -35,7 +35,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use usage_rs::config::{
-    Const, EnvLayer, FileLayer, FileScope, Layers, Resolved, SourceKind, Ty, Value, resolve,
+    Const, EnvLayer, FileLayer, FileScope, Layers, Origin, Resolved, SourceKind, Trust, Ty, Value,
+    resolve,
 };
 
 /// The `api.*` settings: the standalone API server (JSON REST endpoints for
@@ -199,6 +200,16 @@ pub struct SettingsGeneral {
     /// - on Windows, `mise.exe` on `PATH`
     ///
     /// Set this to an absolute path if mise is installed elsewhere.
+    ///
+    /// For a daemon defined in a project's `pitchfork.toml`, the value comes
+    /// from that project, read when the daemon is started, and a relative path
+    /// is taken from the project's directory. `PITCHFORK_MISE_BIN` in the
+    /// environment of the `pitchfork` command that starts the daemon takes
+    /// precedence over the project's files. When the project does not set it,
+    /// the supervisor uses its own value, where a relative path is taken from
+    /// the directory the supervisor was started in. A value in the user's or
+    /// the system's configuration file counts as the supervisor's, not the
+    /// project's.
     #[usage(env = "PITCHFORK_MISE_BIN", default = "")]
     pub mise_bin: String,
 
@@ -1463,16 +1474,26 @@ impl Settings {
         self.resolve_mise_bin_with_path(std::env::var_os("PATH").as_deref())
     }
 
-    /// `general.mise_bin` when it is set explicitly, without checking or
-    /// searching. A daemon's project reads this so the supervisor, whose own
-    /// settings do not see the project's, can prefer it; see
-    /// [`Self::resolve_daemon_mise_bin`].
+    /// The `general.mise_bin` a daemon's project sets, from the resolution
+    /// these settings were read with, without checking or searching. The
+    /// supervisor, whose own settings do not see the project's, prefers it;
+    /// see [`Self::resolve_daemon_mise_bin`].
     ///
-    /// A relative path is taken from `project_dir`, the directory these
-    /// settings were read for: the supervisor that checks and runs it works
-    /// from a directory of its own.
-    pub fn explicit_mise_bin(&self, project_dir: &Path) -> Option<PathBuf> {
-        (!self.general.mise_bin.is_empty()).then(|| project_dir.join(&self.general.mise_bin))
+    /// Only a value from one of the project's files, with a relative path
+    /// taken from `project_dir`, or from the environment counts. One from the
+    /// user's or the system's configuration is no more the project's than the
+    /// supervisor's, which applies it itself, so it gives `None`, as no value
+    /// does.
+    pub(crate) fn project_mise_bin(
+        &self,
+        resolved: &Resolved,
+        project_dir: &Path,
+    ) -> Option<PathBuf> {
+        if self.general.mise_bin.is_empty() {
+            return None;
+        }
+        let origin = resolved.origin_key("general.mise_bin")?;
+        project_mise_bin_from(&self.general.mise_bin, origin, project_dir)
     }
 
     /// Resolve the mise binary for a daemon, preferring `project_mise_bin`.
@@ -1720,11 +1741,28 @@ fn shell_is_explicit(resolved: &Resolved) -> bool {
         .is_some_and(|origin| origin.kind != SourceKind::DEFAULTS)
 }
 
-/// An explicitly configured `mise_bin`, if the file exists. A missing file is
-/// warned about and gives `None`, not a search for another mise.
+/// `value` as the project's mise_bin, given where it was set: a project file
+/// takes a relative path from `project_dir`, the environment from the working
+/// directory of the command it was set for.
+fn project_mise_bin_from(value: &str, origin: &Origin, project_dir: &Path) -> Option<PathBuf> {
+    if origin.kind == SourceKind::ENV {
+        return Some(std::path::absolute(value).unwrap_or_else(|_| PathBuf::from(value)));
+    }
+    (origin.kind == SourceKind::FILE && origin.trust == Trust::Project)
+        .then(|| project_dir.join(value))
+}
+
+/// An explicitly configured `mise_bin`, if the file exists, as an absolute
+/// path. A missing file is warned about and gives `None`, not a search for
+/// another mise.
+///
+/// A relative path is taken from this process's working directory, which is
+/// where it is checked; the daemon it wraps runs in a directory of its own,
+/// where the same relative path could name another file or none.
 fn configured_mise_bin(path: &Path) -> Option<PathBuf> {
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     if path.is_file() {
-        return Some(path.to_path_buf());
+        return Some(path);
     }
     warn!("mise_bin is set to {path:?} but the file does not exist");
     None
@@ -2133,6 +2171,60 @@ mod tests {
     }
 
     #[test]
+    fn configured_mise_bin_is_absolute() {
+        // Tests run from the crate root, where `Cargo.toml` is.
+        let relative = Path::new("Cargo.toml");
+        assert_eq!(
+            configured_mise_bin(relative),
+            Some(std::env::current_dir().unwrap().join(relative))
+        );
+    }
+
+    #[test]
+    fn project_mise_bin_takes_only_the_projects_own_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let project_file = project_dir.join("pitchfork.toml");
+        let user_file = dir.path().join("config.toml");
+        std::fs::write(
+            &project_file,
+            "[settings.general]\nmise_bin = \"tools/mise\"\n",
+        )
+        .unwrap();
+        std::fs::write(&user_file, "[settings.general]\nmise_bin = \"bin/mise\"\n").unwrap();
+        let project = FileLayer::at(project_file, FileScope::Project).under("settings");
+        let user = FileLayer::at(user_file, FileScope::Global).under("settings");
+        // Absolute on every platform: `/opt/mise` is not on Windows.
+        let env_mise = dir.path().join("env-mise");
+        let env = EnvLayer::new([(
+            "PITCHFORK_MISE_BIN".to_string(),
+            env_mise.to_string_lossy().into_owned(),
+        )]);
+        let project_mise_bin = |layers: Layers| {
+            let resolved = resolve(Settings::SETTINGS_REGISTRY, layers).unwrap();
+            Settings::read(&resolved)
+                .unwrap()
+                .project_mise_bin(&resolved, &project_dir)
+        };
+
+        // The project's own file, over the user's, from the project directory.
+        assert_eq!(
+            project_mise_bin(Layers::new().then(&project).then(&user)),
+            Some(project_dir.join("tools/mise"))
+        );
+        // Only the user's configuration sets it: the supervisor applies that.
+        assert_eq!(project_mise_bin(Layers::new().then(&user)), None);
+        // The environment takes precedence over the project's file.
+        assert_eq!(
+            project_mise_bin(Layers::new().then(&env).then(&project)),
+            Some(env_mise.clone())
+        );
+        // Not set anywhere.
+        assert_eq!(project_mise_bin(Layers::new()), None);
+    }
+
+    #[test]
     fn resolve_daemon_mise_bin_prefers_the_project_mise_bin() {
         let dir = tempfile::tempdir().unwrap();
         let supervisor_mise = dir.path().join("supervisor-mise");
@@ -2141,19 +2233,7 @@ mod tests {
         std::fs::write(&project_mise, "").unwrap();
 
         let mut settings = Settings::default();
-        let project_dir = Path::new("/project");
-        assert_eq!(settings.explicit_mise_bin(project_dir), None);
-        // A relative mise_bin is the project's, not the supervisor's directory's.
-        settings.general.mise_bin = "bin/mise".to_string();
-        assert_eq!(
-            settings.explicit_mise_bin(project_dir),
-            Some(project_dir.join("bin/mise"))
-        );
         settings.general.mise_bin = supervisor_mise.to_string_lossy().into_owned();
-        assert_eq!(
-            settings.explicit_mise_bin(project_dir),
-            Some(supervisor_mise.clone())
-        );
 
         assert_eq!(
             settings.resolve_daemon_mise_bin(Some(&project_mise)),

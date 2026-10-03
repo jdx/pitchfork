@@ -118,6 +118,21 @@ pub struct StartOptions {
     pub proxy_idle: Option<HashMap<DaemonId, u64>>,
 }
 
+/// Whether a daemon started from config runs under mise, and the project's
+/// `general.mise_bin` when it does, both from the daemon's project settings.
+///
+/// For the starts the supervisor makes from config by itself (scheduled runs
+/// of a config-only cron daemon, `boot_start`), which do not go through
+/// [`build_run_options`] and would otherwise use the supervisor's settings.
+pub(crate) fn project_mise_options(config: &PitchforkTomlDaemon) -> (bool, Option<PathBuf>) {
+    if !crate::template::mise_enabled(config) {
+        return (false, None);
+    }
+    let project_dir = resolve_config_base_dir(config.path.as_deref());
+    let (settings, resolved) = crate::settings::Settings::resolve_from_dir(&project_dir);
+    (true, settings.project_mise_bin(&resolved, &project_dir))
+}
+
 /// Build RunOptions from a daemon configuration and start options.
 ///
 /// This is a shared helper used by both IpcClient batch operations and Web UI.
@@ -196,9 +211,10 @@ pub async fn build_run_options(
         || should_inject_default_ready_delay(&run_opts)
     {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
-        let settings_dir = project_dir.clone();
-        let project_settings = tokio::task::spawn_blocking(move || {
-            crate::settings::Settings::load_from_dir(&settings_dir)
+        let (project_settings, project_mise_bin) = tokio::task::spawn_blocking(move || {
+            let (settings, resolved) = crate::settings::Settings::resolve_from_dir(&project_dir);
+            let mise_bin = settings.project_mise_bin(&resolved, &project_dir);
+            (settings, mise_bin)
         })
         .await
         .map_err(|e| format!("Failed to load project settings: {e}"))?;
@@ -208,7 +224,7 @@ pub async fn build_run_options(
         // Only an explicit setting: searching for mise when none is set stays
         // with the supervisor, which is where the command runs.
         if run_opts.mise == Some(true) {
-            run_opts.mise_bin = project_settings.explicit_mise_bin(&project_dir);
+            run_opts.mise_bin = project_mise_bin;
         }
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
@@ -1820,6 +1836,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(run_opts.mise_bin, None);
+    }
+
+    #[tokio::test]
+    async fn project_mise_options_reads_the_daemon_project() {
+        run_sanitized_child(
+            "ipc::batch::tests::project_mise_options_reads_the_daemon_project_in_sanitized_child",
+            "project-mise-options-sanitized-child-ran",
+            "project",
+        )
+        .await;
+    }
+
+    #[test]
+    fn project_mise_options_reads_the_daemon_project_in_sanitized_child() {
+        if std::env::var("PITCHFORK_TEST_PROJECT_MISE_MODE").is_err() {
+            return;
+        }
+        eprintln!("project-mise-options-sanitized-child-ran");
+
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("pitchfork.toml");
+        let project_dir = resolve_config_base_dir(Some(&config_path));
+        std::fs::write(
+            &config_path,
+            "[settings.general]\nmise = true\nmise_bin = \"tools/mise\"\n",
+        )
+        .unwrap();
+        let daemon = |mise| PitchforkTomlDaemon {
+            run: "echo ready".into(),
+            path: Some(config_path.clone()),
+            mise,
+            ..PitchforkTomlDaemon::default()
+        };
+
+        // The project's `general.mise`, and its relative mise_bin from the
+        // project's directory.
+        assert_eq!(
+            project_mise_options(&daemon(None)),
+            (true, Some(project_dir.join("tools/mise")))
+        );
+        // A daemon turning mise off has no binary to hand over.
+        assert_eq!(project_mise_options(&daemon(Some(false))), (false, None));
     }
 
     async fn run_project_mise_test_in_sanitized_child(mode: &str) {
