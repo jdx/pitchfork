@@ -273,10 +273,15 @@ EOF
 # ============================================================================
 
 @test "custom ready delay shortens startup wait" {
+  # A default far above the custom delay, so a slow runner's overhead on top of
+  # the 1s delay cannot be mistaken for the default being used.
   create_pitchfork_toml <<EOF
 [daemons.custom_delay]
-run = "echo 'Starting' && sleep 10"
+run = "echo 'Starting' && sleep 20"
 ready_delay = 1
+
+[settings.general]
+ready_delay = "10s"
 EOF
 
   local start_time elapsed
@@ -285,7 +290,7 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  [[ $elapsed -lt 3 ]]
+  [[ $elapsed -lt 6 ]] || return 1
 
   pitchfork stop custom_delay
 }
@@ -303,7 +308,8 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  [[ $elapsed -lt 3 ]]
+  # Without the match the start would wait for the daemon to exit, 11s in.
+  [[ $elapsed -lt 6 ]] || return 1
 
   wait_for_logs ready_pattern "READY" 5
 
