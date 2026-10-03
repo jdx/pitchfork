@@ -333,6 +333,46 @@ EOF
   pitchfork stop relative_watch_test
 }
 
+# The project directory is a path, not a pattern: `[1]` in its name must not
+# be read as a character class.
+@test "watch works in a project directory whose name has glob characters" {
+  mkdir 'app[1]'
+  cd 'app[1]'
+  create_pitchfork_toml <<'EOF'
+namespace = "app1"
+
+[daemons.glob_dir_watch]
+run = "sleep 60"
+watch = ["*.js"]
+watch_mode = "poll"
+EOF
+  echo "initial" > index.js
+
+  run pitchfork start glob_dir_watch
+  assert_success
+  wait_for_status glob_dir_watch running
+
+  sleep 2
+  local original_pid new_pid current_pid
+  original_pid="$(get_daemon_pid glob_dir_watch)"
+  [[ -n "$original_pid" ]]
+
+  echo "modified" > index.js
+
+  new_pid="$original_pid"
+  for _ in $(seq 1 20); do
+    current_pid="$(get_daemon_pid glob_dir_watch)"
+    if [[ -n "$current_pid" && "$current_pid" != "$original_pid" ]]; then
+      new_pid="$current_pid"
+      break
+    fi
+    sleep 2
+  done
+  [[ "$new_pid" != "$original_pid" ]]
+
+  pitchfork stop glob_dir_watch
+}
+
 # ============================================================================
 # ============================================================================
 
