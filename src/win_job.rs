@@ -59,17 +59,17 @@ pub(crate) fn start_suspended(cmd: &mut tokio::process::Command) {
 /// Put the suspended process `pid`, whose handle is `process`, in a job of its
 /// own, then let it run.
 ///
-/// Best effort: a process that could not be put in a job still runs, and is
-/// stopped by walking its tree as before.
-pub(crate) fn contain_and_resume(process: HANDLE, pid: u32) {
+/// A process that could not be put in a job still runs, with a warning, and
+/// is stopped by walking its tree as before. One that could not be resumed
+/// never runs, so that is an error: the caller must not report it started.
+pub(crate) fn contain_and_resume(process: HANDLE, pid: u32) -> std::io::Result<()> {
     if let Err(e) = contain(process, pid) {
-        debug!("daemon process {pid} runs without a job object: {e}");
+        warn!(
+            "daemon process {pid} runs without a job object, so a process it starts whose \
+             parent has exited will not be stopped with it: {e}"
+        );
     }
-    if let Err(e) = resume(pid) {
-        // A daemon that never runs is worse than one without a job, so this
-        // is the one failure worth a warning.
-        warn!("failed to resume daemon process {pid}: {e}");
-    }
+    resume(pid)
 }
 
 fn contain(process: HANDLE, pid: u32) -> std::io::Result<()> {
@@ -183,7 +183,7 @@ impl DaemonJob {
         loop {
             match active_processes(&self.0) {
                 Some(0) => return true,
-                // Unreadable: nothing to wait on.
+                // Unreadable: it cannot be shown to have emptied.
                 None => return false,
                 Some(_) if std::time::Instant::now() >= deadline => return false,
                 Some(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
@@ -269,7 +269,7 @@ mod tests {
                 .unwrap();
             let pid = child.id().unwrap();
             let process = child.raw_handle().unwrap() as HANDLE;
-            contain_and_resume(process, pid);
+            contain_and_resume(process, pid).unwrap();
             let job = DaemonJob::open(pid, process).expect("the daemon has a job");
             let name = job_name(pid, process).unwrap();
             let query = OwnedHandle(unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) });

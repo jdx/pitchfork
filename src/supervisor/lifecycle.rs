@@ -1305,8 +1305,16 @@ impl Supervisor {
         // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
         #[cfg(windows)]
-        if let (Some(pid), Some(process)) = (child.id(), child.raw_handle()) {
-            crate::win_job::contain_and_resume(process as _, pid);
+        if let (Some(pid), Some(process)) = (child.id(), child.raw_handle())
+            && let Err(e) = crate::win_job::contain_and_resume(process as _, pid)
+        {
+            // A daemon left suspended never runs, yet its PID exists: reported
+            // as started, a delay-only ready check would even call it ready.
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(miette::miette!(
+                "failed to resume daemon {id} (pid {pid}) after starting it suspended: {e}"
+            ));
         }
         let spawned_pid = child.id();
         // Register the daemon as monitored BEFORE persisting the Running

@@ -43,6 +43,15 @@ pub static PROCS: Lazy<Procs> = Lazy::new(Procs::new);
 /// gone before reporting it stuck. Part of the longest a daemon's stop takes.
 pub const PROCESS_GROUP_SIGKILL_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long a Windows stop waits, after terminating a daemon's job, for the
+/// processes in it to finish exiting and release what they hold. Part of the
+/// longest a daemon's stop takes; nothing waits for it elsewhere.
+pub const JOB_EXIT_WAIT: std::time::Duration = if cfg!(windows) {
+    std::time::Duration::from_secs(5)
+} else {
+    std::time::Duration::ZERO
+};
+
 impl Default for Procs {
     fn default() -> Self {
         Self::new()
@@ -701,11 +710,11 @@ impl Procs {
                 if interrupt_and_wait(pid, stop_timeout) {
                     debug!("process {pid} exited after Ctrl+C");
                     // Whatever it started and left running goes with it.
-                    if let Some(job) = &job
-                        && job.terminate()
-                    {
-                        job.wait_until_empty(std::time::Duration::from_millis(
-                            JOB_EXIT_WAIT_MS.into(),
+                    if job.as_ref().is_some_and(job_outlives_termination) {
+                        return Err(miette::miette!(
+                            "process {pid} exited after Ctrl+C, but processes it started are still \
+                             running {}s after their job was terminated",
+                            JOB_EXIT_WAIT.as_secs()
                         ));
                     }
                     return Ok(true);
@@ -743,12 +752,7 @@ impl Procs {
             };
             // Then the job, for what the walk cannot reach: a process whose
             // parent has already exited is still in it.
-            if let Some(job) = &job
-                && job.terminate()
-            {
-                job.wait_until_empty(std::time::Duration::from_millis(JOB_EXIT_WAIT_MS.into()));
-                debug!("terminated the job of process {pid}");
-            }
+            let job_outlived = job.as_ref().is_some_and(job_outlives_termination);
             // Brief sleep to let the OS signal the process handle, giving
             // tokio's child.wait() in the monitor task a chance to detect
             // the exit and fire on_stop/on_exit hooks.
@@ -756,6 +760,15 @@ impl Procs {
             if !taskkill_succeeded && self.is_running(pid) {
                 return Err(miette::miette!(
                     "taskkill failed and process {pid} is still running"
+                ));
+            }
+            // A process still exiting can hold a port the next start needs,
+            // so the stop is not reported as done while one remains.
+            if job_outlived {
+                return Err(miette::miette!(
+                    "processes of daemon {pid} are still running {}s after their job was \
+                     terminated",
+                    JOB_EXIT_WAIT.as_secs()
                 ));
             }
             Ok(true)
@@ -1174,10 +1187,18 @@ fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
     Ok(ProcessHandle(handle))
 }
 
-/// How long the processes in a terminated daemon's job are given to finish
-/// exiting, and so to release what they hold, before the stop returns.
+/// Terminate `job` and wait for it to empty; true if a process is still in
+/// it afterwards, or its count could not be read.
 #[cfg(windows)]
-const JOB_EXIT_WAIT_MS: u32 = 5000;
+fn job_outlives_termination(job: &crate::win_job::DaemonJob) -> bool {
+    if !job.terminate() {
+        // Nothing more can be done through the job; the tree walk stands.
+        return false;
+    }
+    let emptied = job.wait_until_empty(JOB_EXIT_WAIT);
+    debug!("terminated a daemon's job; emptied: {emptied}");
+    !emptied
+}
 
 /// Send Ctrl+C to the console of `pid` and wait up to `timeout` for it to exit.
 ///

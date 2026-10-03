@@ -786,7 +786,9 @@ impl IpcClient {
             .get(&id)
             .and_then(|d| d.stop_signal.as_ref())
             .and_then(|s| s.timeout)
-            .unwrap_or_else(|| settings().supervisor_stop_timeout());
+            .unwrap_or_else(|| settings().supervisor_stop_timeout())
+            // On Windows the stop then waits for the daemon's job to empty.
+            .saturating_add(crate::procs::JOB_EXIT_WAIT);
         let timeout = stop_request_timeout(stop_budget, settings().ipc_request_timeout());
         let rsp = self
             .request_with_timeout(IpcRequest::Stop { id: id.clone() }, Some(timeout))
