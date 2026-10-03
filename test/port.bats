@@ -30,6 +30,39 @@ teardown() {
   assert_output --partial 'port = 3000'
 }
 
+# Writing a config adds the deprecated port fields beside `port` for older
+# versions. Reading them back must not warn, since they say the same thing.
+@test "a config pitchfork wrote reads back without a deprecation warning" {
+  create_pitchfork_toml <<'EOF'
+[daemons.web]
+run = "sleep 60"
+port = { expect = [4000], bump = 3 }
+EOF
+  run pitchfork daemons add api --run "sleep 60" --expected-port 8080 --bump
+  assert_success
+  run cat pitchfork.toml
+  assert_output --partial 'expected_port = [4000]'
+  assert_output --partial 'expected_port = [8080]'
+
+  PITCHFORK_LOG=warn run pitchfork daemons
+  assert_success
+  assert_output --partial "web"
+  refute_output --partial "deprecated"
+}
+
+@test "deprecated port fields that disagree with port still warn" {
+  create_pitchfork_toml <<'EOF'
+[daemons.web]
+run = "sleep 60"
+port = { expect = [4000] }
+expected_port = [5000]
+EOF
+
+  PITCHFORK_LOG=warn run pitchfork daemons
+  assert_success
+  assert_output --partial "ignoring deprecated fields"
+}
+
 # ============================================================================
 # Port conflict and auto-bump tests
 # ============================================================================

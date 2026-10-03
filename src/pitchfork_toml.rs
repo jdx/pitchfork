@@ -1,4 +1,5 @@
 use crate::daemon_id::DaemonId;
+use crate::deprecated_at;
 use crate::error::{ConfigParseError, DependencyError, FileError, find_similar_daemon};
 use crate::settings::SettingsPartial;
 use crate::settings::settings;
@@ -1359,17 +1360,7 @@ impl PitchforkToml {
             let has_deprecated = !raw_daemon.expected_port.is_empty()
                 || raw_daemon.auto_bump_port.is_some()
                 || raw_daemon.port_bump_attempts.is_some();
-            let port = if let Some(port) = raw_daemon.port {
-                if has_deprecated {
-                    warn!(
-                        "daemon {short_name}: both `port` and deprecated expected_port/auto_bump_port/port_bump_attempts are set; ignoring deprecated fields"
-                    );
-                }
-                Some(port)
-            } else if has_deprecated {
-                warn!(
-                    "daemon {short_name}: expected_port/auto_bump_port/port_bump_attempts are deprecated, use [daemons.{short_name}.port] instead"
-                );
+            let deprecated_port = has_deprecated.then(|| {
                 let bump = if raw_daemon.auto_bump_port.unwrap_or(false) {
                     PortBump(
                         raw_daemon
@@ -1379,12 +1370,33 @@ impl PitchforkToml {
                 } else {
                     PortBump(0)
                 };
-                Some(PortConfig {
+                PortConfig {
                     expect: raw_daemon.expected_port,
                     bump,
-                })
-            } else {
-                None
+                }
+            });
+            let port = match (raw_daemon.port, deprecated_port) {
+                (Some(port), Some(deprecated)) => {
+                    // Writing the config adds the deprecated fields beside
+                    // `port` for older versions; only a disagreement is news.
+                    if deprecated != port {
+                        warn!(
+                            "daemon {short_name}: both `port` and deprecated expected_port/auto_bump_port/port_bump_attempts are set; ignoring deprecated fields"
+                        );
+                    }
+                    Some(port)
+                }
+                (Some(port), None) => Some(port),
+                (None, Some(deprecated)) => {
+                    deprecated_at!(
+                        "2.29.0",
+                        "3.0.0",
+                        format!("port-fields:{short_name}"),
+                        "daemon {short_name}: expected_port/auto_bump_port/port_bump_attempts are deprecated, use [daemons.{short_name}.port] instead."
+                    );
+                    Some(deprecated)
+                }
+                (None, None) => None,
             };
 
             // `proxy_port` is the shorter spelling of the same setting.
