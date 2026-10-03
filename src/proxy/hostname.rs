@@ -366,8 +366,7 @@ pub fn auto_host_for_daemon(id: &DaemonId, config: &PitchforkTomlDaemon) -> Opti
         }
         None => (&project.primary, None),
     };
-    // The checkout routes this label to this daemon, or to nothing at all.
-    if hosts.daemons.get(&daemon).map(|d| d.name.as_str()) != Some(id.name()) {
+    if !routes_label_to(hosts, &daemon, id) {
         return None;
     }
 
@@ -381,6 +380,20 @@ pub fn auto_host_for_daemon(id: &DaemonId, config: &PitchforkTomlDaemon) -> Opti
         return None;
     }
     Some(host)
+}
+
+/// Whether a checkout routes `label` to this daemon, rather than to nothing or
+/// to another one.
+///
+/// The namespace counts as well as the name: a project nested in a monorepo
+/// shares the repository's checkout, whose hostnames are those of the root's
+/// daemons, so the nested `frontend/api` must not take `repo/api`'s URL.
+fn routes_label_to(hosts: &CheckoutHosts, label: &str, id: &DaemonId) -> bool {
+    hosts.namespace == id.namespace()
+        && hosts
+            .daemons
+            .get(label)
+            .is_some_and(|d| d.name == id.name())
 }
 
 /// The hostname to advertise for a daemon: a legacy `[slugs]` entry when one
@@ -1161,6 +1174,19 @@ mod tests {
         };
         let id = DaemonId::try_new("global", "api").unwrap();
         assert_eq!(auto_host_for_daemon(&id, &config), None);
+    }
+
+    /// A checkout's label belongs to the daemon of that name in the checkout's
+    /// own namespace, not to a same-named daemon of a project nested in it.
+    #[test]
+    fn test_routes_label_to_matches_namespace_and_name() {
+        let hosts = checkout("/repo", "repo", &[("api", "api"), ("www", "web")]);
+        let id = |ns: &str, name: &str| DaemonId::try_new(ns, name).unwrap();
+        assert!(routes_label_to(&hosts, "api", &id("repo", "api")));
+        assert!(routes_label_to(&hosts, "www", &id("repo", "web")));
+        assert!(!routes_label_to(&hosts, "api", &id("frontend", "api")));
+        assert!(!routes_label_to(&hosts, "web", &id("repo", "web")));
+        assert!(!routes_label_to(&hosts, "api", &id("repo", "web")));
     }
 
     /// A registered slug wins over the automatic hostname, because the proxy
