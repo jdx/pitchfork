@@ -219,6 +219,13 @@ free_port() {
   _free_port_unused tcp
 }
 
+# Like free_port, for $1 consecutive ports, printing the first. A test that
+# occupies a port and expects a daemon to be bumped to the next one needs the
+# next ones free and claimed too, or a test beside it could be handed them.
+free_port_run() {
+  _free_port_unused tcp "$1"
+}
+
 # Like free_port, for the proxy's DNS resolver, which binds its port for both
 # UDP and TCP. A Windows excluded range can refuse either one (bind fails with
 # os error 10013), so both are checked.
@@ -229,13 +236,13 @@ free_dns_port() {
 _free_port_unused() {
   # A per-test directory would let parallel tests claim the same port, so
   # there is no fallback when bats does not provide the shared one.
-  python3 - "$1" "${BATS_RUN_TMPDIR:?BATS_RUN_TMPDIR is not set; free_port needs a directory shared by every test of the run}/claimed_ports" <<'PY'
+  python3 - "$1" "${BATS_RUN_TMPDIR:?BATS_RUN_TMPDIR is not set; free_port needs a directory shared by every test of the run}/claimed_ports" "${2:-1}" <<'PY'
 import os
 import random
 import socket
 import sys
 
-kind, claims = sys.argv[1], sys.argv[2]
+kind, claims, count = sys.argv[1], sys.argv[2], int(sys.argv[3])
 os.makedirs(claims, exist_ok=True)
 
 
@@ -252,19 +259,40 @@ def bindable(port):
     return True
 
 
-ports = list(range(20000, 32768))
-random.shuffle(ports)
-for port in ports:
-    # A port stays claimed even when it cannot be bound, so no call tries it
-    # again.
+def claim(port):
     try:
         os.close(os.open(os.path.join(claims, str(port)), os.O_CREAT | os.O_EXCL))
+        return True
     except FileExistsError:
+        return False
+
+
+bases = list(range(20000, 32768 - count + 1))
+random.shuffle(bases)
+for base in bases:
+    run = range(base, base + count)
+    claimed = []
+    for port in run:
+        if not claim(port):
+            break
+        claimed.append(port)
+    if len(claimed) < count:
+        # Another call holds part of this run. Give back what was claimed here,
+        # never handed out, so the run can be tried from another base.
+        for port in claimed:
+            os.remove(os.path.join(claims, str(port)))
         continue
-    if bindable(port):
-        print(port)
+    unbindable = [port for port in run if not bindable(port)]
+    if not unbindable:
+        print(base)
         sys.exit(0)
-sys.exit(f"no {kind} port free in 20000-32767 that this run has not already used")
+    # A port that cannot be bound stays claimed, so no call tries it again.
+    # The others in the run were never handed out: give them back, or every
+    # failed run would shrink the pool for the rest of the run.
+    for port in run:
+        if port not in unbindable:
+            os.remove(os.path.join(claims, str(port)))
+sys.exit(f"no {count} {kind} port(s) free in 20000-32767 that this run has not already used")
 PY
 }
 

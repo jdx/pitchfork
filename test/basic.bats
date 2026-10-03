@@ -876,7 +876,8 @@ EOF
   create_pitchfork_toml <<EOF
 EOF
 
-  local port=45810
+  local port
+  port="$(free_port)"
   run pitchfork run adhoc_port --expected-port "$port" --retry 2 --delay 1 -- sh -c 'echo "PORT=[$PORT]"; sleep 60'
   assert_success
 
@@ -928,18 +929,20 @@ EOF
   create_pitchfork_toml <<EOF
 EOF
 
-  run pitchfork run adhoc_bump --expected-port 45840 --bump 5 --delay 1 -- sleep 60
+  local port
+  port="$(free_port_run 2)"
+  run pitchfork run adhoc_bump --expected-port "$port" --bump 5 --delay 1 -- sleep 60
   assert_success
 
-  run pitchfork start adhoc_bump --force --expected-port 45841
+  run pitchfork start adhoc_bump --force --expected-port "$((port + 1))"
   assert_success
   run bash -c "grep -A3 '/adhoc_bump\"\.port\]' \"\$PITCHFORK_STATE_DIR/state.toml\" | grep -E '^(expect|bump) =' | tr '\n' ' '"
-  assert_output "expect = [45841] bump = 5 "
+  assert_output "expect = [$((port + 1))] bump = 5 "
 
   run pitchfork start adhoc_bump --force --bump 3
   assert_success
   run bash -c "grep -A3 '/adhoc_bump\"\.port\]' \"\$PITCHFORK_STATE_DIR/state.toml\" | grep -E '^(expect|bump) =' | tr '\n' ' '"
-  assert_output "expect = [45841] bump = 3 "
+  assert_output "expect = [$((port + 1))] bump = 3 "
 
   pitchfork stop adhoc_bump
 }
