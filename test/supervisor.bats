@@ -1223,6 +1223,16 @@ ready_delay = 1
 EOF2
 }
 
+# Wait until the supervisor has begun shutting down.
+_wait_for_shutdown_start() {
+  local log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+  for _ in $(seq 1 100); do
+    grep -q "received signal, stopping" "$log" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 _wait_for_pid_gone() {
   local pid="$1"
   for _ in $(seq 1 100); do
@@ -1260,7 +1270,7 @@ _wait_for_pid_gone() {
 
   pitchfork supervisor stop >/dev/null 2>&1 &
   local stop_pid=$!
-  sleep 1
+  _wait_for_shutdown_start
 
   run pitchfork start other
   assert_failure
@@ -1285,7 +1295,7 @@ _wait_for_pid_gone() {
   supervisor_pid="$(_recorded_supervisor_pid)"
 
   kill -INT "$supervisor_pid"
-  sleep 1
+  _wait_for_shutdown_start
   kill -INT "$supervisor_pid"
 
   _wait_for_pid_gone "$supervisor_pid"

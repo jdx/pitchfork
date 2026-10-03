@@ -89,13 +89,19 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
     }
     debug!("killing pid {existing_pid}");
     let stop_signal: i32 = StopSignal::default().into();
-    // The state file may be unreadable; the supervisor's own timeout is then
-    // all that is waited, as it always was.
     let base = crate::settings::settings().supervisor_stop_timeout();
-    let stop_budget = match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
-        Ok(sf) => supervisor_stop_budget(sf.daemons.values(), base),
-        Err(_) => base,
+    // The supervisor's own list is current; the state file can lag it, missing
+    // a daemon started a moment ago. If neither can be read, the supervisor's
+    // own timeout is all that is waited, as it always was.
+    let daemons = match live_daemons().await {
+        Some(daemons) => daemons,
+        None => StateFile::read(&*env::PITCHFORK_STATE_FILE)
+            .map(|sf| sf.daemons.into_values().collect())
+            .unwrap_or_default(),
     };
+    // Shutdown stops the proxy and DNS resolver before any daemon.
+    let stop_budget = supervisor_stop_budget(&daemons, base)
+        .saturating_add(crate::supervisor::SHUTDOWN_PRE_STOP_BUDGET);
     // Bind the kill to a process generation so a PID recycled between the
     // check above and the signal is still refused. A legacy record without a
     // start time was just verified to be a live pitchfork process, so bind to
@@ -124,6 +130,19 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
         Ok(false) => Ok(KillOrStopOutcome::AlreadyDead),
         Err(e) => Err(miette::miette!("{e}. Try rerun with sudo.")),
     }
+}
+
+/// The running supervisor's active daemons, asked for over IPC without
+/// starting a supervisor. `None` if it does not answer in time.
+async fn live_daemons() -> Option<Vec<Daemon>> {
+    let ask = async {
+        let client = IpcClient::connect(false).await.ok()?;
+        client.active_daemons().await.ok()
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), ask)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// How long to wait for the supervisor to exit after the stop signal before

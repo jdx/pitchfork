@@ -39,7 +39,6 @@ use duct::cmd;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-#[cfg(unix)]
 use std::collections::HashSet;
 use std::fs;
 #[cfg(unix)]
@@ -202,6 +201,20 @@ pub async fn start_if_not_running() -> Result<()> {
 /// replaces to stop serving IPC. A supervisor being stopped keeps its socket until its daemons
 /// have stopped, which can take a while.
 pub(crate) const IPC_SOCKET_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long `close()` waits for the LAN IP monitor to stop on its own.
+const LAN_MONITOR_STOP_WAIT: Duration = Duration::from_secs(1);
+/// How long `close()` waits for the DNS resolver to stop on its own.
+const DNS_STOP_WAIT: Duration = Duration::from_secs(5);
+/// How long `close()` waits for the proxy: longer than its own drain budget,
+/// so it finishes on its own terms rather than being cut off mid-drain.
+const PROXY_STOP_WAIT: Duration =
+    Duration::from_secs(crate::proxy::server::SHUTDOWN_DRAIN_BUDGET.as_secs() + 2);
+/// The longest `close()` can spend before it starts stopping daemons, so
+/// `supervisor stop` can allow for it before killing the supervisor.
+pub(crate) const SHUTDOWN_PRE_STOP_BUDGET: Duration = Duration::from_secs(
+    LAN_MONITOR_STOP_WAIT.as_secs() + DNS_STOP_WAIT.as_secs() + PROXY_STOP_WAIT.as_secs(),
+);
 
 /// Wait until no supervisor is listening on the IPC socket, failing if one
 /// still is after [`IPC_SOCKET_RELEASE_TIMEOUT`].
@@ -1492,12 +1505,36 @@ impl Supervisor {
     /// supervisor.
     async fn force_exit(&self) -> ! {
         FORCE_EXITING.store(true, atomic::Ordering::SeqCst);
+        // Set by `close()` too, but this may run first: from now on a start
+        // that takes its daemon's lock does not spawn (see `run_once`).
+        self.shutting_down.store(true, atomic::Ordering::Release);
         warn!("received another signal while stopping; killing the remaining daemons and exiting");
+        let mut killed = HashSet::new();
+        self.kill_active_daemons(&mut killed).await;
+        // A start that passed its check before the flag holds its daemon's
+        // stop lock until the daemon's PID is recorded, so it is not in the
+        // list above. Wait the locks out, then kill what they started. The
+        // stops `close()` holds locks for end quickly now that their daemons
+        // are killed; the wait is bounded all the same.
+        let locks: Vec<_> = self.stop_locks.lock().await.values().cloned().collect();
+        for lock in locks {
+            let _ = time::timeout(Duration::from_secs(5), lock.lock()).await;
+        }
+        self.kill_active_daemons(&mut killed).await;
+        exit(1)
+    }
+
+    /// Kill the process group of every active daemon not in `killed` at once,
+    /// with no grace period, and add it to `killed`.
+    async fn kill_active_daemons(&self, killed: &mut HashSet<(DaemonId, u32)>) {
         let mut kills = tokio::task::JoinSet::new();
         for daemon in self.active_daemons().await {
             let Some(pid) = daemon.pid else { continue };
+            if !killed.insert((daemon.id.clone(), pid)) {
+                continue;
+            }
             kills.spawn(async move {
-                // No grace period: the stop signal is followed by SIGKILL at once.
+                // The stop signal is followed by SIGKILL at once.
                 let killed = PROCS
                     .kill_process_group_if_start_time_matches_async(
                         pid,
@@ -1512,7 +1549,6 @@ impl Supervisor {
             });
         }
         kills.join_all().await;
-        exit(1)
     }
 
     pub(crate) async fn close(&self) {
@@ -1528,7 +1564,7 @@ impl Supervisor {
         // cancelled, so give it a moment to come back on its own rather than
         // cutting it off mid-iteration the instant after asking it to stop.
         if let Some(mut monitor_task) = self.lan_monitor_task.lock().await.take()
-            && tokio::time::timeout(Duration::from_secs(1), &mut monitor_task)
+            && tokio::time::timeout(LAN_MONITOR_STOP_WAIT, &mut monitor_task)
                 .await
                 .is_err()
         {
@@ -1541,7 +1577,7 @@ impl Supervisor {
         }
 
         if let Some(mut dns_task) = self.dns_task.lock().await.take()
-            && tokio::time::timeout(Duration::from_secs(5), &mut dns_task)
+            && tokio::time::timeout(DNS_STOP_WAIT, &mut dns_task)
                 .await
                 .is_err()
         {
@@ -1551,13 +1587,7 @@ impl Supervisor {
         }
 
         if let Some(proxy_task) = self.proxy_task.lock().await.take() {
-            // Longer than the proxy's own drain budget, so the task finishes on
-            // its own terms rather than being cut off mid-drain.
-            let _ = tokio::time::timeout(
-                crate::proxy::server::SHUTDOWN_DRAIN_BUDGET + Duration::from_secs(2),
-                proxy_task,
-            )
-            .await;
+            let _ = tokio::time::timeout(PROXY_STOP_WAIT, proxy_task).await;
         }
 
         // Clean up /etc/hosts entries managed by pitchfork
