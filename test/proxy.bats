@@ -1734,3 +1734,54 @@ EOT
   run jq -e '.[0] | has("label") and (.label == null)' <<< "$json"
   assert_success
 }
+
+# A project nested in another project's repository is not part of the
+# repository's hostnames: the proxy routes `api.monorepo` to the root's `api`,
+# so the nested `api` must not be shown that URL as its own.
+@test "a nested project's daemon is not shown the URL of the repository's daemon of the same name" {
+  local repo="$TEST_TEMP_DIR/monorepo"
+  local root_port api_port web_port
+  root_port=$(free_port)
+  api_port=$(free_port)
+  web_port=$(free_port)
+
+  mkdir -p "$repo/frontend"
+  cd "$repo"
+  git init -q .
+  create_pitchfork_toml <<EOT
+[daemons.api]
+run = "sleep 60"
+port = $root_port
+EOT
+  cat > frontend/pitchfork.toml <<EOT
+[daemons.api]
+run = "sleep 60"
+port = $api_port
+
+[daemons.web]
+run = "sleep 60"
+port = $web_port
+EOT
+
+  run pitchfork start api
+  assert_success
+  cd frontend
+  run pitchfork start frontend/api frontend/web
+  assert_success
+
+  proxy_url() {
+    local json
+    json=$(env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_HTTPS=false PITCHFORK_PROXY_TLD=localhost \
+      PITCHFORK_PROXY_PORT=7777 pitchfork status --json "$1") || return 1
+    jq -r '.proxy_url // empty' <<< "$json"
+  }
+  local root_url api_url web_url
+  root_url=$(proxy_url monorepo/api)
+  api_url=$(proxy_url frontend/api)
+  web_url=$(proxy_url frontend/web)
+  assert_equal "$root_url" "http://api.monorepo.localhost:7777"
+  assert_equal "$api_url" ""
+  assert_equal "$web_url" ""
+
+  pitchfork stop monorepo/api frontend/api frontend/web || true
+}
