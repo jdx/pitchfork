@@ -133,6 +133,16 @@ pub struct Daemon {
     /// so a restart rebuilt from this record can pass it again.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub deferred_template_context: Option<String>,
+    /// The mise binary the daemon's project set with `general.mise_bin`, kept
+    /// so a retry or a cron run wraps the command with the same mise. `None`
+    /// leaves it to the supervisor's own settings and search.
+    ///
+    /// # Schema compatibility note
+    /// Omitted when `None`, and read as `None` when missing, so state files
+    /// from older binaries load unchanged. An older binary reading a newer
+    /// file ignores the key and falls back to its own `mise_bin` lookup.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mise_bin: Option<PathBuf>,
     /// Unix user to run this daemon as.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user: Option<String>,
@@ -248,6 +258,12 @@ pub struct RunOptions {
     /// See `Daemon::mise` for downgrade implications when this field is `None`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// The mise binary to wrap the command with, from the daemon's project
+    /// settings (`general.mise_bin`). Resolved by the client, because the
+    /// supervisor is long-lived and may have been started from a different
+    /// directory. `None` falls back to the supervisor's `resolve_mise_bin`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mise_bin: Option<PathBuf>,
     /// Optional stable slug alias for this daemon.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub slug: Option<String>,
@@ -439,6 +455,7 @@ impl Daemon {
             watch_base_dir: self.watch_base_dir.clone(),
             mise: self.mise,
             deferred_template_context: self.deferred_template_context.clone(),
+            mise_bin: self.mise_bin.clone(),
             slug: self.slug.clone(),
             proxy: self.proxy,
             user: self.user.clone(),

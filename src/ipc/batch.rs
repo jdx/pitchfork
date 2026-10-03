@@ -191,15 +191,24 @@ pub async fn build_run_options(
     // Resolve project-scoped defaults in the client process after all readiness
     // overrides are merged. The supervisor is long-lived and may have been
     // started from a different directory.
-    if run_opts.mise.is_none() || run_opts.oneshot || should_inject_default_ready_delay(&run_opts) {
+    if run_opts.mise != Some(false)
+        || run_opts.oneshot
+        || should_inject_default_ready_delay(&run_opts)
+    {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
+        let settings_dir = project_dir.clone();
         let project_settings = tokio::task::spawn_blocking(move || {
-            crate::settings::Settings::load_from_dir(&project_dir)
+            crate::settings::Settings::load_from_dir(&settings_dir)
         })
         .await
         .map_err(|e| format!("Failed to load project settings: {e}"))?;
         if run_opts.mise.is_none() {
             run_opts.mise = Some(project_settings.general.mise);
+        }
+        // Only an explicit setting: searching for mise when none is set stays
+        // with the supervisor, which is where the command runs.
+        if run_opts.mise == Some(true) {
+            run_opts.mise_bin = project_settings.explicit_mise_bin(&project_dir);
         }
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
@@ -1761,16 +1770,75 @@ mod tests {
         run_project_mise_test_in_sanitized_child("dot-config").await;
     }
 
+    #[tokio::test]
+    async fn build_run_options_passes_project_mise_bin() {
+        run_sanitized_child(
+            "ipc::batch::tests::build_run_options_passes_project_mise_bin_in_sanitized_child",
+            "project-mise-bin-sanitized-child-ran",
+            "project",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn build_run_options_passes_project_mise_bin_in_sanitized_child() {
+        if std::env::var("PITCHFORK_TEST_PROJECT_MISE_MODE").is_err() {
+            return;
+        }
+        eprintln!("project-mise-bin-sanitized-child-ran");
+
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("pitchfork.toml");
+        let mise_bin = project.path().join("bin").join("mise");
+        tokio::fs::write(
+            &config_path,
+            format!(
+                "[settings.general]\nmise_bin = {:?}\n",
+                mise_bin.to_string_lossy()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let id = DaemonId::try_new("other-project", "api").unwrap();
+        let daemon = |mise| PitchforkTomlDaemon {
+            run: "echo ready".into(),
+            path: Some(config_path.clone()),
+            mise,
+            ..PitchforkTomlDaemon::default()
+        };
+
+        // `mise = true` on the daemon used to skip reading the project
+        // settings altogether.
+        let run_opts = build_run_options(&id, &daemon(Some(true)), None)
+            .await
+            .unwrap();
+        assert_eq!(run_opts.mise_bin, Some(mise_bin));
+
+        // Not run under mise: there is no binary to hand over.
+        let run_opts = build_run_options(&id, &daemon(Some(false)), None)
+            .await
+            .unwrap();
+        assert_eq!(run_opts.mise_bin, None);
+    }
+
     async fn run_project_mise_test_in_sanitized_child(mode: &str) {
-        const CHILD_SENTINEL: &str = "project-mise-sanitized-child-ran";
+        run_sanitized_child(
+            "ipc::batch::tests::build_run_options_resolves_mise_in_sanitized_child",
+            "project-mise-sanitized-child-ran",
+            mode,
+        )
+        .await;
+    }
+
+    /// Run `test` in a child test process without the environment overrides
+    /// that would take precedence over the project's settings file.
+    async fn run_sanitized_child(test: &str, sentinel: &str, mode: &str) {
         let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "ipc::batch::tests::build_run_options_resolves_mise_in_sanitized_child",
-                "--nocapture",
-            ])
+            .args(["--exact", test, "--nocapture"])
             .env("PITCHFORK_TEST_PROJECT_MISE_MODE", mode)
             .env_remove("PITCHFORK_MISE")
+            .env_remove("PITCHFORK_MISE_BIN")
             .output()
             .await
             .unwrap();
@@ -1782,7 +1850,7 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains(CHILD_SENTINEL),
+            String::from_utf8_lossy(&output.stderr).contains(sentinel),
             "sanitized child test did not run:\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)

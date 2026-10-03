@@ -1057,7 +1057,7 @@ impl Supervisor {
         };
 
         let mise_bin = if opts.mise.unwrap_or(settings().general.mise) {
-            let mise_bin = settings().resolve_mise_bin();
+            let mise_bin = settings().resolve_daemon_mise_bin(opts.mise_bin.as_deref());
             if mise_bin.is_none() {
                 warn!("daemon {id}: mise=true but mise binary not found, running without mise");
             }
