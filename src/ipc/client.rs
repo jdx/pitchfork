@@ -502,6 +502,18 @@ impl IpcClient {
         }
     }
 
+    /// Ask the supervisor to shut down, returning how long it may take.
+    /// `None` from a supervisor too old to know the request.
+    pub async fn shutdown(&self) -> Result<Option<std::time::Duration>> {
+        match self.request(IpcRequest::Shutdown).await? {
+            IpcResponse::ShuttingDown { budget_ms } => {
+                Ok(Some(std::time::Duration::from_millis(budget_ms)))
+            }
+            IpcResponse::Error(_) => Ok(None),
+            rsp => Err(Self::unexpected_response("ShuttingDown", &rsp).into()),
+        }
+    }
+
     pub async fn active_daemons(&self) -> Result<Vec<Daemon>> {
         let rsp = self.request(IpcRequest::GetActiveDaemons).await?;
         match rsp {

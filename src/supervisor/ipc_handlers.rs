@@ -105,6 +105,12 @@ impl Supervisor {
                     IpcResponse::No
                 }
             }
+            IpcRequest::Shutdown => {
+                let budget = self.begin_shutdown().await;
+                IpcResponse::ShuttingDown {
+                    budget_ms: u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
+                }
+            }
             IpcRequest::GetActiveDaemons => {
                 let daemons = self.active_daemons().await;
                 IpcResponse::ActiveDaemons(daemons)

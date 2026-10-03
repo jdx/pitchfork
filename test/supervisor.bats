@@ -1218,7 +1218,7 @@ ready_delay = 1
 depends = ["db"]
 
 [daemons.other]
-run = "sleep 600"
+run = "sleep 6020 & exec sleep 600"
 ready_delay = 1
 EOF2
 }
@@ -1227,7 +1227,7 @@ EOF2
 _wait_for_shutdown_start() {
   local log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
   for _ in $(seq 1 100); do
-    grep -q "received signal, stopping" "$log" 2>/dev/null && return 0
+    grep -qE "(received signal|stop requested), stopping" "$log" 2>/dev/null && return 0
     sleep 0.1
   done
   return 1
@@ -1288,10 +1288,13 @@ _wait_for_pid_gone() {
   _slow_stopping_daemons 30s
   run pitchfork start app other
   assert_success
-  local db_pid app_pid other_pid supervisor_pid
+  local db_pid app_pid other_pid descendant_pid supervisor_pid
   db_pid="$(get_daemon_pid db)"
   app_pid="$(get_daemon_pid app)"
   other_pid="$(get_daemon_pid other)"
+  # A process `other` started, in its process group but not on record.
+  descendant_pid="$(pgrep -g "$other_pid" -f '^sleep 6020$' | head -1)"
+  [[ -n "$descendant_pid" ]]
   supervisor_pid="$(_recorded_supervisor_pid)"
 
   kill -INT "$supervisor_pid"
@@ -1302,4 +1305,32 @@ _wait_for_pid_gone() {
   _wait_for_pid_gone "$app_pid"
   _wait_for_pid_gone "$db_pid"
   _wait_for_pid_gone "$other_pid"
+  _wait_for_pid_gone "$descendant_pid"
+}
+
+@test "a second signal kills a daemon's children after its shell has exited" {
+  skip_on_windows "sends POSIX signals to the supervisor"
+  # The shell dies on SIGTERM; its child ignores it and stays in the group.
+  create_pitchfork_toml <<'EOF2'
+[daemons.parent]
+run = "(trap '' TERM; exec sleep 6017) & wait"
+stop_signal = { signal = "SIGTERM", timeout = "30s" }
+ready_delay = 1
+EOF2
+  run pitchfork start parent
+  assert_success
+  local shell_pid child_pid supervisor_pid
+  shell_pid="$(get_daemon_pid parent)"
+  child_pid="$(pgrep -g "$shell_pid" -f '^sleep 6017$' | head -1)"
+  [[ -n "$child_pid" ]]
+  supervisor_pid="$(_recorded_supervisor_pid)"
+
+  kill -INT "$supervisor_pid"
+  _wait_for_shutdown_start
+  _wait_for_pid_gone "$shell_pid"
+  pid_alive "$child_pid"
+
+  kill -INT "$supervisor_pid"
+  _wait_for_pid_gone "$supervisor_pid"
+  _wait_for_pid_gone "$child_pid"
 }
