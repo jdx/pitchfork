@@ -1577,24 +1577,11 @@ impl Supervisor {
             }
         };
 
-        // Stop the daemon first. It is recorded as `restarting` rather than
-        // `stopped` throughout, so `pitchfork wait` follows it to the new
-        // process instead of reporting the run as over.
-        let _ = self.stop_for_restart(id).await;
+        // Stop the daemon first
+        let _ = self.stop(id).await;
 
         // Small delay to allow the process to fully stop
         time::sleep(settings().supervisor_restart_delay()).await;
-
-        // Anything that recorded another outcome during the delay (a
-        // `pitchfork stop`, a disable) has the last word.
-        if !self
-            .get_daemon(id)
-            .await
-            .is_some_and(|d| d.pid.is_none() && d.status.is_restarting())
-        {
-            debug!("Daemon {id} changed state while restarting; not starting it again");
-            return Ok(());
-        }
 
         // Restart the daemon
         let mut run_opts = daemon.to_run_options(cmd);
@@ -1613,9 +1600,6 @@ impl Supervisor {
                 error!("Failed to restart daemon {id}: {e}");
             }
         }
-        // `run` settles a restart that did not start a process, since this
-        // is a forced start; settled here too in case it returned before.
-        self.settle_restarting(id).await;
 
         Ok(())
     }

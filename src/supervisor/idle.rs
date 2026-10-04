@@ -80,7 +80,7 @@ fn is_live(daemon: &Daemon) -> bool {
     let status = &daemon.status;
     status.is_running()
         || status.is_waiting()
-        || status.is_stopping_or_restarting()
+        || status.is_stopping()
         || (status.is_errored() && daemon.retry_count < daemon.retry.count())
 }
 
