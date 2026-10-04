@@ -75,6 +75,37 @@ impl HookDirs {
             config_root,
         }
     }
+
+    /// For a daemon acted on from its record rather than from a run's
+    /// options: an adopted daemon, or one the retry checker starts again.
+    ///
+    /// A record made from config before `watch_base_dir` was stored has no
+    /// project directory, and its `dir` may be outside the project, so the
+    /// project is found from the config that defines the daemon now.
+    pub(crate) async fn for_record(daemon: &crate::daemon::Daemon) -> Self {
+        let run_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+        let project_dir = match &daemon.watch_base_dir {
+            Some(dir) => Some(dir.clone()),
+            None => {
+                let id = daemon.id.clone();
+                tokio::task::spawn_blocking(move || {
+                    PitchforkToml::all_merged_all_namespaces()
+                        .ok()
+                        .and_then(|pt| defining_project_dir(&pt, &id))
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+        };
+        Self::new(run_dir, project_dir)
+    }
+}
+
+/// The directory of the project whose config defines `id` in `pt`, if any.
+fn defining_project_dir(pt: &PitchforkToml, id: &DaemonId) -> Option<PathBuf> {
+    let path = pt.daemons.get(id)?.path.as_deref()?;
+    pitchfork_toml::project_dir_for_config(path)
 }
 
 async fn load_hook_config(daemon_dir: PathBuf) -> Result<PitchforkToml> {
@@ -358,6 +389,29 @@ mod tests {
         // An ad-hoc daemon has no project; its working directory is used.
         let dirs = HookDirs::new(PathBuf::from("/elsewhere"), None);
         assert_eq!(dirs.config_root, PathBuf::from("/elsewhere"));
+    }
+
+    #[test]
+    fn a_record_without_its_project_finds_it_from_the_config_defining_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\ndir = \"../elsewhere\"\n",
+        )
+        .unwrap();
+        let pt = PitchforkToml::all_merged_from(&project).unwrap();
+        let id = pt.daemons.keys().next().unwrap().clone();
+
+        let project = project.canonicalize().unwrap();
+        let found = defining_project_dir(&pt, &id).map(|d| d.canonicalize().unwrap());
+        assert_eq!(found, Some(project));
+        // Not defined by any config, like a daemon from `pitchfork run`.
+        assert_eq!(
+            defining_project_dir(&pt, &DaemonId::new("global", "adhoc")),
+            None
+        );
     }
 
     #[tokio::test]
