@@ -527,6 +527,46 @@ impl StateFile {
         Ok(DiskRecord::Restored)
     }
 
+    /// Apply `f` to the state in the file at `path` and write it back if `f`
+    /// reports a change, reading and writing under one lock so a concurrent
+    /// writer's update is not lost. A missing file is left missing. Blocking.
+    pub(crate) fn update_in_file<T>(
+        path: &Path,
+        f: impl FnOnce(&mut Self) -> (bool, T),
+    ) -> Result<T> {
+        let canonical_path = normalized_lock_path(path);
+        let _lock = xx::fslock::get(&canonical_path, false)?;
+        let raw = match std::fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let (_, out) = f(&mut Self::new(path.to_path_buf()));
+                return Ok(out);
+            }
+            Err(source) => {
+                return Err(FileError::ReadError {
+                    path: path.to_path_buf(),
+                    source,
+                }
+                .into());
+            }
+        };
+        let mut sf: Self = toml::from_str(&raw)
+            .map_err(|e| miette::miette!("failed to parse state file {}: {e}", path.display()))?;
+        sf.path = path.to_path_buf();
+        for (id, daemon) in sf.daemons.iter_mut() {
+            daemon.id = id.clone();
+        }
+        let (changed, out) = f(&mut sf);
+        if changed {
+            let raw = toml::to_string(&sf).map_err(|e| FileError::SerializeError {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+            Self::write_raw(path, &raw)?;
+        }
+        Ok(out)
+    }
+
     /// Forget what this instance last wrote, because the file has changed
     /// since: the next write must not be skipped as unchanged.
     pub(crate) fn forget_written_snapshot(&self) {

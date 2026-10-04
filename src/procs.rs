@@ -543,6 +543,45 @@ impl Procs {
         }
     }
 
+    /// Whether `pid` names a process that has not exited: unlike
+    /// [`Self::is_running`], an exited process its parent has not reaped yet
+    /// (a zombie) does not count.
+    pub fn is_live(&self, pid: u32) -> bool {
+        if !self.is_running(pid) {
+            return false;
+        }
+        self.refresh_pids(&[pid]);
+        self.lock_system()
+            .process(sysinfo::Pid::from_u32(pid))
+            .is_none_or(|p| !is_exited_status(p.status()))
+    }
+
+    /// Whether the process group `pgid` still has a member that has not
+    /// exited. Unlike [`Self::process_group_alive`], a group left holding
+    /// only zombies, which nothing reaps when the parent is gone and init
+    /// does not, does not count.
+    pub fn process_group_has_live_member(&self, pgid: u32) -> bool {
+        #[cfg(unix)]
+        {
+            // Only ESRCH proves the group gone: EPERM means it exists but
+            // belongs to another user, so look at its members either way.
+            if unsafe { libc::killpg(pgid as i32, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                return false;
+            }
+            self.refresh_processes();
+            self.lock_system().processes().iter().any(|(pid, p)| {
+                !is_exited_status(p.status())
+                    && unsafe { libc::getpgid(pid.as_u32() as i32) } == pgid as i32
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            self.is_live(pgid)
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn kill_process_group_with_pidfds(
         &self,
@@ -1539,6 +1578,14 @@ fn signal_name(sig: i32) -> &'static str {
         libc::SIGKILL => "SIGKILL",
         _ => "UNKNOWN",
     }
+}
+
+/// Whether a process in this state has exited and only waits to be reaped.
+fn is_exited_status(status: sysinfo::ProcessStatus) -> bool {
+    matches!(
+        status,
+        sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+    )
 }
 
 #[cfg(test)]
