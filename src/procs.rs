@@ -563,7 +563,11 @@ impl Procs {
     pub fn process_group_has_live_member(&self, pgid: u32) -> bool {
         #[cfg(unix)]
         {
-            if process_group_terminated(pgid as i32) {
+            // Only ESRCH proves the group gone: EPERM means it exists but
+            // belongs to another user, so look at its members either way.
+            if unsafe { libc::killpg(pgid as i32, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
                 return false;
             }
             self.refresh_processes();

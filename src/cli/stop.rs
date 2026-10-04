@@ -258,8 +258,12 @@ fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<Orphan>
                 // PID is not handed out while a group with that ID exists, so
                 // members still in the group are the daemon's even after
                 // the leader (e.g. a wrapping shell) has exited. Members that
-                // have exited but were never reaped are not running.
-                same_boot(d.boot_time) && PROCS.process_group_has_live_member(pid)
+                // have exited but were never reaped are not running. Without
+                // a recorded boot time, nothing ties the group ID to this
+                // boot, so the group is not attributed to the daemon.
+                d.boot_time.is_some()
+                    && same_boot(d.boot_time)
+                    && PROCS.process_group_has_live_member(pid)
             };
             alive.then(|| Orphan {
                 id: d.id.clone(),
