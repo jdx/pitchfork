@@ -382,3 +382,29 @@ EOF
 
   pitchfork stop wait_watch_exit
 }
+
+@test "wait --exit-on-restart returns cleanly when pitchfork restart replaces the daemon" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_restart_exit]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start wait_restart_exit
+  assert_success
+  wait_for_status wait_restart_exit running
+
+  { pitchfork wait --exit-on-restart wait_restart_exit >/dev/null 2>&1; echo $? >"wait_restart_exit.done"; } &
+  local wait_pid=$!
+  sleep 1
+
+  # The restart can be over before the wait reads the state again: the wait
+  # still ends, and cleanly, rather than following the new process.
+  run pitchfork restart wait_restart_exit
+  assert_success
+  wait "$wait_pid"
+  run cat wait_restart_exit.done
+  assert_output "0"
+
+  pitchfork stop wait_restart_exit
+}
