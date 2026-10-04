@@ -1383,3 +1383,55 @@ EOF2
   _wait_for_pid_gone "$supervisor_pid"
   _wait_for_pid_gone "$child_pid"
 }
+
+@test "stop warns and succeeds when the supervisor is not running" {
+  create_pitchfork_toml <<EOF2
+[daemons.idle_stop]
+run = "sleep 120"
+EOF2
+
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+
+  run pitchfork stop idle_stop
+  assert_success
+  assert_output --partial "Supervisor is not running, nothing to stop"
+
+  run pitchfork stop --all
+  assert_success
+
+  # stop must not start a supervisor to have something to talk to.
+  run pitchfork supervisor status
+  assert_failure
+}
+
+@test "stop fails naming daemons a crashed supervisor left running" {
+  skip_on_windows "relies on SIGKILL semantics for the supervisor"
+
+  create_pitchfork_toml <<EOF2
+[daemons.left_behind]
+run = "sleep 120"
+ready_delay = 1
+EOF2
+
+  run pitchfork start left_behind
+  assert_success
+  wait_for_status left_behind running
+
+  local daemon_pid sup_pid
+  daemon_pid="$(get_daemon_pid left_behind)"
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+
+  kill_pid "$sup_pid"
+  sleep 1
+  pid_alive "$daemon_pid"
+
+  run pitchfork stop left_behind
+  assert_failure
+  assert_output --partial "left_behind (pid $daemon_pid)"
+
+  # The process is reported, not killed behind the user's back.
+  pid_alive "$daemon_pid"
+
+  kill -9 "$daemon_pid" 2>/dev/null || true
+}
