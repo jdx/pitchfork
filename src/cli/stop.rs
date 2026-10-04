@@ -100,7 +100,7 @@ impl Stop {
         } else if self.global || self.local {
             ipc.get_stoppable_configured_daemons(self.global).await?
         } else if no_target {
-            let candidates = ipc.get_running_daemons().await?;
+            let candidates = ipc.get_stoppable_daemons().await?;
             super::interactive::select_daemons_interactively(&candidates, "stop")?
         } else {
             PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
