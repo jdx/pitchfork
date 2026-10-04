@@ -145,16 +145,34 @@ impl Stop {
         }
         let list = orphans
             .iter()
-            .map(|(id, pid)| format!("{id} (pid {pid})"))
+            .map(|o| format!("{} (pid {})", o.id, o.pid))
             .collect::<Vec<_>>()
             .join(", ");
+        let mut help = "start the supervisor, which takes over or cleans up what a crashed \
+                        supervisor left, then stop them again: pitchfork supervisor start"
+            .to_string();
+        // A supervisor only takes over a daemon through its recorded leader;
+        // a group that outlived its leader has to be signalled directly.
+        let leaderless: Vec<String> = orphans
+            .iter()
+            .filter(|o| !o.leader_alive)
+            .map(|o| format!("kill -TERM -{}", o.pid))
+            .collect();
+        if !leaderless.is_empty() {
+            help = format!(
+                "{help}\nprocesses whose leader already exited are not taken over by the \
+                 supervisor; signal their process groups directly: {}",
+                leaderless.join("; ")
+            );
+        }
         Err(miette::miette!(
-            help = "start the supervisor, which takes over or cleans up what a crashed \
-                    supervisor left, then stop them again: pitchfork supervisor start",
+            help = help,
             "supervisor is not running, but daemons it started are still running: {list}"
         ))
     }
 
+    /// Whether no daemon was named or selected, so the command picks
+    /// interactively.
     fn no_target(&self) -> bool {
         self.id.is_empty() && self.group.is_none() && !self.local && !self.global && !self.all
     }
@@ -191,15 +209,27 @@ async fn supervisor_running() -> Result<bool> {
     Ok(false)
 }
 
+/// Read the state file fresh, failing rather than falling back to an empty
+/// state when it cannot be read.
 fn read_state() -> Result<StateFile> {
     let path = &*env::PITCHFORK_STATE_FILE;
     StateFile::read(path).wrap_err_with(|| format!("failed to read state file {}", path.display()))
 }
 
+/// A daemon left running by a supervisor that is no longer running.
+struct Orphan {
+    id: DaemonId,
+    /// The recorded PID, which is also the daemon's process group ID.
+    pid: u32,
+    /// Whether the group's leader is still alive, as opposed to only other
+    /// members of its group.
+    leader_alive: bool,
+}
+
 /// Daemons (restricted to `targets` when given) whose processes are still
 /// alive with no supervisor to manage them. A PID now belonging to another
 /// process, or one recorded in a previous boot, does not count.
-fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<(DaemonId, u32)> {
+fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<Orphan> {
     let current_boot = PROCS.boot_time();
     // The reported boot time shifts with NTP steps and sleep/resume, so it
     // only rules a record out when it is clearly from another boot.
@@ -213,7 +243,8 @@ fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<(Daemon
         .filter(|d| targets.is_none_or(|t| t.contains(&d.id)))
         .filter_map(|d| {
             let pid = d.pid?;
-            let alive = if PROCS.is_running(pid) {
+            let leader_alive = PROCS.is_running(pid);
+            let alive = if leader_alive {
                 match (d.start_time, PROCS.start_time(pid)) {
                     // The kernel start token is the process's identity.
                     (Some(recorded), Some(current)) => recorded == current,
@@ -226,7 +257,11 @@ fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<(Daemon
                 // the leader (e.g. a wrapping shell) has exited.
                 same_boot(d.boot_time) && PROCS.process_group_alive(pid)
             };
-            alive.then(|| (d.id.clone(), pid))
+            alive.then(|| Orphan {
+                id: d.id.clone(),
+                pid,
+                leader_alive,
+            })
         })
         .collect()
 }
