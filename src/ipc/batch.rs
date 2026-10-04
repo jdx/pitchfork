@@ -646,12 +646,34 @@ impl IpcClient {
     /// and its start but would come back if left out.
     pub async fn get_stoppable_daemons(&self) -> Result<Vec<DaemonId>> {
         let mut ids = self.get_running_daemons().await?;
-        for (id, d) in &crate::state_file::StateFile::get().daemons {
-            if d.status.is_restarting() && !ids.contains(id) {
-                ids.push(id.clone());
+        // The state file names every daemon the supervisor knows of; whether
+        // one is restarting is asked of the supervisor, since the file can
+        // lag a restart that has just begun.
+        let known: Vec<DaemonId> = crate::state_file::StateFile::get()
+            .daemons
+            .keys()
+            .cloned()
+            .collect();
+        for id in self.restarting_among(&known).await? {
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
         Ok(ids)
+    }
+
+    /// The daemons among `ids` the supervisor is restarting right now.
+    async fn restarting_among(&self, ids: &[DaemonId]) -> Result<Vec<DaemonId>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .daemons(ids)
+            .await?
+            .into_iter()
+            .filter(|d| d.status.is_restarting())
+            .map(|d| d.id)
+            .collect())
     }
 
     /// Get IDs of currently running daemons that are configured
@@ -1421,11 +1443,13 @@ impl IpcClient {
                 .daemons
                 .iter()
                 .filter(|(_, d)| {
-                    (d.pid.is_none() && d.status.is_errored() && d.retry_count < d.retry.count())
-                        || d.status.is_restarting()
+                    d.pid.is_none() && d.status.is_errored() && d.retry_count < d.retry.count()
                 })
                 .map(|(id, _)| id.clone()),
         );
+        // Asked of the supervisor rather than read from the state file, which
+        // can lag a restart that has just begun.
+        running_daemons.extend(self.restarting_among(ids).await?);
 
         // Filter to only running daemons
         let requested_ids: Vec<DaemonId> = ids
