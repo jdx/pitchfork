@@ -1576,6 +1576,14 @@ fn signal_name(sig: i32) -> &'static str {
     }
 }
 
+/// Whether a process in this state has exited and only waits to be reaped.
+fn is_exited_status(status: sysinfo::ProcessStatus) -> bool {
+    matches!(
+        status,
+        sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+    )
+}
+
 #[cfg(test)]
 mod format_tests {
     use super::*;
@@ -1841,12 +1849,4 @@ mod tests {
             "fresh timestamp after expired-TTL refresh should be recent"
         );
     }
-}
-
-/// Whether a process in this state has exited and only waits to be reaped.
-fn is_exited_status(status: sysinfo::ProcessStatus) -> bool {
-    matches!(
-        status,
-        sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
-    )
 }
