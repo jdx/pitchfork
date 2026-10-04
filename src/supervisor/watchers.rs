@@ -1606,7 +1606,14 @@ impl Supervisor {
         run_opts.retry_count = 0;
         run_opts.wait_ready = false; // Don't block on file-triggered restarts
 
-        match self.run_retry(run_opts, approved_at).await {
+        // A process started in the meantime (after the check above) is
+        // replaced by this forced start, whose own stop then leaves the mark
+        // to settle against.
+        let mut restart_mark = None;
+        match self
+            .run_retry(run_opts, approved_at, &mut restart_mark)
+            .await
+        {
             Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
                 info!("Successfully restarted daemon {id} after file change");
             }
@@ -1623,7 +1630,8 @@ impl Supervisor {
             }
         }
         // A restart that did not start a process is not left restarting.
-        self.settle_restarting(id, approved_at).await;
+        self.settle_restarting(id, restart_mark.unwrap_or(approved_at))
+            .await;
 
         Ok(())
     }

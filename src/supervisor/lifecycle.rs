@@ -531,12 +531,16 @@ impl Supervisor {
     /// Run an attempt the retry checker decided on while `stop_epoch` read
     /// `approved_at`. If the daemon has been stopped since, the attempt is
     /// abandoned instead of started.
+    ///
+    /// `restart_mark` is set as in [`Self::run_inner`], if a forced attempt
+    /// stopped a running instance.
     pub(crate) async fn run_retry(
         &self,
         opts: RunOptions,
         approved_at: u64,
+        restart_mark: &mut Option<u64>,
     ) -> Result<IpcResponse> {
-        self.run_inner(opts, Some(approved_at), &mut None).await
+        self.run_inner(opts, Some(approved_at), restart_mark).await
     }
 
     /// `restart_mark` is set to the stop epoch a forced start's own stop of

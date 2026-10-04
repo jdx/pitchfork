@@ -100,7 +100,7 @@ impl Supervisor {
             .await;
             let mut retry_opts = daemon.to_run_options(cmd);
             retry_opts.retry_count = daemon.retry_count + 1;
-            if let Err(e) = self.run_retry(retry_opts, approved_at).await {
+            if let Err(e) = self.run_retry(retry_opts, approved_at, &mut None).await {
                 error!("failed to retry daemon {id}: {e}");
             }
         }
