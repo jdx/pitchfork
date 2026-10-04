@@ -71,7 +71,7 @@ function openProxy(e: Event) {
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Start
       </button>
-      <button v-else-if="daemon.status.type === 'running' || daemon.status.type === 'waiting'" class="act-btn act-stop" :disabled="isActing()" @click="onStop">
+      <button v-else-if="daemon.status.type === 'running' || daemon.status.type === 'waiting' || daemon.status.type === 'restarting'" class="act-btn act-stop" :disabled="isActing()" @click="onStop">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
         Stop
       </button>
@@ -132,7 +132,7 @@ function openProxy(e: Event) {
   &.running { .status-running(); }
   &.stopped { .status-stopped(); }
   &.completed { .status-completed(); }
-  &.waiting, &.stopping { .status-waiting(); }
+  &.waiting, &.stopping, &.restarting { .status-waiting(); }
   &.failed, &.errored { .status-failed(); }
   &.available { .status-available(); }
 }

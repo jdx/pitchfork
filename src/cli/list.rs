@@ -21,6 +21,7 @@ enum StatusFilter {
     Stopped,
     Waiting,
     Stopping,
+    Restarting,
     Failed,
     Errored,
     Completed,
@@ -72,7 +73,7 @@ pub struct List {
 
     /// Filter daemons by status (repeatable for OR logic)
     ///
-    /// Values: running, stopped, waiting, stopping, failed, errored, completed, available, disabled
+    /// Values: running, stopped, waiting, stopping, restarting, failed, errored, completed, available, disabled
     #[usage(long, value_enum)]
     status: Vec<StatusFilter>,
 
@@ -121,6 +122,10 @@ impl List {
                     }
                     StatusFilter::Stopping => {
                         !entry.is_available && matches!(entry.daemon.status, DaemonStatus::Stopping)
+                    }
+                    StatusFilter::Restarting => {
+                        !entry.is_available
+                            && matches!(entry.daemon.status, DaemonStatus::Restarting)
                     }
                     StatusFilter::Failed => {
                         !entry.is_available
@@ -221,6 +226,7 @@ impl List {
                     DaemonStatus::Waiting => Color::Yellow,
                     DaemonStatus::Running => Color::Green,
                     DaemonStatus::Stopping => Color::Yellow,
+                    DaemonStatus::Restarting => Color::Yellow,
                     DaemonStatus::Stopped => Color::DarkGrey,
                     DaemonStatus::Completed => Color::DarkGreen,
                     DaemonStatus::Errored(_) => Color::Red,

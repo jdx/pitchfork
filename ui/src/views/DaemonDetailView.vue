@@ -32,6 +32,7 @@ function statusMeta(s: { type: string }) {
     case 'errored': return { label: 'Errored', cls: 'errored' }
     case 'waiting': return { label: 'Waiting', cls: 'waiting' }
     case 'stopping': return { label: 'Stopping', cls: 'stopping' }
+    case 'restarting': return { label: 'Restarting', cls: 'restarting' }
     default: return { label: s.type, cls: 'stopped' }
   }
 }
@@ -380,7 +381,8 @@ async function onToggle() {
   &.failed    { background: @sf-danger-8; color: @c-danger; }
   &.errored   { background: @sf-danger-8; color: @c-danger; }
   &.waiting   { background: @sf-warning-8; color: @c-warning; }
-  &.stopping  { background: @sf-warning-8; color: @c-warning; }
+  &.stopping,
+  &.restarting { background: @sf-warning-8; color: @c-warning; }
 }
 
 .daemon-title { margin: 0; font-size: 1.5rem; font-weight: 700; color: @c-white; letter-spacing: -0.02em; }

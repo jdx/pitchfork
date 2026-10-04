@@ -109,7 +109,7 @@ const isActing = () => acting.value.has(daemonKey.value)
 
   &.running { .status-running(); }
   &.stopped { .status-stopped(); }
-  &.waiting, &.stopping { .status-waiting(); }
+  &.waiting, &.stopping, &.restarting { .status-waiting(); }
   &.failed, &.errored { .status-failed(); }
   &.available { .status-available(); }
 }

@@ -98,7 +98,8 @@ const isActing = () => acting.value.has(daemonKey.value)
   &.running   { background: @sf-success-12; color: @c-success; border-color: @sf-success-20; }
   &.stopped   { background: @sf-3; color: @sf-30; border-color: @sf-8; }
   &.waiting,
-  &.stopping  { background: @sf-warning-8; color: @c-warning; border-color: @sf-warning-15; }
+  &.stopping,
+  &.restarting { background: @sf-warning-8; color: @c-warning; border-color: @sf-warning-15; }
   &.failed,
   &.errored   { background: @sf-danger-8; color: @c-danger; border-color: @sf-danger-15; }
   &.available { background: @sf-info-8; color: @c-info; border-color: @sf-info-15; }

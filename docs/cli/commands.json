@@ -1657,7 +1657,7 @@
             "name": "status",
             "usage": "--status <STATUS>",
             "help": "Filter daemons by status (repeatable for OR logic)",
-            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, failed, errored, completed, available, disabled",
+            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, restarting, failed, errored, completed, available, disabled",
             "help_first_line": "Filter daemons by status (repeatable for OR logic)",
             "short": [],
             "long": [
@@ -1678,6 +1678,7 @@
                   "stopped",
                   "waiting",
                   "stopping",
+                  "restarting",
                   "failed",
                   "errored",
                   "completed",
@@ -1696,6 +1697,9 @@
                   },
                   {
                     "value": "stopping"
+                  },
+                  {
+                    "value": "restarting"
                   },
                   {
                     "value": "failed"
@@ -5085,7 +5089,7 @@
         "full_cmd": [
           "wait"
         ],
-        "usage": "wait [--group <GROUP>] [--kill] [ID]…",
+        "usage": "wait [FLAGS] [ID]…",
         "subcommands": {},
         "args": [
           {
@@ -5132,6 +5136,18 @@
             "global": false
           },
           {
+            "name": "exit-on-restart",
+            "usage": "--exit-on-restart",
+            "help": "Stop waiting when a daemon is restarted instead of following it to its new process",
+            "help_first_line": "Stop waiting when a daemon is restarted instead of following it to its new process",
+            "short": [],
+            "long": [
+              "exit-on-restart"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
             "name": "help",
             "usage": "-h --help",
             "help": "Print help",
@@ -5154,7 +5170,7 @@
         "hide": false,
         "args_override_self": true,
         "help": "Wait for daemons to stop, tailing the logs along the way",
-        "help_long": "Wait for one or more daemons to stop, tailing the logs along the way\n\nBlocks until every specified daemon stops running, while displaying its\nlog output in real-time. Already-finished daemons are evaluated without\nwaiting; their exit codes still count. With no daemon IDs and no\n`--group`, shows an interactive picker of the currently running daemons.\n\nWith `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C\non Windows) first stops the waited daemons via the supervisor (graceful\nSIGTERM then SIGKILL, hooks fire, reverse dependency order), then the\ncommand exits with 128 + the signal number like the shell, so Ctrl-C\nyields 130.\n\nExit code: 0 when every waited daemon stopped cleanly. Otherwise the exit\ncode of the first failing daemon (in the order given) is propagated;\nunknown exit codes, failed daemons, and missing statuses map to 1.\n\nUseful in scripts that need to wait for daemons to complete.\n\nExamples:\n\n    pitchfork wait api              Wait for 'api' to stop, exit with its status\n    pitchfork wait api worker       Wait for 'api' and 'worker' to stop\n    pitchfork wait --group backend  Wait for the whole 'backend' group\n    pitchfork wait --kill api       Stop 'api' gracefully when a signal arrives\n    pitchfork w api                 Alias for 'wait'\n    pitchfork wait api && echo done Run command after the daemon stops",
+        "help_long": "Wait for one or more daemons to stop, tailing the logs along the way\n\nBlocks until every specified daemon stops running, while displaying its\nlog output in real-time. Already-finished daemons are evaluated without\nwaiting; their exit codes still count. With no daemon IDs and no\n`--group`, shows an interactive picker of the currently running daemons.\n\nA daemon the supervisor restarts (because a watched file changed, or\nthrough `pitchfork restart` / `start --force`) shows as `restarting` in\nbetween, and waiting follows it to the new process instead of returning.\nWith `--exit-on-restart`, waiting ends when the daemon is stopped for a\nrestart, and the restart counts as a clean stop (exit 0).\n\nWith `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C\non Windows) first stops the waited daemons via the supervisor (graceful\nSIGTERM then SIGKILL, hooks fire, reverse dependency order), then the\ncommand exits with 128 + the signal number like the shell, so Ctrl-C\nyields 130.\n\nExit code: 0 when every waited daemon stopped cleanly. Otherwise the exit\ncode of the first failing daemon (in the order given) is propagated;\nunknown exit codes, failed daemons, and missing statuses map to 1.\n\nUseful in scripts that need to wait for daemons to complete.\n\nExamples:\n\n    pitchfork wait api              Wait for 'api' to stop, exit with its status\n    pitchfork wait api worker       Wait for 'api' and 'worker' to stop\n    pitchfork wait --group backend  Wait for the whole 'backend' group\n    pitchfork wait --kill api       Stop 'api' gracefully when a signal arrives\n    pitchfork wait --exit-on-restart api\n                                    Return when 'api' is restarted\n    pitchfork w api                 Alias for 'wait'\n    pitchfork wait api && echo done Run command after the daemon stops",
         "name": "wait",
         "aliases": [
           "w"

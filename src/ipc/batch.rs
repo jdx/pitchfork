@@ -1392,13 +1392,16 @@ impl IpcClient {
         // A daemon between retries has no PID, so it is not in the list above,
         // but an attempt may still be started for it — by the start that is
         // waiting on it or by the retry checker. Stopping it has to end those
-        // rather than report that there is nothing running.
+        // rather than report that there is nothing running. Likewise a
+        // daemon being restarted, which is on its way back: stopping it
+        // cancels the restart.
         running_daemons.extend(
             crate::state_file::StateFile::get()
                 .daemons
                 .iter()
                 .filter(|(_, d)| {
-                    d.pid.is_none() && d.status.is_errored() && d.retry_count < d.retry.count()
+                    (d.pid.is_none() && d.status.is_errored() && d.retry_count < d.retry.count())
+                        || d.status.is_restarting()
                 })
                 .map(|(id, _)| id.clone()),
         );

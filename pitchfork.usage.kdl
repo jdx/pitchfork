@@ -437,7 +437,7 @@ Output:
         long_help #"""
 Filter daemons by status (repeatable for OR logic)
 
-Values: running, stopped, waiting, stopping, failed, errored, completed, available, disabled
+Values: running, stopped, waiting, stopping, restarting, failed, errored, completed, available, disabled
 """#
         arg <STATUS> {
             choices {
@@ -445,6 +445,7 @@ Values: running, stopped, waiting, stopping, failed, errored, completed, availab
                 choice stopped
                 choice waiting
                 choice stopping
+                choice restarting
                 choice failed
                 choice errored
                 choice completed
@@ -1315,6 +1316,12 @@ log output in real-time. Already-finished daemons are evaluated without
 waiting; their exit codes still count. With no daemon IDs and no
 `--group`, shows an interactive picker of the currently running daemons.
 
+A daemon the supervisor restarts (because a watched file changed, or
+through `pitchfork restart` / `start --force`) shows as `restarting` in
+between, and waiting follows it to the new process instead of returning.
+With `--exit-on-restart`, waiting ends when the daemon is stopped for a
+restart, and the restart counts as a clean stop (exit 0).
+
 With `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C
 on Windows) first stops the waited daemons via the supervisor (graceful
 SIGTERM then SIGKILL, hooks fire, reverse dependency order), then the
@@ -1333,6 +1340,8 @@ Examples:
     pitchfork wait api worker       Wait for 'api' and 'worker' to stop
     pitchfork wait --group backend  Wait for the whole 'backend' group
     pitchfork wait --kill api       Stop 'api' gracefully when a signal arrives
+    pitchfork wait --exit-on-restart api
+                                    Return when 'api' is restarted
     pitchfork w api                 Alias for 'wait'
     pitchfork wait api && echo done Run command after the daemon stops
 """#
@@ -1340,6 +1349,7 @@ Examples:
         arg <GROUP>
     }
     flag --kill help="Stop the waited daemons when a signal is received while waiting"
+    flag --exit-on-restart help="Stop waiting when a daemon is restarted instead of following it to its new process"
     flag "-h --help" help="Print help" action=help builtin=#true
     arg "[ID]..." help="The name of the daemon(s) to wait for"
 }

@@ -66,7 +66,7 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Start
       </button>
-      <button v-else-if="daemon.status.type === 'running' || daemon.status.type === 'waiting'" class="act-btn act-stop" :disabled="isActing()" @click="onStop">
+      <button v-else-if="daemon.status.type === 'running' || daemon.status.type === 'waiting' || daemon.status.type === 'restarting'" class="act-btn act-stop" :disabled="isActing()" @click="onStop">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
         Stop
       </button>
@@ -112,7 +112,8 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
   &.stopped   { background: @sf-3; color: @sf-30; border-color: @sf-8; }
   &.completed { background: @sf-3; color: @c-success; border-color: @sf-success-20; }
   &.waiting,
-  &.stopping  { background: @sf-warning-8; color: @c-warning; border-color: @sf-warning-15; }
+  &.stopping,
+  &.restarting { background: @sf-warning-8; color: @c-warning; border-color: @sf-warning-15; }
   &.failed,
   &.errored   { background: @sf-danger-8; color: @c-danger; border-color: @sf-danger-15; }
   &.available { background: @sf-info-8; color: @c-info; border-color: @sf-info-15; }
