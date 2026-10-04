@@ -260,9 +260,9 @@ fn cancel_pending_retries(sf: &mut StateFile, targets: Option<&[DaemonId]>) -> V
         .filter(|d| d.id != DaemonId::pitchfork())
         .filter(|d| targets.is_none_or(|t| t.contains(&d.id)))
         .filter(|d| {
-            // Rechecked rather than trusting the orphan scan: a record whose
-            // PID is alive at all is left for the supervisor to sort out.
-            (d.status.is_running() && d.pid.is_none_or(|pid| !PROCS.is_live(pid)))
+            (d.status.is_running()
+                && d.pid
+                    .is_none_or(|pid| recorded_process_is_gone(pid, d.start_time)))
                 || (d.status.is_errored() && d.pid.is_none() && d.retry_count < d.retry.count())
         })
         .map(|d| d.id.clone())
@@ -274,6 +274,20 @@ fn cancel_pending_retries(sf: &mut StateFile, targets: Option<&[DaemonId]>) -> V
         }
     }
     ids
+}
+
+/// Whether the process recorded at `pid` is known to have exited: the PID is
+/// dead, or now belongs to a process with a different kernel start token.
+/// Rechecked rather than trusting the orphan scan; a live PID whose identity
+/// cannot be compared is left for the supervisor to sort out.
+fn recorded_process_is_gone(pid: u32, recorded_start_time: Option<u64>) -> bool {
+    if !PROCS.is_live(pid) {
+        return true;
+    }
+    matches!(
+        (recorded_start_time, PROCS.start_time(pid)),
+        (Some(recorded), Some(current)) if recorded != current
+    )
 }
 
 /// What `stop` found in the state file when no supervisor was listening.
@@ -379,6 +393,14 @@ mod tests {
                 pid: Some(std::process::id()),
                 ..Default::default()
             },
+            // A live PID whose start token differs: reused by another process.
+            Daemon {
+                id: DaemonId::new("proj", "recycled"),
+                status: DaemonStatus::Running,
+                pid: Some(std::process::id()),
+                start_time: PROCS.start_time(std::process::id()).map(|t| t + 1),
+                ..Default::default()
+            },
         ] {
             sf.insert_daemon(&d.id.clone(), d);
         }
@@ -387,6 +409,7 @@ mod tests {
         let other = DaemonId::new("proj", "other");
         let crashed = DaemonId::new("proj", "crashed");
         let alive = DaemonId::new("proj", "alive");
+        let recycled = DaemonId::new("proj", "recycled");
 
         let mut canceled = cancel_pending_retries(
             &mut sf,
@@ -395,11 +418,15 @@ mod tests {
                 exhausted.clone(),
                 crashed.clone(),
                 alive.clone(),
+                recycled.clone(),
             ]),
         );
         canceled.sort_by_key(|id| id.to_string());
 
-        assert_eq!(canceled, vec![crashed.clone(), target.clone()]);
+        assert_eq!(
+            canceled,
+            vec![crashed.clone(), recycled.clone(), target.clone()]
+        );
         assert!(matches!(sf.daemons[&crashed].status, DaemonStatus::Stopped));
         assert_eq!(sf.daemons[&crashed].pid, None);
         assert!(matches!(sf.daemons[&alive].status, DaemonStatus::Running));
