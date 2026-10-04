@@ -246,8 +246,11 @@ fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<Orphan>
             let leader_alive = PROCS.is_running(pid);
             let alive = if leader_alive {
                 match (d.start_time, PROCS.start_time(pid)) {
-                    // The kernel start token is the process's identity.
-                    (Some(recorded), Some(current)) => recorded == current,
+                    // The kernel start token is the process's identity, but
+                    // Linux counts it from boot, so it only holds within one.
+                    (Some(recorded), Some(current)) => {
+                        recorded == current && same_boot(d.boot_time)
+                    }
                     _ => same_boot(d.boot_time),
                 }
             } else {
