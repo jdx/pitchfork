@@ -2394,7 +2394,7 @@ async fn reset_daemon_state(
 /// real boot cycle reaches. A larger window would misread a short-lived
 /// previous boot (e.g. a device in a reboot loop) as the current one and
 /// resurrect daemons a reboot should have left stopped.
-const BOOT_TIME_TOLERANCE_SECS: u64 = 2;
+pub(crate) const BOOT_TIME_TOLERANCE_SECS: u64 = 2;
 
 /// Terminal status for a daemon whose process is gone and whose exit was
 /// never observed, because the monitor that would have seen it died with a

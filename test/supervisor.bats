@@ -1435,3 +1435,42 @@ EOF2
 
   kill -9 "$daemon_pid" 2>/dev/null || true
 }
+
+@test "stop counts a crashed supervisor's daemon whose leader exited but whose children live on" {
+  skip_on_windows "relies on Unix process groups"
+
+  # The shell leading the daemon's process group exits a few seconds after
+  # the supervisor is killed, leaving its background child in the group.
+  create_pitchfork_toml <<EOF2
+[daemons.group_left]
+run = "sleep 120 & sleep 3"
+ready_delay = 1
+EOF2
+
+  run pitchfork start group_left
+  assert_success
+  wait_for_status group_left running
+
+  local daemon_pid sup_pid
+  daemon_pid="$(get_daemon_pid group_left)"
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+
+  kill_pid "$sup_pid"
+  sleep 4
+
+  run pitchfork stop group_left
+  assert_failure
+  assert_output --partial "group_left (pid $daemon_pid)"
+
+  kill -9 "-$daemon_pid" 2>/dev/null || true
+}
+
+@test "stop fails when the state file cannot be read without a supervisor" {
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+  echo 'this is = = not toml' > "$PITCHFORK_STATE_DIR/state.toml"
+
+  run pitchfork stop --all
+  assert_failure
+  assert_output --partial "failed to read state file"
+}

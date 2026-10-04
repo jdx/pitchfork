@@ -1,10 +1,13 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
+use crate::env;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
+use miette::WrapErr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Sends a stop signal to a daemon
 #[derive(Debug, usage_rs::Args)]
@@ -85,7 +88,7 @@ impl Stop {
             super::interactive::require_interactive_terminal()?;
         }
 
-        if !crate::ipc::supervisor_listening().await {
+        if !supervisor_running().await? {
             return self.stop_without_supervisor();
         }
 
@@ -120,7 +123,9 @@ impl Stop {
     /// gracefully from here (no hooks, no dependency order), so they are
     /// reported rather than silently left running or killed.
     fn stop_without_supervisor(&self) -> Result<()> {
-        let sf = StateFile::get();
+        // A state file that cannot be read must not pass for one with no
+        // daemons in it: the orphan check below could not be done.
+        let sf = read_state()?;
         let targets: Option<Vec<DaemonId>> = if self.all || self.no_target() {
             None
         } else if self.global {
@@ -133,7 +138,7 @@ impl Stop {
                 self.group.as_deref(),
             )?)
         };
-        let orphans = orphaned_daemons(sf, targets.as_deref());
+        let orphans = orphaned_daemons(&sf, targets.as_deref());
         if orphans.is_empty() {
             warn!("Supervisor is not running, nothing to stop");
             return Ok(());
@@ -155,24 +160,72 @@ impl Stop {
     }
 }
 
-/// Daemons (restricted to `targets` when given) whose recorded process is
-/// still alive with no supervisor to manage it. A PID from a previous boot,
-/// or one now belonging to another process, does not count.
+/// How long a supervisor that has recorded itself may take to open its IPC
+/// socket before it is treated as not running.
+const SUPERVISOR_STARTUP_WAIT: Duration = Duration::from_secs(5);
+
+/// Whether a supervisor is running, waiting out one that is starting up.
+///
+/// The socket is the ground truth for a running supervisor. A starting
+/// supervisor records itself, and may already start daemons, before it opens
+/// the socket, so a live record without a listening socket is waited on
+/// rather than taken to mean nothing is running.
+async fn supervisor_running() -> Result<bool> {
+    if crate::ipc::supervisor_listening().await {
+        return Ok(true);
+    }
+    let starting = read_state()?
+        .daemons
+        .get(&DaemonId::pitchfork())
+        .is_some_and(crate::supervisor::supervisor_record_is_live);
+    if !starting {
+        return Ok(false);
+    }
+    let deadline = Instant::now() + SUPERVISOR_STARTUP_WAIT;
+    while Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if crate::ipc::supervisor_listening().await {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn read_state() -> Result<StateFile> {
+    let path = &*env::PITCHFORK_STATE_FILE;
+    StateFile::read(path).wrap_err_with(|| format!("failed to read state file {}", path.display()))
+}
+
+/// Daemons (restricted to `targets` when given) whose processes are still
+/// alive with no supervisor to manage them. A PID now belonging to another
+/// process, or one recorded in a previous boot, does not count.
 fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<(DaemonId, u32)> {
     let current_boot = PROCS.boot_time();
+    // The reported boot time shifts with NTP steps and sleep/resume, so it
+    // only rules a record out when it is clearly from another boot.
+    let same_boot = |recorded: Option<u64>| {
+        recorded
+            .is_none_or(|b| b.abs_diff(current_boot) <= crate::supervisor::BOOT_TIME_TOLERANCE_SECS)
+    };
     sf.daemons
         .values()
         .filter(|d| d.id != DaemonId::pitchfork())
         .filter(|d| targets.is_none_or(|t| t.contains(&d.id)))
         .filter_map(|d| {
             let pid = d.pid?;
-            let same_boot = d.boot_time.is_none_or(|b| b == current_boot);
-            let alive = same_boot
-                && PROCS.is_running(pid)
-                && crate::supervisor::signalling_pid_is_authorized(
-                    d.start_time,
-                    PROCS.start_time(pid),
-                );
+            let alive = if PROCS.is_running(pid) {
+                match (d.start_time, PROCS.start_time(pid)) {
+                    // The kernel start token is the process's identity.
+                    (Some(recorded), Some(current)) => recorded == current,
+                    _ => same_boot(d.boot_time),
+                }
+            } else {
+                // Daemons lead their own process group (PGID == PID), and a
+                // PID is not handed out while a group with that ID exists, so
+                // members still in the group are the daemon's even after
+                // the leader (e.g. a wrapping shell) has exited.
+                same_boot(d.boot_time) && PROCS.process_group_alive(pid)
+            };
             alive.then(|| (d.id.clone(), pid))
         })
         .collect()
