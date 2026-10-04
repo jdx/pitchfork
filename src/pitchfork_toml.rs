@@ -1640,7 +1640,9 @@ impl PitchforkToml {
     pub(crate) fn write_unlocked(&self) -> Result<()> {
         if let Some(path) = &self.path {
             // Determine the namespace for this config file
-            let config_namespace = if path.exists() {
+            // A new file without its own `namespace` shares the one its
+            // directory's other config files declare, as it will once read.
+            let config_namespace = if path.exists() || self.namespace.is_none() {
                 namespace_from_path(path)?
             } else {
                 namespace_from_path_with_override(path, self.namespace.as_deref())?
@@ -2502,6 +2504,32 @@ user = "postgres"
         assert_eq!(opts.user.as_deref(), Some("postgres"));
         // A start from config describes the daemon in full.
         assert!(opts.replaces_saved_record);
+    }
+
+    #[test]
+    fn test_new_local_file_writes_daemons_of_the_directory_namespace() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("pitchfork.toml"),
+            "namespace = \"myns\"\n\n[daemons.web]\nrun = \"sleep 60\"\n",
+        )
+        .unwrap();
+        let path = temp.path().join("pitchfork.local.toml");
+        let mut pt = PitchforkToml::new(path.clone());
+        let id = DaemonId::new(namespace_from_path(&path).unwrap(), "api");
+        assert_eq!(id.namespace(), "myns");
+        pt.daemons.insert(
+            id.clone(),
+            PitchforkTomlDaemon {
+                run: "sleep 60".into(),
+                ..PitchforkTomlDaemon::default()
+            },
+        );
+
+        pt.write().unwrap();
+
+        let parsed = PitchforkToml::read(&path).unwrap();
+        assert!(parsed.daemons.contains_key(&id));
     }
 
     #[test]
