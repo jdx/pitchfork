@@ -402,6 +402,14 @@ EOF
   # still ends, and cleanly, rather than following the new process.
   run pitchfork restart wait_restart_exit
   assert_success
+  # Within a few seconds, while the replacement is still running: following
+  # it would only end the wait when its `sleep 60` does.
+  for _ in $(seq 1 50); do
+    [[ -e wait_restart_exit.done ]] && break
+    sleep 0.2
+  done
+  [[ -e wait_restart_exit.done ]]
+  [[ "$(get_daemon_status wait_restart_exit)" == "running" ]]
   wait "$wait_pid"
   run cat wait_restart_exit.done
   assert_output "0"
