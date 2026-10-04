@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
 use crate::env;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
@@ -140,6 +141,15 @@ impl Stop {
         };
         let orphans = orphaned_daemons(&sf, targets.as_deref());
         if orphans.is_empty() {
+            // A failed daemon with retries left would be started again by the
+            // next supervisor; the user asked for it to stay stopped.
+            let canceled = StateFile::update_in_file(&env::PITCHFORK_STATE_FILE, |sf| {
+                let canceled = cancel_pending_retries(sf, targets.as_deref());
+                (!canceled.is_empty(), canceled)
+            })?;
+            for id in canceled {
+                info!("Canceled pending retries for {id}");
+            }
             warn!("Supervisor is not running, nothing to stop");
             return Ok(());
         }
@@ -216,6 +226,22 @@ fn read_state() -> Result<StateFile> {
     StateFile::read(path).wrap_err_with(|| format!("failed to read state file {}", path.display()))
 }
 
+/// Mark failed daemons (restricted to `targets` when given) that a
+/// supervisor would retry as stopped, returning their IDs.
+fn cancel_pending_retries(sf: &mut StateFile, targets: Option<&[DaemonId]>) -> Vec<DaemonId> {
+    let ids: Vec<DaemonId> = sf
+        .daemons
+        .values()
+        .filter(|d| targets.is_none_or(|t| t.contains(&d.id)))
+        .filter(|d| d.status.is_errored() && d.pid.is_none() && d.retry_count < d.retry.count())
+        .map(|d| d.id.clone())
+        .collect();
+    for id in &ids {
+        sf.set_status(id, DaemonStatus::Stopped);
+    }
+    ids
+}
+
 /// A daemon left running by a supervisor that is no longer running.
 struct Orphan {
     id: DaemonId,
@@ -272,4 +298,42 @@ fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<Orphan>
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::Daemon;
+
+    fn errored(name: &str, retry: u32, retry_count: u32) -> Daemon {
+        Daemon {
+            id: DaemonId::new("proj", name),
+            status: DaemonStatus::Errored(1),
+            retry: crate::config_types::Retry(retry),
+            retry_count,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn stopping_without_a_supervisor_cancels_pending_retries() {
+        let mut sf = StateFile::new(std::path::PathBuf::from("state.toml"));
+        for d in [
+            errored("retrying", 3, 1),
+            errored("exhausted", 3, 3),
+            errored("other", 3, 0),
+        ] {
+            sf.insert_daemon(&d.id.clone(), d);
+        }
+        let target = DaemonId::new("proj", "retrying");
+        let exhausted = DaemonId::new("proj", "exhausted");
+        let other = DaemonId::new("proj", "other");
+
+        let canceled = cancel_pending_retries(&mut sf, Some(&[target.clone(), exhausted.clone()]));
+
+        assert_eq!(canceled, vec![target.clone()]);
+        assert!(matches!(sf.daemons[&target].status, DaemonStatus::Stopped));
+        assert!(sf.daemons[&exhausted].status.is_errored());
+        assert!(sf.daemons[&other].status.is_errored());
+    }
 }
