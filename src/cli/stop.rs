@@ -148,7 +148,7 @@ impl Stop {
                 (!canceled.is_empty(), canceled)
             })?;
             for id in canceled {
-                info!("Canceled pending retries for {id}");
+                info!("Marked {id} stopped so a supervisor does not restart it");
             }
             warn!("Supervisor is not running, nothing to stop");
             return Ok(());
@@ -226,18 +226,28 @@ fn read_state() -> Result<StateFile> {
     StateFile::read(path).wrap_err_with(|| format!("failed to read state file {}", path.display()))
 }
 
-/// Mark failed daemons (restricted to `targets` when given) that a
-/// supervisor would retry as stopped, returning their IDs.
+/// Mark daemons (restricted to `targets` when given) that a supervisor would
+/// start again as stopped, returning their IDs: failed daemons with retries
+/// left, and records still marked running, which a starting supervisor turns
+/// into retries once it finds their process gone. Only called once no
+/// targeted daemon is still running, so those records' processes are dead.
 fn cancel_pending_retries(sf: &mut StateFile, targets: Option<&[DaemonId]>) -> Vec<DaemonId> {
     let ids: Vec<DaemonId> = sf
         .daemons
         .values()
+        .filter(|d| d.id != DaemonId::pitchfork())
         .filter(|d| targets.is_none_or(|t| t.contains(&d.id)))
-        .filter(|d| d.status.is_errored() && d.pid.is_none() && d.retry_count < d.retry.count())
+        .filter(|d| {
+            d.status.is_running()
+                || (d.status.is_errored() && d.pid.is_none() && d.retry_count < d.retry.count())
+        })
         .map(|d| d.id.clone())
         .collect();
     for id in &ids {
-        sf.set_status(id, DaemonStatus::Stopped);
+        if let Some(d) = sf.daemons.get_mut(id) {
+            d.status = DaemonStatus::Stopped;
+            d.pid = None;
+        }
     }
     ids
 }
@@ -322,16 +332,29 @@ mod tests {
             errored("retrying", 3, 1),
             errored("exhausted", 3, 3),
             errored("other", 3, 0),
+            Daemon {
+                id: DaemonId::new("proj", "crashed"),
+                status: DaemonStatus::Running,
+                pid: Some(4242),
+                ..Default::default()
+            },
         ] {
             sf.insert_daemon(&d.id.clone(), d);
         }
         let target = DaemonId::new("proj", "retrying");
         let exhausted = DaemonId::new("proj", "exhausted");
         let other = DaemonId::new("proj", "other");
+        let crashed = DaemonId::new("proj", "crashed");
 
-        let canceled = cancel_pending_retries(&mut sf, Some(&[target.clone(), exhausted.clone()]));
+        let mut canceled = cancel_pending_retries(
+            &mut sf,
+            Some(&[target.clone(), exhausted.clone(), crashed.clone()]),
+        );
+        canceled.sort_by_key(|id| id.to_string());
 
-        assert_eq!(canceled, vec![target.clone()]);
+        assert_eq!(canceled, vec![crashed.clone(), target.clone()]);
+        assert!(matches!(sf.daemons[&crashed].status, DaemonStatus::Stopped));
+        assert_eq!(sf.daemons[&crashed].pid, None);
         assert!(matches!(sf.daemons[&target].status, DaemonStatus::Stopped));
         assert!(sf.daemons[&exhausted].status.is_errored());
         assert!(sf.daemons[&other].status.is_errored());
