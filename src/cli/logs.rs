@@ -513,6 +513,47 @@ impl Logs {
         Ok(())
     }
 
+    /// The row limit for the SQL query. `-n` is applied there only when
+    /// nothing filters the rows afterwards: a time filter trims to the last N
+    /// once the rows are in chronological order, and a jq filter runs after
+    /// the query, so limiting first would show only the matches among the
+    /// last N entries rather than the last N matches.
+    fn query_limit(&self, has_time_filter: bool, has_jq_filter: bool) -> Option<usize> {
+        if has_time_filter || has_jq_filter {
+            None
+        } else {
+            self.n
+        }
+    }
+
+    /// Run `opts` and apply the jq filter, if any: newest first without a
+    /// time filter, chronological with one.
+    ///
+    /// With `--jq` and `-n` the last N matches are wanted, but jq runs after
+    /// the query, so the query reads a window of the newest rows that grows
+    /// until it holds N matches or covers them all (see [`last_matches`]).
+    fn query_entries(
+        &self,
+        mut opts: LogQuery,
+        jq_filter: Option<&crate::log_jq::JqFilter>,
+        has_time_filter: bool,
+    ) -> Result<Vec<LogEntry>> {
+        let Some(jq) = jq_filter else {
+            return LOG_STORE.query(&opts);
+        };
+        match self.n {
+            Some(n) if !has_time_filter => last_matches(
+                n,
+                |window| {
+                    opts.limit = Some(window);
+                    LOG_STORE.query(&opts)
+                },
+                |rows| jq.filter(rows),
+            ),
+            _ => Ok(jq.filter(LOG_STORE.query(&opts)?)),
+        }
+    }
+
     fn build_message_filters(&self) -> Result<Vec<MessageFilter>> {
         if self.case_sensitive && self.grep.is_empty() {
             warn!("--case-sensitive has no effect without --grep");
@@ -601,7 +642,7 @@ impl Logs {
             daemon_ids,
             from,
             to,
-            limit: if !has_time_filter { self.n } else { None },
+            limit: self.query_limit(has_time_filter, jq_filter.is_some()),
             order_desc: !has_time_filter,
             after_id: None,
             before_id: None,
@@ -609,12 +650,7 @@ impl Logs {
             field_filters,
             include_structured: jq_filter.is_some() || !self.raw,
         };
-        let mut entries = LOG_STORE.query(&opts)?;
-
-        // Apply jq filter if present.
-        if let Some(jq) = jq_filter {
-            entries = jq.filter(entries);
-        }
+        let mut entries = self.query_entries(opts, jq_filter, has_time_filter)?;
 
         // Apply time-filter take-last-N or reverse for chronological display.
         if has_time_filter {
@@ -705,7 +741,7 @@ impl Logs {
             daemon_ids,
             from,
             to,
-            limit: if !has_time_filter { self.n } else { None },
+            limit: self.query_limit(has_time_filter, jq_filter.is_some()),
             order_desc: !has_time_filter,
             after_id: None,
             before_id: None,
@@ -713,13 +749,7 @@ impl Logs {
             field_filters,
             include_structured: true,
         };
-        let entries = LOG_STORE.query(&opts)?;
-
-        // Apply jq filter if present.
-        let entries = match jq_filter {
-            Some(jq) => jq.filter(entries),
-            None => entries,
-        };
+        let entries = self.query_entries(opts, jq_filter, has_time_filter)?;
 
         // Reverse only when the SQL query returned DESC (no time filter),
         // to produce chronological (oldest-first) output. With a time
@@ -742,6 +772,33 @@ impl Logs {
         let json_entries: Vec<JsonLogEntry> = entries.into_iter().map(Into::into).collect();
 
         print_json(&json_entries)
+    }
+}
+
+/// The smallest window of newest rows [`last_matches`] reads.
+const MIN_MATCH_WINDOW: usize = 1000;
+
+/// The last `n` rows that `filter` keeps, newest first, reading no more of
+/// the history than needed: `fetch(window)` returns the newest `window` rows,
+/// and the window doubles until it holds `n` matches or all the rows.
+///
+/// Each read starts again from the newest row rather than paging on, so the
+/// rows keep exactly the order the query gives them.
+fn last_matches<T>(
+    n: usize,
+    mut fetch: impl FnMut(usize) -> Result<Vec<T>>,
+    filter: impl Fn(Vec<T>) -> Vec<T>,
+) -> Result<Vec<T>> {
+    let mut window = n.max(MIN_MATCH_WINDOW);
+    loop {
+        let rows = fetch(window)?;
+        let exhausted = rows.len() < window;
+        let mut matches = filter(rows);
+        if matches.len() >= n || exhausted {
+            matches.truncate(n);
+            return Ok(matches);
+        }
+        window = window.saturating_mul(2);
     }
 }
 
@@ -1443,4 +1500,53 @@ fn strip_pty_controls(s: &str) -> String {
     };
     parser.advance(&mut stripper, s.as_bytes());
     stripper.result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Newest first, as the query returns them: row `i` is the `i`-th newest.
+    fn fetch_from(rows: &[u32], reads: &mut Vec<usize>) -> impl FnMut(usize) -> Result<Vec<u32>> {
+        move |window| {
+            reads.push(window);
+            Ok(rows.iter().copied().take(window).collect())
+        }
+    }
+
+    #[test]
+    fn last_matches_reads_one_window_when_the_newest_rows_match() {
+        let rows: Vec<u32> = (0..100_000).collect();
+        let mut reads = Vec::new();
+        let found = last_matches(2, fetch_from(&rows, &mut reads), |r| {
+            r.into_iter().filter(|i| i % 10 == 0).collect()
+        })
+        .unwrap();
+        assert_eq!(found, vec![0, 10]);
+        assert_eq!(reads, vec![MIN_MATCH_WINDOW]);
+    }
+
+    #[test]
+    fn last_matches_widens_the_window_until_it_holds_n_matches() {
+        let rows: Vec<u32> = (0..100_000).collect();
+        let mut reads = Vec::new();
+        let found = last_matches(2, fetch_from(&rows, &mut reads), |r| {
+            r.into_iter().filter(|i| *i >= 3000).collect()
+        })
+        .unwrap();
+        assert_eq!(found, vec![3000, 3001]);
+        assert_eq!(reads, vec![1000, 2000, 4000]);
+    }
+
+    #[test]
+    fn last_matches_stops_once_every_row_is_read() {
+        let rows: Vec<u32> = (0..2500).collect();
+        let mut reads = Vec::new();
+        let found = last_matches(5, fetch_from(&rows, &mut reads), |r| {
+            r.into_iter().filter(|i| *i == 2400).collect()
+        })
+        .unwrap();
+        assert_eq!(found, vec![2400]);
+        assert_eq!(reads, vec![1000, 2000, 4000]);
+    }
 }
