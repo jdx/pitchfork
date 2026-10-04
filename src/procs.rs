@@ -43,6 +43,15 @@ pub static PROCS: Lazy<Procs> = Lazy::new(Procs::new);
 /// gone before reporting it stuck. Part of the longest a daemon's stop takes.
 pub const PROCESS_GROUP_SIGKILL_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long a Windows stop waits, after terminating a daemon's job, for the
+/// processes in it to finish exiting and release what they hold. Part of the
+/// longest a daemon's stop takes; nothing waits for it elsewhere.
+pub const JOB_EXIT_WAIT: std::time::Duration = if cfg!(windows) {
+    std::time::Duration::from_secs(5)
+} else {
+    std::time::Duration::ZERO
+};
+
 impl Default for Procs {
     fn default() -> Self {
         Self::new()
@@ -690,18 +699,31 @@ impl Procs {
             // still running after the timeout, is terminated outright with
             // its process tree. The timeout bounds only the graceful part.
             //
-            // Best effort: once the daemon has exited, its tree can no longer
-            // be walked, so a process it started that outlives it is left
-            // running.
+            // The tree is the daemon's job object (see `win_job`), opened now
+            // while the daemon is alive and its job can be found by name.
+            let job = open_process_handle(pid)
+                .ok()
+                .and_then(|process| crate::win_job::DaemonJob::open(pid, process.0));
             if stop_signal == crate::config_types::StopSignal::SIGINT {
                 let stop_timeout =
                     stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
                 if interrupt_and_wait(pid, stop_timeout) {
                     debug!("process {pid} exited after Ctrl+C");
+                    // Whatever it started and left running goes with it.
+                    if job.as_ref().is_some_and(job_outlives_termination) {
+                        return Err(miette::miette!(
+                            "process {pid} exited after Ctrl+C, but processes it started may \
+                             still be running: its job was not terminated and emptied within {}s",
+                            JOB_EXIT_WAIT.as_secs()
+                        ));
+                    }
                     return Ok(true);
                 }
             }
-            // Use taskkill /F /T to kill the entire process tree.
+            // Walk the tree first, while the daemon is still there to walk it
+            // from: the processes an MSYS or Cygwin shell starts are not in
+            // the daemon's job, so terminating the job alone leaves them (and
+            // the ports they hold) behind.
             // sysinfo's process.kill() only kills the main process, leaving
             // child processes (e.g. python3 spawned by sh -c) orphaned and
             // still holding ports. The /T flag kills all descendant processes.
@@ -728,6 +750,9 @@ impl Procs {
                     false
                 }
             };
+            // Then the job, for what the walk cannot reach: a process whose
+            // parent has already exited is still in it.
+            let job_outlived = job.as_ref().is_some_and(job_outlives_termination);
             // Brief sleep to let the OS signal the process handle, giving
             // tokio's child.wait() in the monitor task a chance to detect
             // the exit and fire on_stop/on_exit hooks.
@@ -735,6 +760,15 @@ impl Procs {
             if !taskkill_succeeded && self.is_running(pid) {
                 return Err(miette::miette!(
                     "taskkill failed and process {pid} is still running"
+                ));
+            }
+            // A process still exiting can hold a port the next start needs,
+            // so the stop is not reported as done while one remains.
+            if job_outlived {
+                return Err(miette::miette!(
+                    "processes of daemon {pid} may still be running: its job was not \
+                     terminated and emptied within {}s",
+                    JOB_EXIT_WAIT.as_secs()
                 ));
             }
             Ok(true)
@@ -1116,7 +1150,7 @@ fn process_start_token(pid: u32) -> Option<u64> {
 }
 
 #[cfg(windows)]
-fn process_start_token_from_handle(handle: HANDLE) -> Option<u64> {
+pub(crate) fn process_start_token_from_handle(handle: HANDLE) -> Option<u64> {
     let mut creation = FILETIME {
         dwLowDateTime: 0,
         dwHighDateTime: 0,
@@ -1151,6 +1185,18 @@ fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(ProcessHandle(handle))
+}
+
+/// Terminate `job` and wait for it to empty; true unless it is seen to empty,
+/// so its processes may still be running.
+#[cfg(windows)]
+fn job_outlives_termination(job: &crate::win_job::DaemonJob) -> bool {
+    // A failed termination proves nothing either way: the job may already be
+    // empty, or still hold processes, so its count decides.
+    let terminated = job.terminate();
+    let emptied = job.wait_until_empty(JOB_EXIT_WAIT);
+    debug!("terminated a daemon's job: {terminated}; emptied: {emptied}");
+    !emptied
 }
 
 /// Send Ctrl+C to the console of `pid` and wait up to `timeout` for it to exit.

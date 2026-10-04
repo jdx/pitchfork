@@ -107,6 +107,133 @@ EOF
   assert_failure
 }
 
+# Processes whose command line contains $1 that are still running.
+_windows_count_running() {
+  # The query's own command line names $1 too, so it leaves itself out.
+  powershell -NoProfile -Command "@(Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*$1*' -and \$_.ProcessId -ne \$PID }).Count" | tr -d '\r'
+}
+
+# The daemon exits on Ctrl+C, but a child it started ignores it. The daemon's
+# job object still holds the child once the daemon is gone, so it is stopped
+# with it.
+@test "stop_signal SIGINT stops a child left behind after Ctrl+C on Windows" {
+  [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] || skip "job objects are Windows-only"
+  export PITCHFORK_IPC_REQUEST_TIMEOUT=30s
+  printf '@echo off\r\n:loop\r\nping -n 2 127.0.0.1 >nul\r\ngoto loop\r\n' >"$TEST_TEMP_DIR/loop.cmd"
+  local script loop pid_file
+  script="$(cygpath -w "$TEST_TEMP_DIR/with_child.ps1")"
+  loop="$(cygpath -w "$TEST_TEMP_DIR/loop.cmd")"
+  pid_file="$(cygpath -w "$TEST_TEMP_DIR/child.pid")"
+  cat >"$TEST_TEMP_DIR/with_child.ps1" <<'PS1'
+param([string]$Loop, [string]$PidFile)
+$child = Start-Process cmd -NoNewWindow -PassThru -ArgumentList '/c', $Loop
+Set-Content -Path $PidFile -Value $child.Id
+Write-Output 'parent ready'
+while ($true) { Start-Sleep -Milliseconds 200 }
+PS1
+
+  create_pitchfork_toml <<EOF
+[daemons.leaves_child]
+run = ["powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", '$script', "-Loop", '$loop', "-PidFile", '$pid_file']
+stop_signal = { signal = "SIGINT", timeout = "5s" }
+ready_output = "parent ready"
+EOF
+
+  run pitchfork start leaves_child
+  assert_success
+  wait_for_file "$TEST_TEMP_DIR/child.pid"
+  local child
+  child=$(tr -d '\r\n' <"$TEST_TEMP_DIR/child.pid")
+  run _windows_pid_running "$child"
+  assert_success
+
+  run pitchfork stop leaves_child
+  assert_success
+  run _windows_pid_running "$child"
+  assert_failure
+}
+
+# A child that ignores Ctrl+C keeps starting processes while the daemon
+# stops. However late one starts, it is in the daemon's job and is stopped.
+@test "stop_signal SIGINT stops processes started while the daemon stops on Windows" {
+  [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] || skip "job objects are Windows-only"
+  export PITCHFORK_IPC_REQUEST_TIMEOUT=30s
+  local marker="pf-job-spawn-$$-$RANDOM"
+  cat >"$TEST_TEMP_DIR/spawner.ps1" <<PS1
+Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(System.IntPtr h, bool add);'
+[W.K]::SetConsoleCtrlHandler([System.IntPtr]::Zero, \$true) | Out-Null
+while (\$true) { Start-Process powershell -NoNewWindow -ArgumentList '-NoProfile','-Command','Start-Sleep 60 # $marker' | Out-Null; Start-Sleep -Milliseconds 100 }
+PS1
+  cat >"$TEST_TEMP_DIR/parent.ps1" <<'PS1'
+param([string]$Spawner)
+Start-Process powershell -NoNewWindow -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$Spawner | Out-Null
+Write-Output 'parent ready'
+while ($true) { Start-Sleep -Milliseconds 200 }
+PS1
+
+  create_pitchfork_toml <<EOF
+[daemons.keeps_spawning]
+run = ["powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", '$(cygpath -w "$TEST_TEMP_DIR/parent.ps1")', "-Spawner", '$(cygpath -w "$TEST_TEMP_DIR/spawner.ps1")']
+stop_signal = { signal = "SIGINT", timeout = "5s" }
+ready_output = "parent ready"
+EOF
+
+  run pitchfork start keeps_spawning
+  assert_success
+  # The spawner starts after the parent is ready, so wait for its first child.
+  local count=0
+  for _ in $(seq 1 30); do
+    count=$(_windows_count_running "$marker")
+    [[ "$count" -gt 0 ]] && break
+    sleep 1
+  done
+  [[ "$count" -gt 0 ]]
+
+  run pitchfork stop keeps_spawning
+  assert_success
+  # Terminating the job does not wait for its processes to finish exiting.
+  # Each would otherwise run for 60s, so this still tells a stopped job apart.
+  for _ in $(seq 1 20); do
+    count=$(_windows_count_running "$marker")
+    [[ "$count" == 0 ]] && break
+    sleep 0.5
+  done
+  assert_equal "$count" "0"
+}
+
+# The default stop terminates the daemon's tree outright. A grandchild whose
+# parent has already exited is out of taskkill /T's reach from the daemon, but
+# still in its job.
+@test "stop terminates a process whose parent has exited on Windows" {
+  [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]] || skip "job objects are Windows-only"
+  export PITCHFORK_IPC_REQUEST_TIMEOUT=30s
+  # An unusual ping timeout marks this test's ping among any others.
+  local marker="-w $((20000 + RANDOM))"
+  cat >"$TEST_TEMP_DIR/orphaner.ps1" <<PS1
+# cmd starts ping and exits at once, leaving ping without a parent.
+& cmd /c start /b ping -n 60 $marker 127.0.0.1
+Write-Output 'parent ready'
+while (\$true) { Start-Sleep -Milliseconds 200 }
+PS1
+
+  create_pitchfork_toml <<EOF2
+[daemons.orphaner]
+run = ["powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", '$(cygpath -w "$TEST_TEMP_DIR/orphaner.ps1")']
+ready_output = "parent ready"
+EOF2
+
+  run pitchfork start orphaner
+  assert_success
+  run _windows_count_running "$marker 127.0.0.1"
+  assert_output "1"
+
+  run pitchfork stop orphaner
+  assert_success
+  sleep 1
+  run _windows_count_running "$marker 127.0.0.1"
+  assert_output "0"
+}
+
 @test "settings.general.mise loads the project mise environment" {
   command -v mise >/dev/null 2>&1 || skip "mise not installed"
   export PITCHFORK_MISE_BIN

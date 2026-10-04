@@ -901,8 +901,9 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 - On Windows, which has no signals, `SIGINT` is sent as Ctrl+C to the daemon's console. Any other signal terminates the daemon and its process tree immediately, as before. For `SIGINT`:
   - A daemon still running after the timeout is terminated with its process tree. A program that does not handle Ctrl+C, such as a script run by Git Bash, waits out the timeout and is then terminated
   - The timeout bounds only the wait for Ctrl+C to take effect. The forced termination that follows it takes extra time
-  - Stopping is best effort: when the daemon exits on Ctrl+C, a process it started that ignores Ctrl+C and outlives it keeps running
+  - When the daemon exits on Ctrl+C, the processes it started that are still running are terminated
   - When the supervisor runs in the foreground (`pitchfork supervisor run`) and shares its console with the daemon, no Ctrl+C is sent, because it would also reach the supervisor and its other daemons. The daemon is terminated with its process tree immediately instead
+- On Windows, a daemon's process tree is its [job object](https://learn.microsoft.com/windows/win32/procthread/job-objects): every process the daemon starts joins it, even one whose parent has exited, and stopping the daemon terminates them all. A process outside the job, such as one started with `CREATE_BREAKAWAY_FROM_JOB` or by an MSYS or Cygwin shell (such as Git Bash's `sh`), is still stopped when the daemon is terminated, through its process tree, but not once the daemon has exited on Ctrl+C. A daemon started by a pitchfork version without job objects, or one that could not be put in a job (pitchfork logs a warning when it starts), only has its tree walked, which misses processes whose parent has exited
 
 ### `pty`
 

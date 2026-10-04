@@ -1234,6 +1234,10 @@ impl Supervisor {
             None => cmd.args(&args),
         };
         cmd.current_dir(&opts.dir).hide_console_window();
+        // Suspended until it is in a job of its own, so its whole process
+        // tree can be stopped; see `win_job`.
+        #[cfg(windows)]
+        crate::win_job::start_suspended(&mut cmd);
 
         #[cfg(unix)]
         if pty_pair.is_none() {
@@ -1300,6 +1304,18 @@ impl Supervisor {
         // consistently fails to spawn would otherwise accumulate sinks.
         // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
+        #[cfg(windows)]
+        if let (Some(pid), Some(process)) = (child.id(), child.raw_handle())
+            && let Err(e) = crate::win_job::contain_and_resume(process as _, pid)
+        {
+            // A daemon left suspended never runs, yet its PID exists: reported
+            // as started, a delay-only ready check would even call it ready.
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(miette::miette!(
+                "failed to resume daemon {id} (pid {pid}) after starting it suspended: {e}"
+            ));
+        }
         let spawned_pid = child.id();
         // Register the daemon as monitored BEFORE persisting the Running
         // state. The orphan reconciler treats any running, unmonitored PID
@@ -2580,6 +2596,26 @@ impl Supervisor {
                                 error: format!(
                                     "process group of {pid} still alive after kill attempt: {e}"
                                 ),
+                            });
+                        }
+                        // On Windows the daemon can be gone while processes of
+                        // its job remain (see `procs`), which the PID check above
+                        // cannot see. The daemon is recorded as stopped, since
+                        // it is, but the stop is reported as failed.
+                        #[cfg(windows)]
+                        {
+                            self.upsert_daemon(
+                                UpsertDaemonOpts::builder(id.clone())
+                                    .set(|o| {
+                                        o.pid = None;
+                                        o.status = DaemonStatus::Stopped;
+                                        o.last_exit_success = Some(true);
+                                    })
+                                    .build(),
+                            )
+                            .await?;
+                            return Ok(IpcResponse::DaemonStopFailed {
+                                error: format!("{e}"),
                             });
                         }
                     }

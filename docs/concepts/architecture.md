@@ -76,8 +76,9 @@ On Unix, stopping a daemon sends its configured signal to the process group
 to `supervisor.stop_timeout` (`5s`), then escalates to `SIGKILL` if necessary.
 On Windows, which has no signals, a daemon whose `stop_signal` is `SIGINT` is
 sent Ctrl+C and given the same timeout; every other daemon, and one still
-running after the timeout, is terminated with its process tree. This is best
-effort, with exceptions listed under
+running after the timeout, is terminated with its process tree. Each daemon
+runs in a job object of its own, which holds every process it starts, so the
+tree is stopped whole; the exceptions are listed under
 [`stop_signal`](/reference/configuration#stop-signal).
 Batch stops use reverse dependency order.
 
