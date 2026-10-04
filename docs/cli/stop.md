@@ -19,6 +19,12 @@ processes time to clean up resources.
 When using --all/--local/--global, daemons are stopped in reverse dependency order:
 dependents are stopped before the daemons they depend on.
 
+If the supervisor is not running, there is nothing to stop: the command warns
+and exits 0, so cleanup scripts can call it unconditionally. It does not start
+the supervisor. If a supervisor that crashed left daemon processes behind, it
+fails instead, naming them: start the supervisor, which takes over or cleans
+up what a crashed supervisor left, and stop them again.
+
 Examples:
 
     pitchfork stop api           Stop a single daemon
