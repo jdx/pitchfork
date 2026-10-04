@@ -99,6 +99,9 @@ impl Wait {
         let supervisor_live = supervisor_is_live(sf);
         let mut watched_ids: Vec<DaemonId> = Vec::new();
         let mut polled: Vec<Watched> = Vec::new();
+        // Daemons whose wait ended because they were restarted
+        // (`--exit-on-restart`): their run ended with a clean stop.
+        let mut restarted: Vec<DaemonId> = Vec::new();
         let exit_on_restart = self.exit_on_restart;
         for id in &ids {
             match sf.daemons.get(id) {
@@ -113,10 +116,14 @@ impl Wait {
                     watched_ids.push(id.clone());
                     polled.push(Watched::new(id.clone(), daemon.pid, exit_on_restart));
                 }
-                Some(_) => {
+                Some(daemon) => {
                     // Already terminal: evaluate immediately, its exit
                     // code still counts toward the result.
                     watched_ids.push(id.clone());
+                    if daemon.status.is_restarting() {
+                        // Already being restarted, with --exit-on-restart.
+                        restarted.push(id.clone());
+                    }
                 }
                 None => {
                     warn!("{id} is not running");
@@ -160,9 +167,6 @@ impl Wait {
             None
         };
 
-        // Daemons whose wait ended because they were restarted
-        // (`--exit-on-restart`): their run ended with a clean stop.
-        let mut restarted: Vec<DaemonId> = Vec::new();
         // Only live daemons are polled; when every target was already
         // finished (or gone), skip straight to the evaluation below.
         if !polled.is_empty() {
@@ -329,9 +333,6 @@ fn status_exit_code(status: &DaemonStatus) -> i32 {
     match status {
         DaemonStatus::Stopped => 0,
         DaemonStatus::Completed => 0,
-        // Only final with --exit-on-restart, where a restart ends the wait
-        // the way a stop used to.
-        DaemonStatus::Restarting => 0,
         DaemonStatus::Errored(code) if *code != -1 => *code,
         // -1 means the exit code is unknown.
         DaemonStatus::Errored(_) => 1,
@@ -615,7 +616,9 @@ mod tests {
         assert!(!watched.still_running(Some(&sf), true));
         assert!(watched.restarted);
         assert!(is_terminal_status(&DaemonStatus::Restarting, true));
-        assert_eq!(status_exit_code(&DaemonStatus::Restarting), 0);
+        // A restart that never finished is no clean stop: only a wait that
+        // ended on a restart on purpose reports one.
+        assert_eq!(status_exit_code(&DaemonStatus::Restarting), 1);
     }
 
     #[test]

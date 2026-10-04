@@ -48,7 +48,7 @@ const isActing = () => acting.value.has(daemonKey.value)
         <svg class="act-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Start
       </button>
-      <button v-else-if="proxy.status === 'running' || proxy.status === 'waiting'" class="act-btn act-stop" title="Stop daemon" :disabled="isActing()" @click.stop="onStop">
+      <button v-else-if="proxy.status === 'running' || proxy.status === 'waiting' || proxy.status === 'restarting'" class="act-btn act-stop" title="Stop daemon" :disabled="isActing()" @click.stop="onStop">
         <svg class="act-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
         Stop
       </button>

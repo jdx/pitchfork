@@ -1581,6 +1581,10 @@ impl Supervisor {
         // `stopped` throughout, so `pitchfork wait` follows it to the new
         // process instead of reporting the run as over.
         let _ = self.stop_for_restart(id).await;
+        // Taken once this restart's own stop is recorded: a stop that lands
+        // from here until the replacement is started moves it on, and the
+        // start below, which checks it under the daemon's lock, stands down.
+        let approved_at = self.stop_epoch(id);
 
         // Small delay to allow the process to fully stop
         time::sleep(settings().supervisor_restart_delay()).await;
@@ -1602,9 +1606,14 @@ impl Supervisor {
         run_opts.retry_count = 0;
         run_opts.wait_ready = false; // Don't block on file-triggered restarts
 
-        match self.run(run_opts).await {
+        match self.run_retry(run_opts, approved_at).await {
             Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
                 info!("Successfully restarted daemon {id} after file change");
+            }
+            Ok(IpcResponse::DaemonNotRunning) => {
+                debug!(
+                    "Daemon {id} was stopped or disabled while restarting; not starting it again"
+                );
             }
             Ok(other) => {
                 warn!("Unexpected response when restarting daemon {id}: {other:?}");
@@ -1613,8 +1622,7 @@ impl Supervisor {
                 error!("Failed to restart daemon {id}: {e}");
             }
         }
-        // `run` settles a restart that did not start a process, since this
-        // is a forced start; settled here too in case it returned before.
+        // A restart that did not start a process is not left restarting.
         self.settle_restarting(id).await;
 
         Ok(())

@@ -641,9 +641,32 @@ impl IpcClient {
             .collect())
     }
 
+    /// Get IDs of the daemons `stop --all` acts on: the running ones, plus
+    /// any being restarted, which has no process between the restart's stop
+    /// and its start but would come back if left out.
+    pub async fn get_stoppable_daemons(&self) -> Result<Vec<DaemonId>> {
+        let mut ids = self.get_running_daemons().await?;
+        for (id, d) in &crate::state_file::StateFile::get().daemons {
+            if d.status.is_restarting() && !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        Ok(ids)
+    }
+
     /// Get IDs of currently running daemons that are configured
     /// for stop / restart with --local or --global
     pub async fn get_running_configured_daemons(&self, global: bool) -> Result<Vec<DaemonId>> {
+        Self::only_configured(self.get_running_daemons().await?, global)
+    }
+
+    /// Like [`Self::get_stoppable_daemons`], limited to the daemons
+    /// configured for `stop --local` / `--global`.
+    pub async fn get_stoppable_configured_daemons(&self, global: bool) -> Result<Vec<DaemonId>> {
+        Self::only_configured(self.get_stoppable_daemons().await?, global)
+    }
+
+    fn only_configured(ids: Vec<DaemonId>, global: bool) -> Result<Vec<DaemonId>> {
         let configured: HashSet<DaemonId> = if global {
             Self::get_global_configured_daemons()?
         } else {
@@ -652,9 +675,7 @@ impl IpcClient {
         .into_iter()
         .collect();
 
-        Ok(self
-            .get_running_daemons()
-            .await?
+        Ok(ids
             .into_iter()
             .filter(|id| configured.contains(id))
             .collect())
