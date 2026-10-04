@@ -494,11 +494,16 @@ impl Supervisor {
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = opts.id.clone();
         let force = opts.force;
+        let epoch_before = self.stop_epoch(&id);
         let result = self.run_inner(opts, None).await;
-        if force {
-            // A forced start records the daemon it replaces as restarting
-            // (and a file-watch restart does so before calling here). If no
-            // new process took the record over, the restart did not happen.
+        // A forced start records the daemon it replaces as restarting. If no
+        // new process took the record over, the restart did not happen.
+        // Settle only the mark this start's own stop left: exactly one stop
+        // ran meanwhile. With none, there was no running instance to replace
+        // (a record already restarting belongs to a file-watch restart, which
+        // settles it itself), and with more, a later stop, or another
+        // restart, has the last word.
+        if force && self.stop_epoch(&id) == epoch_before + 1 {
             self.settle_restarting(&id).await;
         }
         result
