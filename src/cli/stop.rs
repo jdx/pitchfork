@@ -260,7 +260,9 @@ fn cancel_pending_retries(sf: &mut StateFile, targets: Option<&[DaemonId]>) -> V
         .filter(|d| d.id != DaemonId::pitchfork())
         .filter(|d| targets.is_none_or(|t| t.contains(&d.id)))
         .filter(|d| {
-            d.status.is_running()
+            // Rechecked rather than trusting the orphan scan: a record whose
+            // PID is alive at all is left for the supervisor to sort out.
+            (d.status.is_running() && d.pid.is_none_or(|pid| !PROCS.is_live(pid)))
                 || (d.status.is_errored() && d.pid.is_none() && d.retry_count < d.retry.count())
         })
         .map(|d| d.id.clone())
@@ -367,7 +369,14 @@ mod tests {
             Daemon {
                 id: DaemonId::new("proj", "crashed"),
                 status: DaemonStatus::Running,
-                pid: Some(4242),
+                // Above any PID the kernel hands out, so never alive.
+                pid: Some(2_000_000_000),
+                ..Default::default()
+            },
+            Daemon {
+                id: DaemonId::new("proj", "alive"),
+                status: DaemonStatus::Running,
+                pid: Some(std::process::id()),
                 ..Default::default()
             },
         ] {
@@ -377,16 +386,23 @@ mod tests {
         let exhausted = DaemonId::new("proj", "exhausted");
         let other = DaemonId::new("proj", "other");
         let crashed = DaemonId::new("proj", "crashed");
+        let alive = DaemonId::new("proj", "alive");
 
         let mut canceled = cancel_pending_retries(
             &mut sf,
-            Some(&[target.clone(), exhausted.clone(), crashed.clone()]),
+            Some(&[
+                target.clone(),
+                exhausted.clone(),
+                crashed.clone(),
+                alive.clone(),
+            ]),
         );
         canceled.sort_by_key(|id| id.to_string());
 
         assert_eq!(canceled, vec![crashed.clone(), target.clone()]);
         assert!(matches!(sf.daemons[&crashed].status, DaemonStatus::Stopped));
         assert_eq!(sf.daemons[&crashed].pid, None);
+        assert!(matches!(sf.daemons[&alive].status, DaemonStatus::Running));
         assert!(matches!(sf.daemons[&target].status, DaemonStatus::Stopped));
         assert!(sf.daemons[&exhausted].status.is_errored());
         assert!(sf.daemons[&other].status.is_errored());
