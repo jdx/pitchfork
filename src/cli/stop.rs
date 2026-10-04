@@ -89,8 +89,8 @@ impl Stop {
             super::interactive::require_interactive_terminal()?;
         }
 
-        if !supervisor_running().await? {
-            return self.stop_without_supervisor();
+        if !supervisor_running().await? && self.stop_without_supervisor()? {
+            return Ok(());
         }
 
         let ipc = Arc::new(IpcClient::connect(false).await?);
@@ -123,10 +123,10 @@ impl Stop {
     /// crashed supervisor left processes behind. Those cannot be stopped
     /// gracefully from here (no hooks, no dependency order), so they are
     /// reported rather than silently left running or killed.
-    fn stop_without_supervisor(&self) -> Result<()> {
-        // A state file that cannot be read must not pass for one with no
-        // daemons in it: the orphan check below could not be done.
-        let sf = read_state()?;
+    ///
+    /// Returns false, having changed nothing, if a supervisor started in the
+    /// meantime, so the caller stops through it instead.
+    fn stop_without_supervisor(&self) -> Result<bool> {
         let targets: Option<Vec<DaemonId>> = if self.all || self.no_target() {
             None
         } else if self.global {
@@ -139,20 +139,42 @@ impl Stop {
                 self.group.as_deref(),
             )?)
         };
-        let orphans = orphaned_daemons(&sf, targets.as_deref());
-        if orphans.is_empty() {
-            // A failed daemon with retries left would be started again by the
-            // next supervisor; the user asked for it to stay stopped.
-            let canceled = StateFile::update_in_file(&env::PITCHFORK_STATE_FILE, |sf| {
-                let canceled = cancel_pending_retries(sf, targets.as_deref());
-                (!canceled.is_empty(), canceled)
-            })?;
-            for id in canceled {
-                info!("Marked {id} stopped so a supervisor does not restart it");
+        // The check and the update happen under one state file lock, so a
+        // supervisor starting concurrently cannot record a daemon in between
+        // that this then marks stopped. A state file that cannot be read must
+        // not pass for one with no daemons in it: the orphan check could not
+        // be done.
+        let path = &*env::PITCHFORK_STATE_FILE;
+        let outcome = StateFile::update_in_file(path, |sf| {
+            if sf
+                .daemons
+                .get(&DaemonId::pitchfork())
+                .is_some_and(crate::supervisor::supervisor_record_is_live)
+            {
+                return (false, Unsupervised::SupervisorStarted);
             }
-            warn!("Supervisor is not running, nothing to stop");
-            return Ok(());
-        }
+            let orphans = orphaned_daemons(sf, targets.as_deref());
+            if !orphans.is_empty() {
+                return (false, Unsupervised::Orphans(orphans));
+            }
+            // A failed daemon with retries left, or one that died with a
+            // crashed supervisor, would be started again by the next
+            // supervisor; the user asked for it to stay stopped.
+            let canceled = cancel_pending_retries(sf, targets.as_deref());
+            (!canceled.is_empty(), Unsupervised::Canceled(canceled))
+        })
+        .wrap_err_with(|| format!("failed to read state file {}", path.display()))?;
+        let orphans = match outcome {
+            Unsupervised::SupervisorStarted => return Ok(false),
+            Unsupervised::Orphans(orphans) => orphans,
+            Unsupervised::Canceled(canceled) => {
+                for id in canceled {
+                    info!("Marked {id} stopped so a supervisor does not restart it");
+                }
+                warn!("Supervisor is not running, nothing to stop");
+                return Ok(true);
+            }
+        };
         let list = orphans
             .iter()
             .map(|o| format!("{} (pid {})", o.id, o.pid))
@@ -250,6 +272,16 @@ fn cancel_pending_retries(sf: &mut StateFile, targets: Option<&[DaemonId]>) -> V
         }
     }
     ids
+}
+
+/// What `stop` found in the state file when no supervisor was listening.
+enum Unsupervised {
+    /// A supervisor has recorded itself since, so stopping goes through it.
+    SupervisorStarted,
+    /// Targeted daemons a crashed supervisor left running.
+    Orphans(Vec<Orphan>),
+    /// Nothing targeted is running; these records were marked stopped.
+    Canceled(Vec<DaemonId>),
 }
 
 /// A daemon left running by a supervisor that is no longer running.
