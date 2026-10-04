@@ -26,7 +26,7 @@ mod watchers;
 
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::deps::compute_reverse_stop_order;
+use crate::deps::reverse_stop_order;
 use crate::ipc::server::{IpcServer, IpcServerHandle, StartupLock};
 
 use crate::procs::PROCS;
@@ -1783,9 +1783,9 @@ impl Supervisor {
             .map(|d| d.id.clone())
             .collect();
 
-        // Stop daemons in reverse dependency order.
-        // If dependency resolution fails (e.g. config changed), fall back to
-        // stopping in arbitrary order so we still shut down cleanly.
+        // Stop daemons in reverse dependency order, from the dependencies
+        // they were started with: the supervisor's own directory need not
+        // see their projects' config.
         // Daemons within the same level are stopped concurrently.
         //
         // Each stop waits for the daemon's whole process group (bounded by its
@@ -1793,7 +1793,10 @@ impl Supervisor {
         // sum of the slowest stop per level. If an external manager (docker,
         // systemd) kills us before this completes, cleanup_orphaned_daemons()
         // recovers the leftover processes and stale state on the next start.
-        let stop_levels = compute_reverse_stop_order(&active_ids);
+        let stop_levels = {
+            let state = self.state_file.lock().await;
+            reverse_stop_order(&active_ids, &state.daemons)
+        };
         for level in &stop_levels {
             let mut tasks = Vec::new();
             for id in level {
