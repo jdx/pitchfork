@@ -2598,6 +2598,26 @@ impl Supervisor {
                                 ),
                             });
                         }
+                        // On Windows the daemon can be gone while processes of
+                        // its job remain (see `procs`), which the PID check above
+                        // cannot see. The daemon is recorded as stopped, since
+                        // it is, but the stop is reported as failed.
+                        #[cfg(windows)]
+                        {
+                            self.upsert_daemon(
+                                UpsertDaemonOpts::builder(id.clone())
+                                    .set(|o| {
+                                        o.pid = None;
+                                        o.status = DaemonStatus::Stopped;
+                                        o.last_exit_success = Some(true);
+                                    })
+                                    .build(),
+                            )
+                            .await?;
+                            return Ok(IpcResponse::DaemonStopFailed {
+                                error: format!("{e}"),
+                            });
+                        }
                     }
 
                     // Process successfully stopped

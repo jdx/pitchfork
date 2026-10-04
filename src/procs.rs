@@ -712,8 +712,8 @@ impl Procs {
                     // Whatever it started and left running goes with it.
                     if job.as_ref().is_some_and(job_outlives_termination) {
                         return Err(miette::miette!(
-                            "process {pid} exited after Ctrl+C, but processes it started are still \
-                             running {}s after their job was terminated",
+                            "process {pid} exited after Ctrl+C, but processes it started may \
+                             still be running: its job was not terminated and emptied within {}s",
                             JOB_EXIT_WAIT.as_secs()
                         ));
                     }
@@ -766,8 +766,8 @@ impl Procs {
             // so the stop is not reported as done while one remains.
             if job_outlived {
                 return Err(miette::miette!(
-                    "processes of daemon {pid} are still running {}s after their job was \
-                     terminated",
+                    "processes of daemon {pid} may still be running: its job was not \
+                     terminated and emptied within {}s",
                     JOB_EXIT_WAIT.as_secs()
                 ));
             }
@@ -1187,16 +1187,15 @@ fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
     Ok(ProcessHandle(handle))
 }
 
-/// Terminate `job` and wait for it to empty; true if a process is still in
-/// it afterwards, or its count could not be read.
+/// Terminate `job` and wait for it to empty; true unless it is seen to empty,
+/// so its processes may still be running.
 #[cfg(windows)]
 fn job_outlives_termination(job: &crate::win_job::DaemonJob) -> bool {
-    if !job.terminate() {
-        // Nothing more can be done through the job; the tree walk stands.
-        return false;
-    }
+    // A failed termination proves nothing either way: the job may already be
+    // empty, or still hold processes, so its count decides.
+    let terminated = job.terminate();
     let emptied = job.wait_until_empty(JOB_EXIT_WAIT);
-    debug!("terminated a daemon's job; emptied: {emptied}");
+    debug!("terminated a daemon's job: {terminated}; emptied: {emptied}");
     !emptied
 }
 
