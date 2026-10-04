@@ -269,6 +269,10 @@ _wait_for_new_pid() {
 }
 
 @test "wait follows a daemon through a file-watch restart" {
+  # Hold the gap between the restart's stop and its start open long enough
+  # for the state file to show it.
+  export PITCHFORK_RESTART_DELAY=3s
+  pitchfork supervisor start --force >/dev/null 2>&1
   create_pitchfork_toml <<EOF
 [daemons.wait_watch]
 run = "sleep 60"
@@ -285,7 +289,8 @@ EOF
   original_pid="$(get_daemon_pid wait_watch)"
   [[ -n "$original_pid" ]]
 
-  pitchfork wait wait_watch >/dev/null 2>&1 &
+  # Record when the wait ends; a background job's pid alone cannot tell.
+  { pitchfork wait wait_watch >/dev/null 2>&1; echo $? >"wait_watch.done"; } &
   local wait_pid=$!
   sleep 1
 
@@ -296,14 +301,12 @@ EOF
 
   # The restart did not end the wait: it follows the new process.
   sleep 1
-  kill -0 "$wait_pid"
+  [[ ! -e wait_watch.done ]]
 
   pitchfork stop wait_watch
-  set +e
   wait "$wait_pid"
-  local wait_status=$?
-  set -e
-  [[ $wait_status -eq 0 ]]
+  run cat wait_watch.done
+  assert_output "0"
 }
 
 @test "wait follows a daemon through pitchfork restart" {
@@ -320,7 +323,8 @@ EOF
   original_pid="$(get_daemon_pid wait_restart)"
   [[ -n "$original_pid" ]]
 
-  pitchfork wait wait_restart >/dev/null 2>&1 &
+  # Record when the wait ends; a background job's pid alone cannot tell.
+  { pitchfork wait wait_restart >/dev/null 2>&1; echo $? >"wait_restart.done"; } &
   local wait_pid=$!
   sleep 1
 
@@ -331,17 +335,19 @@ EOF
   [[ -n "$new_pid" ]]
 
   sleep 1
-  kill -0 "$wait_pid"
+  [[ ! -e wait_restart.done ]]
 
   pitchfork stop wait_restart
-  set +e
   wait "$wait_pid"
-  local wait_status=$?
-  set -e
-  [[ $wait_status -eq 0 ]]
+  run cat wait_restart.done
+  assert_output "0"
 }
 
 @test "wait --exit-on-restart returns when a watched file restarts the daemon" {
+  # Hold the gap between the restart's stop and its start open long enough
+  # for the state file to show it.
+  export PITCHFORK_RESTART_DELAY=3s
+  pitchfork supervisor start --force >/dev/null 2>&1
   create_pitchfork_toml <<EOF
 [daemons.wait_watch_exit]
 run = "sleep 60"
