@@ -243,7 +243,7 @@ fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<Orphan>
         .filter(|d| targets.is_none_or(|t| t.contains(&d.id)))
         .filter_map(|d| {
             let pid = d.pid?;
-            let leader_alive = PROCS.is_running(pid);
+            let leader_alive = PROCS.is_live(pid);
             let alive = if leader_alive {
                 match (d.start_time, PROCS.start_time(pid)) {
                     // The kernel start token is the process's identity, but
@@ -257,8 +257,9 @@ fn orphaned_daemons(sf: &StateFile, targets: Option<&[DaemonId]>) -> Vec<Orphan>
                 // Daemons lead their own process group (PGID == PID), and a
                 // PID is not handed out while a group with that ID exists, so
                 // members still in the group are the daemon's even after
-                // the leader (e.g. a wrapping shell) has exited.
-                same_boot(d.boot_time) && PROCS.process_group_alive(pid)
+                // the leader (e.g. a wrapping shell) has exited. Members that
+                // have exited but were never reaped are not running.
+                same_boot(d.boot_time) && PROCS.process_group_has_live_member(pid)
             };
             alive.then(|| Orphan {
                 id: d.id.clone(),

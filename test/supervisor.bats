@@ -1462,6 +1462,8 @@ EOF2
   run pitchfork stop group_left
   assert_failure
   assert_output --partial "group_left (pid $daemon_pid)"
+  # The supervisor would not take over a group without its leader.
+  assert_output --partial "kill -TERM -$daemon_pid"
 
   kill -9 "-$daemon_pid" 2>/dev/null || true
 }
