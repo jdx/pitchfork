@@ -1623,7 +1623,7 @@ impl Supervisor {
             }
         }
         // A restart that did not start a process is not left restarting.
-        self.settle_restarting(id).await;
+        self.settle_restarting(id, approved_at).await;
 
         Ok(())
     }

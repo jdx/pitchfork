@@ -493,18 +493,12 @@ impl Supervisor {
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = opts.id.clone();
-        let force = opts.force;
-        let epoch_before = self.stop_epoch(&id);
-        let result = self.run_inner(opts, None).await;
+        let mut restart_mark = None;
+        let result = self.run_inner(opts, None, &mut restart_mark).await;
         // A forced start records the daemon it replaces as restarting. If no
         // new process took the record over, the restart did not happen.
-        // Settle only the mark this start's own stop left: exactly one stop
-        // ran meanwhile. With none, there was no running instance to replace
-        // (a record already restarting belongs to a file-watch restart, which
-        // settles it itself), and with more, a later stop, or another
-        // restart, has the last word.
-        if force && self.stop_epoch(&id) == epoch_before + 1 {
-            self.settle_restarting(&id).await;
+        if let Some(mark) = restart_mark {
+            self.settle_restarting(&id, mark).await;
         }
         result
     }
@@ -512,9 +506,17 @@ impl Supervisor {
     /// Record a daemon left `restarting` with no process as `stopped`: its
     /// restart did not start a new process, and leaving the mark in place
     /// would have `pitchfork wait` follow a restart that is never coming.
-    /// A record that has moved on (a new process, another status) is left
-    /// alone.
-    pub(crate) async fn settle_restarting(&self, id: &DaemonId) {
+    ///
+    /// `mark` is the daemon's stop epoch right after the restart's own stop.
+    /// Any stop since (a `pitchfork stop`, or another restart's stop that
+    /// left its own mark) has the last word, so the record is left alone, as
+    /// is one that has moved on (a new process, another status).
+    pub(crate) async fn settle_restarting(&self, id: &DaemonId, mark: u64) {
+        let lock = self.stop_lock(id).await;
+        let _guard = lock.lock().await;
+        if self.stop_epoch(id) != mark {
+            return;
+        }
         let mut state_file = self.state_file.lock().await;
         if state_file
             .daemons
@@ -534,10 +536,18 @@ impl Supervisor {
         opts: RunOptions,
         approved_at: u64,
     ) -> Result<IpcResponse> {
-        self.run_inner(opts, Some(approved_at)).await
+        self.run_inner(opts, Some(approved_at), &mut None).await
     }
 
-    async fn run_inner(&self, opts: RunOptions, approved_at: Option<u64>) -> Result<IpcResponse> {
+    /// `restart_mark` is set to the stop epoch a forced start's own stop of
+    /// the running instance left, if it made one (see
+    /// [`Self::settle_restarting`]).
+    async fn run_inner(
+        &self,
+        opts: RunOptions,
+        approved_at: Option<u64>,
+        restart_mark: &mut Option<u64>,
+    ) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
 
@@ -579,7 +589,10 @@ impl Supervisor {
             info!("daemon {id} was disabled before this start; not starting it");
             return Ok(IpcResponse::DaemonNotRunning);
         }
-        if let Some(response) = self.claim_or_defer(&opts, &mut stop_guard).await? {
+        if let Some(response) = self
+            .claim_or_defer(&opts, &mut stop_guard, restart_mark)
+            .await?
+        {
             return Ok(response);
         }
 
@@ -611,7 +624,10 @@ impl Supervisor {
                 // sleep. Spawning another process here would replace that
                 // attempt's monitor registration and leave its process running
                 // unmonitored.
-                if let Some(response) = self.claim_or_defer(&retry_opts, &mut guard).await? {
+                if let Some(response) = self
+                    .claim_or_defer(&retry_opts, &mut guard, restart_mark)
+                    .await?
+                {
                     return Ok(response);
                 }
                 // The background retry checker may have run this attempt for
@@ -770,6 +786,7 @@ impl Supervisor {
         &self,
         opts: &RunOptions,
         stop_guard: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
+        restart_mark: &mut Option<u64>,
     ) -> Result<Option<IpcResponse>> {
         let id = &opts.id;
         let Some(daemon) = self.get_daemon(id).await else {
@@ -806,6 +823,9 @@ impl Supervisor {
             // recorded as restarting rather than stopped until the new
             // process is up; `run` settles it if the start does not happen.
             self.stop_locked_with(id, true).await?;
+            // Read under the daemon's lock, which this start still holds, so
+            // the epoch is the one this stop left.
+            *restart_mark = Some(self.stop_epoch(id));
             info!("run: stop completed for daemon {id}");
             return Ok(None);
         }
