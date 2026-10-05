@@ -253,3 +253,166 @@ EOF
   wait_for_status wait_kill stopped
   run ! pid_alive "$daemon_pid"
 }
+
+# Wait (bounded) for the daemon's pid to change from $2, echoing the new pid.
+_wait_for_new_pid() {
+  local id="$1" old_pid="$2" current_pid
+  for _ in $(seq 1 30); do
+    current_pid="$(get_daemon_pid "$id")"
+    if [[ -n "$current_pid" && "$current_pid" != "$old_pid" ]]; then
+      echo "$current_pid"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+@test "wait follows a daemon through a file-watch restart" {
+  # Hold the gap between the restart's stop and its start open long enough
+  # for the state file to show it.
+  export PITCHFORK_RESTART_DELAY=3s
+  pitchfork supervisor start --force >/dev/null 2>&1
+  create_pitchfork_toml <<EOF
+[daemons.wait_watch]
+run = "sleep 60"
+watch = ["wait_watch_marker.txt"]
+watch_mode = "poll"
+ready_delay = 1
+EOF
+  echo "initial" > wait_watch_marker.txt
+
+  run pitchfork start wait_watch
+  assert_success
+  wait_for_status wait_watch running
+  local original_pid
+  original_pid="$(get_daemon_pid wait_watch)"
+  [[ -n "$original_pid" ]]
+
+  # Record when the wait ends; a background job's pid alone cannot tell.
+  { pitchfork wait wait_watch >/dev/null 2>&1; echo $? >"wait_watch.done"; } &
+  local wait_pid=$!
+  sleep 1
+
+  echo "modified" > wait_watch_marker.txt
+  local new_pid
+  new_pid="$(_wait_for_new_pid wait_watch "$original_pid")"
+  [[ -n "$new_pid" ]]
+
+  # The restart did not end the wait: it follows the new process.
+  sleep 1
+  [[ ! -e wait_watch.done ]]
+
+  pitchfork stop wait_watch
+  wait "$wait_pid"
+  run cat wait_watch.done
+  assert_output "0"
+}
+
+@test "wait follows a daemon through pitchfork restart" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_restart]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start wait_restart
+  assert_success
+  wait_for_status wait_restart running
+  local original_pid
+  original_pid="$(get_daemon_pid wait_restart)"
+  [[ -n "$original_pid" ]]
+
+  # Record when the wait ends; a background job's pid alone cannot tell.
+  { pitchfork wait wait_restart >/dev/null 2>&1; echo $? >"wait_restart.done"; } &
+  local wait_pid=$!
+  sleep 1
+
+  run pitchfork restart wait_restart
+  assert_success
+  local new_pid
+  new_pid="$(_wait_for_new_pid wait_restart "$original_pid")"
+  [[ -n "$new_pid" ]]
+
+  sleep 1
+  [[ ! -e wait_restart.done ]]
+
+  pitchfork stop wait_restart
+  wait "$wait_pid"
+  run cat wait_restart.done
+  assert_output "0"
+}
+
+@test "wait --exit-on-restart returns when a watched file restarts the daemon" {
+  # Hold the gap between the restart's stop and its start open long enough
+  # for the state file to show it.
+  export PITCHFORK_RESTART_DELAY=3s
+  pitchfork supervisor start --force >/dev/null 2>&1
+  create_pitchfork_toml <<EOF
+[daemons.wait_watch_exit]
+run = "sleep 60"
+watch = ["wait_watch_exit_marker.txt"]
+watch_mode = "poll"
+ready_delay = 1
+EOF
+  echo "initial" > wait_watch_exit_marker.txt
+
+  run pitchfork start wait_watch_exit
+  assert_success
+  wait_for_status wait_watch_exit running
+  local original_pid
+  original_pid="$(get_daemon_pid wait_watch_exit)"
+  [[ -n "$original_pid" ]]
+
+  pitchfork wait --exit-on-restart wait_watch_exit >/dev/null 2>&1 &
+  local wait_pid=$!
+  sleep 1
+
+  echo "modified" > wait_watch_exit_marker.txt
+  local new_pid
+  new_pid="$(_wait_for_new_pid wait_watch_exit "$original_pid")"
+  [[ -n "$new_pid" ]]
+
+  # The wait ended with the restart, cleanly.
+  set +e
+  wait "$wait_pid"
+  local wait_status=$?
+  set -e
+  [[ $wait_status -eq 0 ]]
+
+  pitchfork stop wait_watch_exit
+}
+
+@test "wait --exit-on-restart returns cleanly when pitchfork restart replaces the daemon" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_restart_exit]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start wait_restart_exit
+  assert_success
+  wait_for_status wait_restart_exit running
+
+  { pitchfork wait --exit-on-restart wait_restart_exit >/dev/null 2>&1; echo $? >"wait_restart_exit.done"; } &
+  local wait_pid=$!
+  sleep 1
+
+  # The restart can be over before the wait reads the state again: the wait
+  # still ends, and cleanly, rather than following the new process.
+  run pitchfork restart wait_restart_exit
+  assert_success
+  # Within a few seconds, while the replacement is still running: following
+  # it would only end the wait when its `sleep 60` does.
+  for _ in $(seq 1 50); do
+    [[ -e wait_restart_exit.done ]] && break
+    sleep 0.2
+  done
+  [[ -e wait_restart_exit.done ]]
+  [[ "$(get_daemon_status wait_restart_exit)" == "running" ]]
+  wait "$wait_pid"
+  run cat wait_restart_exit.done
+  assert_output "0"
+
+  pitchfork stop wait_restart_exit
+}

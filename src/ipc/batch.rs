@@ -641,9 +641,60 @@ impl IpcClient {
             .collect())
     }
 
+    /// Get IDs of the daemons `stop --all` acts on: the running ones, plus
+    /// any being restarted, which has no process between the restart's stop
+    /// and its start but would come back if left out.
+    pub async fn get_stoppable_daemons(&self) -> Result<Vec<DaemonId>> {
+        // Every daemon the supervisor knows of: those with a process, and
+        // those the state file records (a restarting one may have none).
+        let mut known: Vec<DaemonId> = self
+            .active_daemons()
+            .await?
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        for id in crate::state_file::StateFile::get().daemons.keys() {
+            if *id != DaemonId::pitchfork() && !known.contains(id) {
+                known.push(id.clone());
+            }
+        }
+        self.stoppable_among(&known).await
+    }
+
+    /// The daemons among `ids` a stop has something to do for: running,
+    /// waiting or being restarted, all judged from one read of the
+    /// supervisor's records so that a restart finishing in between cannot
+    /// slip past both checks. The state file would lag a restart that has
+    /// just begun.
+    async fn stoppable_among(&self, ids: &[DaemonId]) -> Result<Vec<DaemonId>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .daemons(ids)
+            .await?
+            .into_iter()
+            .filter(|d| {
+                (d.pid.is_some() && (d.status.is_running() || d.status.is_waiting()))
+                    || d.status.is_restarting()
+            })
+            .map(|d| d.id)
+            .collect())
+    }
+
     /// Get IDs of currently running daemons that are configured
     /// for stop / restart with --local or --global
     pub async fn get_running_configured_daemons(&self, global: bool) -> Result<Vec<DaemonId>> {
+        Self::only_configured(self.get_running_daemons().await?, global)
+    }
+
+    /// Like [`Self::get_stoppable_daemons`], limited to the daemons
+    /// configured for `stop --local` / `--global`.
+    pub async fn get_stoppable_configured_daemons(&self, global: bool) -> Result<Vec<DaemonId>> {
+        Self::only_configured(self.get_stoppable_daemons().await?, global)
+    }
+
+    fn only_configured(ids: Vec<DaemonId>, global: bool) -> Result<Vec<DaemonId>> {
         let configured: HashSet<DaemonId> = if global {
             Self::get_global_configured_daemons()?
         } else {
@@ -652,9 +703,7 @@ impl IpcClient {
         .into_iter()
         .collect();
 
-        Ok(self
-            .get_running_daemons()
-            .await?
+        Ok(ids
             .into_iter()
             .filter(|id| configured.contains(id))
             .collect())
@@ -1382,17 +1431,14 @@ impl IpcClient {
     /// - Parallel execution within dependency levels
     pub async fn stop_daemons(self: &Arc<Self>, ids: &[DaemonId]) -> Result<StopResult> {
         // Daemons a stop has something to do for.
-        let mut running_daemons: HashSet<DaemonId> = self
-            .active_daemons()
-            .await?
-            .iter()
-            .filter(|d| d.status.is_running() || d.status.is_waiting())
-            .map(|d| d.id.clone())
-            .collect();
+        let mut running_daemons: HashSet<DaemonId> =
+            self.stoppable_among(ids).await?.into_iter().collect();
         // A daemon between retries has no PID, so it is not in the list above,
         // but an attempt may still be started for it — by the start that is
         // waiting on it or by the retry checker. Stopping it has to end those
-        // rather than report that there is nothing running.
+        // rather than report that there is nothing running. (A daemon being
+        // restarted is on its way back too; `stoppable_among` includes it,
+        // and stopping it cancels the restart.)
         running_daemons.extend(
             crate::state_file::StateFile::get()
                 .daemons

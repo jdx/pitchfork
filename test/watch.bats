@@ -428,3 +428,39 @@ EOF
     pitchfork stop ${mode}_watch_test
   done
 }
+
+@test "a stop during a file-watch restart cancels the restart" {
+  # Hold the gap between the restart's stop and its start open.
+  export PITCHFORK_RESTART_DELAY=4s
+  pitchfork supervisor start --force >/dev/null 2>&1
+
+  for how in one all; do
+    create_pitchfork_toml <<EOF
+[daemons.watch_cancel]
+run = "sleep 60"
+watch = ["watch_cancel_marker.txt"]
+watch_mode = "poll"
+ready_delay = 1
+EOF
+    echo "initial" > watch_cancel_marker.txt
+
+    run pitchfork start watch_cancel
+    assert_success
+    wait_for_status watch_cancel running
+
+    echo "changed $how" > watch_cancel_marker.txt
+    wait_for_status watch_cancel restarting
+
+    if [[ "$how" == all ]]; then
+      run pitchfork stop --all
+    else
+      run pitchfork stop watch_cancel
+    fi
+    assert_success
+    wait_for_status watch_cancel stopped
+
+    # The restart does not start the daemon once its delay is over.
+    sleep 6
+    [[ "$(get_daemon_status watch_cancel)" == "stopped" ]]
+  done
+}

@@ -367,7 +367,13 @@ impl Supervisor {
         d.title = None;
         d.start_time = None;
         d.boot_time = None;
-        d.status = status;
+        // A process that exited while its restart was stopping it leaves the
+        // daemon restarting: the restart starts the next process, and
+        // recording it stopped in between would end the run for anything
+        // following it.
+        if !d.status.is_restarting() {
+            d.status = status;
+        }
         d.last_exit_success = last_exit_success;
         d.active_port = None;
         state_file.clear_active_port(id);
@@ -492,7 +498,7 @@ impl Supervisor {
                     // that no longer matches means our process died and the
                     // OS recycled its PID: treat as death, and never touch
                     // the unrelated new process.
-                    let was_stopping = current.status.is_stopping();
+                    let was_stopping = current.status.is_stopping_or_restarting();
                     PROCS.refresh_pids(&[pid]);
                     if !PROCS.is_running(pid) {
                         break PollOutcome::ProcessDied { was_stopping };
@@ -516,7 +522,12 @@ impl Supervisor {
                     // for it to settle so the exit path can fire stop hooks.
                     // (A Stopping record with a *different* PID is a successor
                     // and falls through to TakenOver below.)
-                } else if current.pid.is_none() && current.status.is_stopped() {
+                } else if current.pid.is_none()
+                    && (current.status.is_stopped() || current.status.is_restarting())
+                {
+                    // A restart's stop records `restarting` with no PID once
+                    // the process is gone, the way a plain stop records
+                    // `stopped`.
                     break PollOutcome::StoppedExternally;
                 } else {
                     break PollOutcome::TakenOver;
@@ -566,7 +577,7 @@ impl Supervisor {
             let current = SUPERVISOR.get_daemon(&id).await;
             let owns_pid = current.as_ref().is_some_and(|d| d.pid == Some(pid));
             let finalized_ours = current.as_ref().is_some_and(|d| {
-                d.pid.is_none() && (d.status.is_stopped() || d.status.is_stopping())
+                d.pid.is_none() && (d.status.is_stopped() || d.status.is_stopping_or_restarting())
             });
             if !owns_pid && !finalized_ours {
                 debug!("adopted daemon {id} has a successor; skipping exit handling");
@@ -582,7 +593,7 @@ impl Supervisor {
                 || matches!(outcome, PollOutcome::StoppedExternally)
                 || current
                     .as_ref()
-                    .is_some_and(|d| d.status.is_stopping() || d.status.is_stopped());
+                    .is_some_and(|d| d.status.is_stopping_or_restarting() || d.status.is_stopped());
             let (exit_code, exit_reason) = if intentional {
                 (-1, "stop")
             } else {

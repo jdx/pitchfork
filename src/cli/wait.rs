@@ -32,6 +32,12 @@ log output in real-time. Already-finished daemons are evaluated without
 waiting; their exit codes still count. With no daemon IDs and no
 `--group`, shows an interactive picker of the currently running daemons.
 
+A daemon the supervisor restarts (because a watched file changed, or
+through `pitchfork restart` / `start --force`) shows as `restarting` in
+between, and waiting follows it to the new process instead of returning.
+With `--exit-on-restart`, waiting ends when the daemon is stopped for a
+restart, and the restart counts as a clean stop (exit 0).
+
 With `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C
 on Windows) first stops the waited daemons via the supervisor (graceful
 SIGTERM then SIGKILL, hooks fire, reverse dependency order), then the
@@ -50,6 +56,8 @@ Examples:
     pitchfork wait api worker       Wait for 'api' and 'worker' to stop
     pitchfork wait --group backend  Wait for the whole 'backend' group
     pitchfork wait --kill api       Stop 'api' gracefully when a signal arrives
+    pitchfork wait --exit-on-restart api
+                                    Return when 'api' is restarted
     pitchfork w api                 Alias for 'wait'
     pitchfork wait api && echo done Run command after the daemon stops"
 )]
@@ -62,6 +70,10 @@ pub struct Wait {
     /// Stop the waited daemons when a signal is received while waiting
     #[usage(long)]
     kill: bool,
+    /// Stop waiting when a daemon is restarted instead of following it to
+    /// its new process
+    #[usage(long)]
+    exit_on_restart: bool,
 }
 
 impl Wait {
@@ -87,10 +99,14 @@ impl Wait {
         let supervisor_live = supervisor_is_live(sf);
         let mut watched_ids: Vec<DaemonId> = Vec::new();
         let mut polled: Vec<Watched> = Vec::new();
+        // Daemons whose wait ended because they were restarted
+        // (`--exit-on-restart`): their run ended with a clean stop.
+        let mut restarted: Vec<DaemonId> = Vec::new();
+        let exit_on_restart = self.exit_on_restart;
         for id in &ids {
             match sf.daemons.get(id) {
                 Some(daemon)
-                    if !is_terminal_status(&daemon.status)
+                    if !is_terminal_status(&daemon.status, exit_on_restart)
                         || retry_pending(sf, daemon, supervisor_live) =>
                 {
                     // Not finished: evaluate the daemon after it stops for
@@ -98,12 +114,16 @@ impl Wait {
                     // attempt ends; the state then tells whether another
                     // attempt follows.
                     watched_ids.push(id.clone());
-                    polled.push(Watched::new(id.clone(), daemon.pid));
+                    polled.push(Watched::new(id.clone(), daemon.pid, exit_on_restart));
                 }
-                Some(_) => {
+                Some(daemon) => {
                     // Already terminal: evaluate immediately, its exit
                     // code still counts toward the result.
                     watched_ids.push(id.clone());
+                    if daemon.status.is_restarting() {
+                        // Already being restarted, with --exit-on-restart.
+                        restarted.push(id.clone());
+                    }
                 }
                 None => {
                     warn!("{id} is not running");
@@ -185,12 +205,20 @@ impl Wait {
                         }
                     }
                     _ = interval.tick() => {
-                        // The state is read only once a watched process has
-                        // gone, to learn whether the daemon is done.
-                        if remaining.iter().any(|w| !w.process_running()) {
+                        // The state is read once a watched process has gone,
+                        // to learn whether the daemon is done, and on every
+                        // tick with --exit-on-restart: a restart is recorded
+                        // while the old process is still being stopped.
+                        if exit_on_restart || remaining.iter().any(|w| !w.process_running()) {
                             let sf = StateFile::read(&*env::PITCHFORK_STATE_FILE).ok();
                             let supervisor_live = sf.as_ref().is_some_and(supervisor_is_live);
-                            remaining.retain_mut(|w| w.still_running(sf.as_ref(), supervisor_live));
+                            remaining.retain_mut(|w| {
+                                let running = w.still_running(sf.as_ref(), supervisor_live);
+                                if !running && w.restarted {
+                                    restarted.push(w.id.clone());
+                                }
+                                running
+                            });
                         }
                         if remaining.is_empty() {
                             break;
@@ -202,15 +230,27 @@ impl Wait {
 
         // The supervisor updates daemon status asynchronously after the
         // process exits, so poll fresh state until every waited daemon
-        // reaches a terminal status (bounded at ~2s).
-        let statuses = read_terminal_statuses(&watched_ids).await;
+        // reaches a terminal status (bounded at ~2s). A restarted daemon is
+        // not read again: its record now describes the new process.
+        let finished_ids: Vec<DaemonId> = watched_ids
+            .iter()
+            .filter(|id| !restarted.contains(id))
+            .cloned()
+            .collect();
+        let statuses = read_terminal_statuses(&finished_ids, exit_on_restart).await;
         // Exit 0 only when every watched daemon's terminal status maps to
         // 0; a status missing from the state (not persisted yet) maps to
         // 1. Otherwise propagate the exit code of the first failing daemon
         // in the order the daemons were selected (argument order).
         if let Some(exit_code) = watched_ids
             .iter()
-            .map(|id| daemon_exit_code(id, &statuses))
+            .map(|id| {
+                if restarted.contains(id) {
+                    0
+                } else {
+                    daemon_exit_code(id, &statuses)
+                }
+            })
             .find(|code| *code != 0)
         {
             std::process::exit(exit_code);
@@ -321,14 +361,23 @@ struct Watched {
     pid: Option<u32>,
     /// When its process was first seen gone while the record was not final.
     gone_since: Option<time::Instant>,
+    /// Treat a restart as the end of the daemon's run (`--exit-on-restart`).
+    exit_on_restart: bool,
+    /// Whether the wait ended because the daemon was restarted.
+    restarted: bool,
+    /// Whether `pid` was seen running, as opposed to only recorded.
+    pid_seen_live: bool,
 }
 
 impl Watched {
-    fn new(id: DaemonId, pid: Option<u32>) -> Self {
+    fn new(id: DaemonId, pid: Option<u32>, exit_on_restart: bool) -> Self {
         Self {
             id,
             pid,
             gone_since: None,
+            exit_on_restart,
+            restarted: false,
+            pid_seen_live: pid.is_some_and(|pid| PROCS.is_running(pid)),
         }
     }
 
@@ -340,29 +389,57 @@ impl Watched {
     /// next one has started or will start, or the supervisor has not yet
     /// recorded how the last one ended.
     fn still_running(&mut self, sf: Option<&StateFile>, supervisor_live: bool) -> bool {
+        let Some(daemon) = sf.and_then(|sf| sf.daemons.get(&self.id)) else {
+            return self.process_running();
+        };
+        if self.exit_on_restart && daemon.status.is_restarting() {
+            // The restart ends the wait as soon as it begins, however long
+            // the old process then takes to stop.
+            self.restarted = true;
+            return false;
+        }
         if self.process_running() {
+            self.pid_seen_live = true;
             return true;
         }
         let Some(sf) = sf else { return false };
-        let Some(daemon) = sf.daemons.get(&self.id) else {
-            return false;
-        };
         if let Some(pid) = daemon.pid
             && Some(pid) != self.pid
             && PROCS.is_running(pid)
         {
+            // A process that replaced a running one with no failed attempt in
+            // between (a retry always counts one) was started by a restart,
+            // which may have come and gone between two reads of the state.
+            // Only a process this wait saw running counts as replaced: the
+            // snapshot's pid may be stale, from before a restart that was
+            // over when the wait began.
+            if self.exit_on_restart && self.pid_seen_live && daemon.retry_count == 0 {
+                self.restarted = true;
+                return false;
+            }
             // The next attempt has started.
             self.pid = Some(pid);
+            self.pid_seen_live = true;
             self.gone_since = None;
             return true;
         }
-        if is_terminal_status(&daemon.status) {
+        if is_terminal_status(&daemon.status, self.exit_on_restart) {
             if retry_pending(sf, daemon, supervisor_live) {
                 self.pid = None;
                 self.gone_since = None;
                 return true;
             }
+            // Only a restart is final here with --exit-on-restart.
+            self.restarted = daemon.status.is_restarting();
             return false;
+        }
+        if daemon.status.is_restarting() && supervisor_live {
+            // The supervisor is between stopping the old process and starting
+            // the new one, which the pid check above picks up once it runs.
+            // How long that takes (the restart delay, readiness of a forced
+            // start) is not bounded by the settle timeout below.
+            self.gone_since = None;
+            return true;
         }
         let gone_since = *self.gone_since.get_or_insert_with(time::Instant::now);
         gone_since.elapsed() < SETTLE_TIMEOUT
@@ -389,8 +466,13 @@ fn supervisor_is_live(sf: &StateFile) -> bool {
 }
 
 /// Whether the supervisor has recorded a final status for the daemon, as
-/// opposed to the transient Running/Waiting/Stopping states.
-fn is_terminal_status(status: &DaemonStatus) -> bool {
+/// opposed to the transient Running/Waiting/Stopping/Restarting states.
+/// With `exit_on_restart`, a restart counts as final: the run being waited
+/// on has been stopped.
+fn is_terminal_status(status: &DaemonStatus, exit_on_restart: bool) -> bool {
+    if status.is_restarting() {
+        return exit_on_restart;
+    }
     !status.is_running() && !status.is_waiting() && !status.is_stopping()
 }
 
@@ -408,13 +490,16 @@ fn fresh_statuses(ids: &[DaemonId]) -> Vec<(DaemonId, DaemonStatus)> {
 /// Read fresh state until every waited daemon reports a terminal status,
 /// bounded at ~2s (the supervisor persists status asynchronously after the
 /// process exits).
-async fn read_terminal_statuses(ids: &[DaemonId]) -> Vec<(DaemonId, DaemonStatus)> {
+async fn read_terminal_statuses(
+    ids: &[DaemonId],
+    exit_on_restart: bool,
+) -> Vec<(DaemonId, DaemonStatus)> {
     for _ in 0..40 {
         let statuses = fresh_statuses(ids);
         if statuses.len() == ids.len()
             && statuses
                 .iter()
-                .all(|(_, status)| is_terminal_status(status))
+                .all(|(_, status)| is_terminal_status(status, exit_on_restart))
         {
             return statuses;
         }
@@ -450,7 +535,7 @@ mod tests {
         let sf = state_with(&daemon);
         assert!(retry_pending(&sf, &daemon, true));
 
-        let mut watched = Watched::new(daemon.id.clone(), None);
+        let mut watched = Watched::new(daemon.id.clone(), None, false);
         assert!(watched.still_running(Some(&sf), true));
     }
 
@@ -460,7 +545,7 @@ mod tests {
         let sf = state_with(&daemon);
         assert!(!retry_pending(&sf, &daemon, true));
 
-        let mut watched = Watched::new(daemon.id.clone(), None);
+        let mut watched = Watched::new(daemon.id.clone(), None, false);
         assert!(!watched.still_running(Some(&sf), true));
     }
 
@@ -483,10 +568,121 @@ mod tests {
             ..Default::default()
         };
         let sf = state_with(&daemon);
-        let mut watched = Watched::new(daemon.id.clone(), None);
+        let mut watched = Watched::new(daemon.id.clone(), None, false);
         assert!(watched.still_running(Some(&sf), true));
 
         watched.gone_since = Some(time::Instant::now() - SETTLE_TIMEOUT);
         assert!(!watched.still_running(Some(&sf), true));
+    }
+
+    fn restarting(pid: Option<u32>) -> Daemon {
+        Daemon {
+            id: DaemonId::new("proj", "api"),
+            status: DaemonStatus::Restarting,
+            pid,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_restart_is_followed_by_default() {
+        // The old process is gone and the new one has not started yet.
+        let daemon = restarting(None);
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), Some(i32::MAX as u32), false);
+        assert!(watched.still_running(Some(&sf), true));
+
+        // However long the restart takes, it is not settled by the timeout.
+        watched.gone_since = Some(time::Instant::now() - SETTLE_TIMEOUT);
+        assert!(watched.still_running(Some(&sf), true));
+        assert!(!is_terminal_status(&DaemonStatus::Restarting, false));
+    }
+
+    #[test]
+    fn the_new_process_of_a_restart_is_picked_up() {
+        // The record names a live process other than the one being watched.
+        let me = std::process::id();
+        let daemon = Daemon {
+            id: DaemonId::new("proj", "api"),
+            status: DaemonStatus::Running,
+            pid: Some(me),
+            ..Default::default()
+        };
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), None, false);
+        assert!(watched.still_running(Some(&sf), true));
+        assert_eq!(watched.pid, Some(me));
+    }
+
+    #[test]
+    fn a_restart_left_behind_by_a_dead_supervisor_is_settled() {
+        let daemon = restarting(None);
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), None, false);
+        assert!(watched.still_running(Some(&sf), false));
+        watched.gone_since = Some(time::Instant::now() - SETTLE_TIMEOUT);
+        assert!(!watched.still_running(Some(&sf), false));
+    }
+
+    #[test]
+    fn exit_on_restart_ends_the_wait_cleanly() {
+        let daemon = restarting(None);
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), None, true);
+        assert!(!watched.still_running(Some(&sf), true));
+        assert!(watched.restarted);
+        assert!(is_terminal_status(&DaemonStatus::Restarting, true));
+        // A restart that never finished is no clean stop: only a wait that
+        // ended on a restart on purpose reports one.
+        assert_eq!(status_exit_code(&DaemonStatus::Restarting), 1);
+    }
+
+    #[test]
+    fn exit_on_restart_ends_the_wait_when_the_restart_already_finished() {
+        // The state was not read while the daemon was restarting: it already
+        // names the new process.
+        let mut daemon = Daemon {
+            id: DaemonId::new("proj", "api"),
+            status: DaemonStatus::Running,
+            pid: Some(std::process::id()),
+            ..Default::default()
+        };
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), Some(i32::MAX as u32), true);
+        // The process this wait saw running has gone.
+        watched.pid_seen_live = true;
+        assert!(!watched.still_running(Some(&sf), true));
+        assert!(watched.restarted);
+
+        // A pid the wait never saw running is a stale snapshot: the process
+        // in the record is the one to follow.
+        let mut watched = Watched::new(daemon.id.clone(), Some(i32::MAX as u32), true);
+        assert!(watched.still_running(Some(&sf), true));
+        assert!(!watched.restarted);
+        assert_eq!(watched.pid, Some(std::process::id()));
+
+        // A retry of a failed attempt is followed, not taken for a restart.
+        daemon.retry = crate::config_types::Retry(2);
+        daemon.retry_count = 1;
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), Some(i32::MAX as u32), true);
+        watched.pid_seen_live = true;
+        assert!(watched.still_running(Some(&sf), true));
+        assert!(!watched.restarted);
+    }
+
+    #[test]
+    fn exit_on_restart_ends_the_wait_while_the_old_process_is_stopping() {
+        // The restart is recorded before the old process, still alive, is
+        // signalled.
+        let daemon = restarting(Some(std::process::id()));
+        let sf = state_with(&daemon);
+        let mut watched = Watched::new(daemon.id.clone(), Some(std::process::id()), true);
+        assert!(!watched.still_running(Some(&sf), true));
+        assert!(watched.restarted);
+
+        // Without the flag, the wait stays with the process.
+        let mut watched = Watched::new(daemon.id.clone(), Some(std::process::id()), false);
+        assert!(watched.still_running(Some(&sf), true));
     }
 }

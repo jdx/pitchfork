@@ -227,7 +227,7 @@ Fields shared by project and worktree summaries:
 
 | Field | Meaning |
 | --- | --- |
-| `daemons` | Counts by state. `available` means configured but not yet tracked by the supervisor; `transitioning` includes waiting and stopping. Project totals cover its worktree namespaces. |
+| `daemons` | Counts by state. `available` means configured but not yet tracked by the supervisor; `transitioning` includes waiting, stopping and restarting. Project totals cover its worktree namespaces. |
 | `last_activity` | Start time of the most recently started daemon still running, in RFC 3339 format. `null` when none are running; this is not a history of past activity. |
 | `dir_exists` | Whether the directory exists. Deleted checkouts remain listed until their namespace registrations are removed. |
 | `url`, `api_url` | Paths to the corresponding web page and API resource. |

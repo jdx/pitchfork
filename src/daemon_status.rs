@@ -9,6 +9,14 @@ pub enum DaemonStatus {
     Waiting,
     Running,
     Stopping,
+    /// The supervisor is restarting the daemon (a watched file changed, or a
+    /// `restart`/`start --force` replaced it): the old process is being or
+    /// has been stopped and the new one has not started yet.
+    ///
+    /// Not a final state: it becomes `running`/`waiting` once the new process
+    /// starts, or a terminal status if the restart fails. `pitchfork wait`
+    /// keeps following the daemon through it.
+    Restarting,
     /// Exit code of the process, or -1 if unknown.
     Errored(i32),
     /// A `oneshot = true` daemon whose process ran to completion with exit
@@ -35,10 +43,17 @@ impl DaemonStatus {
             DaemonStatus::Waiting => console::style(s).yellow().to_string(),
             DaemonStatus::Running => console::style(s).green().to_string(),
             DaemonStatus::Stopping => console::style(s).yellow().to_string(),
+            DaemonStatus::Restarting => console::style(s).yellow().to_string(),
             DaemonStatus::Stopped => console::style(s).dim().to_string(),
             DaemonStatus::Completed => console::style(s).green().dim().to_string(),
             DaemonStatus::Errored(_) => console::style(s).red().to_string(),
         }
+    }
+
+    /// Whether the daemon's process is being, or has just been, stopped on
+    /// purpose: a plain stop in flight (`stopping`) or a restart.
+    pub fn is_stopping_or_restarting(&self) -> bool {
+        self.is_stopping() || self.is_restarting()
     }
 
     pub fn error_message(&self) -> Option<String> {
@@ -61,6 +76,7 @@ mod tests {
             ("stopped", DaemonStatus::Stopped),
             ("waiting", DaemonStatus::Waiting),
             ("stopping", DaemonStatus::Stopping),
+            ("restarting", DaemonStatus::Restarting),
             ("failed", DaemonStatus::Failed("some error".to_string())),
             ("errored", DaemonStatus::Errored(1)),
             ("errored_unknown", DaemonStatus::Errored(-1)),
@@ -77,6 +93,18 @@ mod tests {
             serde_json::to_string(&DaemonStatus::Completed).unwrap(),
             "\"completed\""
         );
+    }
+
+    #[test]
+    fn test_restarting_serializes_as_restarting() {
+        assert_eq!(DaemonStatus::Restarting.to_string(), "restarting");
+        assert_eq!(
+            serde_json::to_string(&DaemonStatus::Restarting).unwrap(),
+            "\"restarting\""
+        );
+        assert!(DaemonStatus::Restarting.error_message().is_none());
+        assert!(DaemonStatus::Restarting.is_stopping_or_restarting());
+        assert!(!DaemonStatus::Running.is_stopping_or_restarting());
     }
 
     #[test]

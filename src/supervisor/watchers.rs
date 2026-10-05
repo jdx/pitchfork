@@ -1577,11 +1577,28 @@ impl Supervisor {
             }
         };
 
-        // Stop the daemon first
-        let _ = self.stop(id).await;
+        // Stop the daemon first. It is recorded as `restarting` rather than
+        // `stopped` throughout, so `pitchfork wait` follows it to the new
+        // process instead of reporting the run as over.
+        let _ = self.stop_for_restart(id).await;
+        // Taken once this restart's own stop is recorded: a stop that lands
+        // from here until the replacement is started moves it on, and the
+        // start below, which checks it under the daemon's lock, stands down.
+        let approved_at = self.stop_epoch(id);
 
         // Small delay to allow the process to fully stop
         time::sleep(settings().supervisor_restart_delay()).await;
+
+        // Anything that recorded another outcome during the delay (a
+        // `pitchfork stop`, a disable) has the last word.
+        if !self
+            .get_daemon(id)
+            .await
+            .is_some_and(|d| d.pid.is_none() && d.status.is_restarting())
+        {
+            debug!("Daemon {id} changed state while restarting; not starting it again");
+            return Ok(());
+        }
 
         // Restart the daemon
         let mut run_opts = daemon.to_run_options(cmd);
@@ -1589,9 +1606,21 @@ impl Supervisor {
         run_opts.retry_count = 0;
         run_opts.wait_ready = false; // Don't block on file-triggered restarts
 
-        match self.run(run_opts).await {
+        // A process started in the meantime (after the check above) is
+        // replaced by this forced start, whose own stop then leaves the mark
+        // to settle against.
+        let mut restart_mark = None;
+        match self
+            .run_retry(run_opts, approved_at, &mut restart_mark)
+            .await
+        {
             Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
                 info!("Successfully restarted daemon {id} after file change");
+            }
+            Ok(IpcResponse::DaemonNotRunning) => {
+                debug!(
+                    "Daemon {id} was stopped or disabled while restarting; not starting it again"
+                );
             }
             Ok(other) => {
                 warn!("Unexpected response when restarting daemon {id}: {other:?}");
@@ -1600,6 +1629,9 @@ impl Supervisor {
                 error!("Failed to restart daemon {id}: {e}");
             }
         }
+        // A restart that did not start a process is not left restarting.
+        self.settle_restarting(id, restart_mark.unwrap_or(approved_at))
+            .await;
 
         Ok(())
     }

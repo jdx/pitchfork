@@ -16,6 +16,11 @@ retry = 3
 Start it with `pitchfork start api`, edit a matching file, and inspect the restart
 with `pitchfork logs api --tail`. Stopped daemons ignore changes.
 
+While a restart is in progress the daemon's status is `restarting`, until the
+new process starts. `pitchfork wait api` follows the daemon through restarts
+and keeps waiting; pass `--exit-on-restart` to return when the daemon is
+stopped for a restart instead.
+
 ::: tip Choose one reloader
 If your command already watches files (such as `vite`, `flask run --reload`, or
 `node --watch`), let it handle source reloads. Use pitchfork's watcher when the

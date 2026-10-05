@@ -706,6 +706,32 @@ impl Supervisor {
             .clone()
     }
 
+    /// A restart in flight when the previous supervisor exited will never
+    /// finish: no one is left to start the new process. A record it left
+    /// without a process is recorded as stopped, and one whose old process
+    /// was still being stopped as stopping, which is what a plain stop
+    /// interrupted at the same point leaves for orphan cleanup to reconcile.
+    async fn settle_interrupted_restarts(&self) {
+        let mut state_file = self.state_file.lock().await;
+        let restarting: Vec<(DaemonId, bool)> = state_file
+            .daemons
+            .values()
+            .filter(|d| d.status.is_restarting())
+            .map(|d| (d.id.clone(), d.pid.is_some()))
+            .collect();
+        for (id, has_pid) in restarting {
+            let status = if has_pid {
+                DaemonStatus::Stopping
+            } else {
+                DaemonStatus::Stopped
+            };
+            debug!(
+                "daemon {id} was left restarting by a previous supervisor; recording it as {status}"
+            );
+            state_file.set_status(&id, status);
+        }
+    }
+
     pub async fn start(
         &self,
         is_boot: bool,
@@ -779,6 +805,7 @@ impl Supervisor {
                 .build(),
         )
         .await?;
+        self.settle_interrupted_restarts().await;
         #[cfg(unix)]
         fix_state_dir_permissions();
 

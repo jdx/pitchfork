@@ -1279,7 +1279,8 @@ impl App {
                     let status_order = |d: &Daemon| match &d.status {
                         crate::daemon_status::DaemonStatus::Running => 0,
                         crate::daemon_status::DaemonStatus::Waiting => 1,
-                        crate::daemon_status::DaemonStatus::Stopping => 2,
+                        crate::daemon_status::DaemonStatus::Stopping
+                        | crate::daemon_status::DaemonStatus::Restarting => 2,
                         crate::daemon_status::DaemonStatus::Completed => 3,
                         crate::daemon_status::DaemonStatus::Stopped => 4,
                         crate::daemon_status::DaemonStatus::Errored(_) => 5,
