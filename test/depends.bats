@@ -241,6 +241,114 @@ EOF
   done
 }
 
+@test "stop orders daemons by their dependencies from another directory" {
+  local proj="$TEST_TEMP_DIR/stopproj" other="$TEST_TEMP_DIR/elsewhere"
+  mkdir -p "$proj" "$other"
+  cd "$proj"
+  create_pitchfork_toml <<EOF
+[daemons.db]
+run = "sleep 30"
+ready_delay = 0
+
+[daemons.app]
+run = "sleep 30"
+depends = ["db"]
+ready_delay = 0
+EOF
+  run pitchfork start app
+  assert_success
+
+  # The config of stopproj is not visible from here.
+  cd "$other"
+  PITCHFORK_LOG=debug run pitchfork stop --all
+  assert_success
+  assert_output --partial 'shutdown order: [[DaemonId { namespace: "stopproj", name: "app" }], [DaemonId { namespace: "stopproj", name: "db" }]]'
+}
+
+@test "stop orders daemons through a disabled dependency that never started" {
+  local proj other="$TEST_TEMP_DIR/elsewhere"
+  proj="$(normalize_path "$TEST_TEMP_DIR/disabledproj")"
+  mkdir -p "$proj" "$other"
+  # Registered, so the supervisor sees api in config, which disabling checks.
+  cat >"$PITCHFORK_CONFIG_DIR/config.toml" <<EOF
+[namespaces.disabledproj]
+dir = "$proj"
+EOF
+  cd "$proj"
+  create_pitchfork_toml <<EOF
+[daemons.db]
+run = "sleep 30"
+ready_delay = 0
+
+[daemons.api]
+run = "sleep 30"
+depends = ["db"]
+ready_delay = 0
+
+[daemons.web]
+run = "sleep 30"
+depends = ["api"]
+ready_delay = 0
+EOF
+  run pitchfork disable api
+  assert_success
+  # api is skipped, so only web records that it needs api, and api has no
+  # record saying it needs db.
+  run pitchfork start web
+  assert_success
+  wait_for_status db running
+  wait_for_status web running
+
+  cd "$other"
+  PITCHFORK_LOG=debug run pitchfork stop --all
+  assert_success
+  assert_output --partial 'shutdown order: [[DaemonId { namespace: "disabledproj", name: "web" }], [DaemonId { namespace: "disabledproj", name: "db" }]]'
+}
+
+@test "stop orders daemons through a disabled dependency in another project" {
+  local web_proj db_proj other="$TEST_TEMP_DIR/elsewhere"
+  web_proj="$(normalize_path "$TEST_TEMP_DIR/webproj")"
+  db_proj="$(normalize_path "$TEST_TEMP_DIR/dbproj")"
+  mkdir -p "$web_proj" "$db_proj" "$other"
+  cat >"$PITCHFORK_CONFIG_DIR/config.toml" <<EOF
+[namespaces.webproj]
+dir = "$web_proj"
+
+[namespaces.dbproj]
+dir = "$db_proj"
+EOF
+  cat >"$db_proj/pitchfork.toml" <<EOF
+[daemons.db]
+run = "sleep 30"
+ready_delay = 0
+
+[daemons.api]
+run = "sleep 30"
+depends = ["db"]
+ready_delay = 0
+EOF
+  cat >"$web_proj/pitchfork.toml" <<EOF
+[daemons.web]
+run = "sleep 30"
+depends = ["dbproj/api"]
+ready_delay = 0
+EOF
+  cd "$web_proj"
+  run pitchfork disable dbproj/api
+  assert_success
+  # dbproj/api is skipped, so web's record names it but nothing records that
+  # it needs dbproj/db, and webproj's config does not define it.
+  run pitchfork start web
+  assert_success
+  wait_for_status dbproj/db running
+  wait_for_status web running
+
+  cd "$other"
+  PITCHFORK_LOG=debug run pitchfork stop --all
+  assert_success
+  assert_output --partial 'shutdown order: [[DaemonId { namespace: "webproj", name: "web" }], [DaemonId { namespace: "dbproj", name: "db" }]]'
+}
+
 @test "stop --all handles partial running daemons" {
   create_pitchfork_toml <<EOF
 [daemons.db]
