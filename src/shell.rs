@@ -161,17 +161,6 @@ fn child_would_get_its_own_console() -> bool {
     console.is_null()
 }
 
-/// The creation flags `hide_console_window` sets, for a caller that sets
-/// further flags in the same `creation_flags` call.
-#[cfg(windows)]
-pub(crate) fn console_creation_flags() -> u32 {
-    if child_would_get_its_own_console() {
-        windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
-    } else {
-        0
-    }
-}
-
 #[cfg(windows)]
 impl HideConsoleWindow for std::process::Command {
     fn hide_console_window(&mut self) -> &mut Self {
