@@ -203,17 +203,43 @@ pub fn namespace_for_dir(dir: &Path) -> Option<String> {
         .map(|e| e.namespace)
 }
 
-/// The hostname label a registration names for the project at `dir`.
+/// The hostname label a registration names for the project whose primary
+/// checkout is `primary`.
 ///
 /// A pure lookup in the cached registry. It is what lets a tool register a
 /// project under a generated namespace (needed to keep daemon IDs unique) and
 /// still get the hostname it advertises.
-pub fn label_for_dir(dir: &Path) -> Option<String> {
-    let dir = normalize(dir);
-    entries()
-        .into_iter()
-        .find(|e| e.source == "registry" && e.dir == dir)
-        .and_then(|e| e.label)
+///
+/// A registration made from the primary checkout wins. Failing that, one made
+/// from a linked worktree of it counts too: a tool registers the checkout it
+/// runs in, which is often a worktree, and the project's hostnames must not
+/// change depending on which checkout registered first.
+pub fn label_for_checkout(primary: &Path) -> Option<String> {
+    pick_checkout_label(&entries(), primary, |dir| {
+        crate::proxy::hostname::detect_checkout(dir).primary
+    })
+}
+
+fn pick_checkout_label(
+    entries: &[Entry],
+    primary: &Path,
+    primary_of: impl Fn(&Path) -> PathBuf,
+) -> Option<String> {
+    let primary = normalize(primary);
+    let labelled = || {
+        entries
+            .iter()
+            .filter(|e| e.source == "registry" && e.label.is_some())
+    };
+    labelled()
+        .find(|e| e.dir == primary)
+        .or_else(|| {
+            // Lowest path first, so the choice never depends on registry order.
+            labelled()
+                .filter(|e| primary_of(&e.dir) == primary)
+                .min_by(|a, b| a.dir.cmp(&b.dir))
+        })
+        .and_then(|e| e.label.clone())
 }
 
 /// Mutate under the same lock as the existing namespace and slug writers.
@@ -382,5 +408,72 @@ mod tests {
         let raw: Registrations = toml::from_str(doc).unwrap();
         let again = toml::to_string(&raw.namespaces["shop-528f92b13a6784f0"]).unwrap();
         assert!(again.contains("label = \"shop\""), "{again}");
+    }
+
+    fn labelled(dir: &str, label: Option<&str>) -> Entry {
+        Entry {
+            namespace: format!("ns-{dir}"),
+            dir: PathBuf::from(dir),
+            config: vec![],
+            label: label.map(String::from),
+            source: "registry",
+        }
+    }
+
+    /// Worktrees of `/work/shop` sit under `/work/shop-wt/`; everything else is
+    /// its own checkout.
+    fn primary_of(dir: &Path) -> PathBuf {
+        if dir.starts_with("/work/shop-wt") {
+            PathBuf::from("/work/shop")
+        } else {
+            dir.to_path_buf()
+        }
+    }
+
+    #[test]
+    fn label_registered_from_a_linked_worktree_names_the_project() {
+        let entries = vec![labelled("/work/shop-wt/feature", Some("shop-web"))];
+        assert_eq!(
+            pick_checkout_label(&entries, Path::new("/work/shop"), primary_of).as_deref(),
+            Some("shop-web")
+        );
+        // Another project is not claimed by it.
+        assert_eq!(
+            pick_checkout_label(&entries, Path::new("/work/other"), primary_of),
+            None
+        );
+    }
+
+    #[test]
+    fn primary_checkout_label_beats_a_worktree_label() {
+        let entries = vec![
+            labelled("/work/shop-wt/feature", Some("from-worktree")),
+            labelled("/work/shop", Some("from-primary")),
+        ];
+        assert_eq!(
+            pick_checkout_label(&entries, Path::new("/work/shop"), primary_of).as_deref(),
+            Some("from-primary")
+        );
+    }
+
+    #[test]
+    fn worktree_labels_are_chosen_independently_of_registry_order() {
+        let a = labelled("/work/shop-wt/a", Some("label-a"));
+        let b = labelled("/work/shop-wt/b", Some("label-b"));
+        for entries in [vec![a.clone(), b.clone()], vec![b, a]] {
+            assert_eq!(
+                pick_checkout_label(&entries, Path::new("/work/shop"), primary_of).as_deref(),
+                Some("label-a")
+            );
+        }
+    }
+
+    #[test]
+    fn unlabelled_registrations_name_nothing() {
+        let entries = vec![labelled("/work/shop-wt/feature", None)];
+        assert_eq!(
+            pick_checkout_label(&entries, Path::new("/work/shop"), primary_of),
+            None
+        );
     }
 }

@@ -268,7 +268,7 @@ pub fn validate_registered_label(label: &str) -> Result<(), String> {
 /// registered or configured with an explicit namespace uses that name, and
 /// failing that the directory name of the primary checkout is used.
 pub fn project_label(primary: &Path) -> Option<String> {
-    let registered = crate::extra_configs::label_for_dir(primary);
+    let registered = crate::extra_configs::label_for_checkout(primary);
     let explicit = PitchforkToml::project_namespace_override(primary)
         .ok()
         .flatten()
@@ -281,7 +281,7 @@ pub fn project_label(primary: &Path) -> Option<String> {
 /// This is the part of [`project_label`] that a `--label` registration
 /// controls, as opposed to a namespace or a directory name.
 fn registered_project_label(primary: &Path) -> Option<String> {
-    crate::extra_configs::label_for_dir(primary).and_then(|l| sanitize_label(&l))
+    crate::extra_configs::label_for_checkout(primary).and_then(|l| sanitize_label(&l))
 }
 
 /// The precedence behind [`project_label`], separated from the lookups.
