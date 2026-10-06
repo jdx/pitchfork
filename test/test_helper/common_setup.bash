@@ -194,34 +194,67 @@ _stop_leaked_supervisors() {
   _signal_supervisors KILL "${ids[@]}" || true
 }
 
+# Every `pid:start_time` pair the state file records, one per line: the
+# supervisor's and each daemon's.
+_recorded_process_identities() {
+  awk '
+    /^\[/ { if (pid != "" && start != "") print pid ":" start; pid = ""; start = "" }
+    /^pid = [0-9]+$/ { pid = $3 }
+    /^start_time = [0-9]+$/ { start = $3 }
+    END { if (pid != "" && start != "") print pid ":" start }
+  ' "$PITCHFORK_STATE_DIR/state.toml" 2>/dev/null
+}
+
 # The Windows counterpart of `_stop_leaked_supervisors`. `ps` does not see the
-# Windows PIDs pitchfork records, so the candidates are the supervisor started
-# in setup and the one the state file records now, each with the start time the
-# state file gave it. A candidate is stopped, with its whole tree (the daemons
-# and log sinks it started), only while a pitchfork process with that PID was
-# created at that exact time, so a PID reused by another test is never touched.
-# `tasklist` checks the PID cheaply first; PowerShell reads the creation time
-# only when a pitchfork process holds it.
+# Windows PIDs pitchfork records, so the candidates come from the state file:
+# the supervisor started in setup, the one recorded now, and every daemon
+# recorded, each with the start time recorded for it. The daemons are included
+# because a tree kill reaches only the supervisor's living descendants, not an
+# adopted daemon or a process whose parent has exited.
+#
+# A candidate is stopped, with its tree, only while a process with that PID was
+# created at that exact time, so a PID reused by anything else is never
+# touched. The check and the kill happen in one PowerShell process that holds a
+# handle to the checked process throughout: Windows does not reuse a PID while
+# a handle to the process is open. `tasklist` runs first, once, so a teardown
+# whose processes have all stopped does not start PowerShell at all.
 _stop_leaked_supervisors_windows() {
-  local -A seen=()
-  local pid start
-  local -a candidates=(
-    "${_SETUP_SUPERVISOR_PID:-}:${_SETUP_SUPERVISOR_START:-}"
-    "$(_recorded_supervisor_pid):$(_recorded_supervisor_start_time)"
-  )
+  local -a candidates=()
   local candidate
-  for candidate in "${candidates[@]}"; do
-    pid="${candidate%%:*}"
-    start="${candidate#*:}"
-    [[ -n "$pid" && -n "$start" && -z "${seen[$candidate]:-}" ]] || continue
-    seen[$candidate]=1
-    tasklist //FI "PID eq $pid" //NH 2>/dev/null | grep -qi "pitchfork" || continue
-    powershell -NoProfile -Command \
-      "\$p = Get-Process -Id $pid -ErrorAction SilentlyContinue; if (\$p -and \$p.StartTime.ToFileTimeUtc() -eq $start) { exit 0 } else { exit 1 }" \
-      2>/dev/null || continue
-    echo "# stopping leftover supervisor: $pid" >&3
-    taskkill //F //T //PID "$pid" >/dev/null 2>&1 || true
+  for candidate in \
+    "${_SETUP_SUPERVISOR_PID:-}:${_SETUP_SUPERVISOR_START:-}" \
+    "$(_recorded_supervisor_pid):$(_recorded_supervisor_start_time)" \
+    $(_recorded_process_identities); do
+    [[ "$candidate" =~ ^[0-9]+:[0-9]+$ ]] || continue
+    [[ " ${candidates[*]} " == *" $candidate "* ]] || candidates+=("$candidate")
   done
+  ((${#candidates[@]})) || return 0
+
+  local running
+  running=" $(tasklist //NH //FO CSV 2>/dev/null | awk -F'","' '{print $2}' | tr '\n' ' ') "
+  local alive=0
+  for candidate in "${candidates[@]}"; do
+    [[ "$running" == *" ${candidate%%:*} "* ]] && alive=1
+  done
+  ((alive)) || return 0
+
+  # Supervisors come first in the list, so none is left to restart a daemon.
+  PF_CANDIDATES="${candidates[*]}" powershell -NoProfile -Command '
+    foreach ($c in ($env:PF_CANDIDATES -split " ")) {
+      $id, $start = $c -split ":"
+      $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+      if (-not $p) { continue }
+      try {
+        $null = $p.Handle
+        if ($p.StartTime.ToFileTimeUtc() -eq [int64]$start) {
+          "# stopping leftover process: $id ($($p.ProcessName))"
+          taskkill /F /T /PID $id | Out-Null
+        }
+      } catch {
+      } finally {
+        $p.Dispose()
+      }
+    }' 2>/dev/null | tr -d '\r' >&3 || true
 }
 
 # Send signal $1 to each identity in $2.. whose process still matches it.
