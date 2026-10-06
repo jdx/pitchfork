@@ -69,6 +69,11 @@ fn stable_boot_plist_preserves_local_policy() {
             .as_string(),
         stable.to_str()
     );
+    // The rewrite keeps the restart policy set on the registration.
+    assert_eq!(
+        repaired.as_dictionary().unwrap()["KeepAlive"].as_boolean(),
+        Some(true)
+    );
 
     // A disappeared explicit target fails closed, even on an existing manager.
     std::fs::remove_file(&stable).unwrap();
