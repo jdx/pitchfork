@@ -1341,7 +1341,7 @@ impl Supervisor {
                     // The slave FD has already been dup'd onto stdin/stdout/stderr
                     // by tokio, so we can use stdin (fd 0) for TIOCSCTTY.
                     if use_pty {
-                        let ret = libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0);
+                        let ret = libc::ioctl(0, libc::TIOCSCTTY as _, 0);
                         if ret < 0 {
                             // Non-fatal: the process can still run without
                             // a controlling terminal.
