@@ -209,11 +209,53 @@ impl HideConsoleWindow for tokio::process::Command {
 /// it as `node \"my server.js\"`. With `/S`, cmd strips the outer pair of
 /// quotes and runs the rest exactly as written.
 ///
+/// When the shell is PowerShell, a script that starts with a quoted string is
+/// run with the call operator, as `& <script>`. See `powershell_script`.
+///
 /// Implemented for both `std::process::Command` and `tokio::process::Command`.
 pub(crate) trait ShellScript {
     /// `program` is the shell the command was created for, and `options` the
     /// arguments that come before the script, such as `-c` or `/C`.
     fn shell_script(&mut self, program: &str, options: &[String], script: &str) -> &mut Self;
+}
+
+/// The script as PowerShell should be given it.
+///
+/// PowerShell reads a statement that starts with a quoted string as an
+/// expression rather than a command, so `"C:\Program Files\app\app.exe" --port 80`
+/// fails to parse ("Unexpected token"), and a quoted path on its own just
+/// prints itself. A quoted program path has to be run with the call operator,
+/// `& "C:\Program Files\app\app.exe" --port 80`, which is what this adds when
+/// the shell is `powershell` or `pwsh` with `-Command` (or `-c`) last.
+///
+/// The script is returned unchanged for any other shell, and for a script that
+/// does not start with a quote.
+pub(crate) fn powershell_script<'a>(
+    program: &str,
+    options: &[String],
+    script: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    let stem = program_stem(program);
+    let is_powershell =
+        stem.eq_ignore_ascii_case("powershell") || stem.eq_ignore_ascii_case("pwsh");
+    let runs_command = options.last().is_some_and(|flag| {
+        flag.eq_ignore_ascii_case("-command") || flag.eq_ignore_ascii_case("-c")
+    });
+    if is_powershell && runs_command && script.trim_start().starts_with(['"', '\'']) {
+        format!("& {script}").into()
+    } else {
+        script.into()
+    }
+}
+
+/// The file name of `program` without its extension: `cmd` for
+/// `C:\Windows\System32\cmd.exe`.
+///
+/// Split by hand rather than with `Path`, which does not treat `\` as a
+/// separator outside Windows and so could not be tested there.
+fn program_stem(program: &str) -> &str {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
 }
 
 /// For cmd.exe run with `/C` as its last option, the options to pass before
@@ -228,11 +270,7 @@ fn cmd_raw_script<'a>(
     options: &'a [String],
     script: &str,
 ) -> Option<(&'a [String], String)> {
-    // Split by hand rather than with `Path`, which does not treat `\` as a
-    // separator outside Windows and so could not be tested there.
-    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
-    let is_cmd = stem.eq_ignore_ascii_case("cmd");
+    let is_cmd = program_stem(program).eq_ignore_ascii_case("cmd");
     let (flag, leading) = options.split_last()?;
     if !is_cmd || !flag.eq_ignore_ascii_case("/c") {
         return None;
@@ -252,7 +290,9 @@ impl ShellScript for std::process::Command {
         use std::os::windows::process::CommandExt;
         match cmd_raw_script(program, options, script) {
             Some((leading, raw)) => self.args(leading).raw_arg(raw),
-            None => self.args(options).arg(script),
+            None => self
+                .args(options)
+                .arg(&*powershell_script(program, options, script)),
         }
     }
 }
@@ -263,22 +303,26 @@ impl ShellScript for tokio::process::Command {
         // tokio exposes `raw_arg` as an inherent method on Windows.
         match cmd_raw_script(program, options, script) {
             Some((leading, raw)) => self.args(leading).raw_arg(raw),
-            None => self.args(options).arg(script),
+            None => self
+                .args(options)
+                .arg(&*powershell_script(program, options, script)),
         }
     }
 }
 
 #[cfg(not(windows))]
 impl ShellScript for std::process::Command {
-    fn shell_script(&mut self, _program: &str, options: &[String], script: &str) -> &mut Self {
-        self.args(options).arg(script)
+    fn shell_script(&mut self, program: &str, options: &[String], script: &str) -> &mut Self {
+        self.args(options)
+            .arg(&*powershell_script(program, options, script))
     }
 }
 
 #[cfg(not(windows))]
 impl ShellScript for tokio::process::Command {
-    fn shell_script(&mut self, _program: &str, options: &[String], script: &str) -> &mut Self {
-        self.args(options).arg(script)
+    fn shell_script(&mut self, program: &str, options: &[String], script: &str) -> &mut Self {
+        self.args(options)
+            .arg(&*powershell_script(program, options, script))
     }
 }
 
@@ -444,5 +488,66 @@ mod tests {
 
         let output = Shell::Cmd.std_command(r#"echo "a b""#).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#""a b""#);
+    }
+
+    #[test]
+    fn test_powershell_script_calls_a_quoted_program() {
+        let command = strings(&["-Command"]);
+        assert_eq!(
+            powershell_script("powershell", &command, r#""C:\a b\app.exe" --port 80"#),
+            r#"& "C:\a b\app.exe" --port 80"#
+        );
+        assert_eq!(
+            powershell_script(
+                r"C:\Program Files\PowerShell\7\pwsh.exe",
+                &strings(&["-NoProfile", "-c"]),
+                "'app' x"
+            ),
+            "& 'app' x"
+        );
+        // Not quoted, not PowerShell, or not run as a command: unchanged.
+        assert_eq!(
+            powershell_script("pwsh", &command, "app --port 80"),
+            "app --port 80"
+        );
+        assert_eq!(powershell_script("pwsh", &command, "& 'app'"), "& 'app'");
+        assert_eq!(
+            powershell_script("pwsh", &command, r#"echo "a b""#),
+            r#"echo "a b""#
+        );
+        assert_eq!(
+            powershell_script("cmd", &strings(&["/C"]), r#""app""#),
+            r#""app""#
+        );
+        assert_eq!(powershell_script("sh", &strings(&["-c"]), "'app'"), "'app'");
+        assert_eq!(
+            powershell_script("pwsh", &strings(&["-File"]), "'app'"),
+            "'app'"
+        );
+    }
+
+    /// PowerShell runs a script that starts with a quoted program path,
+    /// which it would otherwise fail to parse.
+    #[cfg(windows)]
+    #[test]
+    fn test_powershell_runs_a_script_starting_with_a_quoted_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_dir = dir.path().join("with space");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let script = script_dir.join("say.cmd");
+        std::fs::write(&script, "@echo [%~1]\r\n").unwrap();
+
+        for run in [
+            format!(r#""{}" "a b""#, script.display()),
+            format!("'{}' 'a b'", script.display()),
+        ] {
+            let output = Shell::PowerShell.std_command(&run).output().unwrap();
+            assert!(output.status.success(), "{run}: {output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                "[a b]",
+                "{run}"
+            );
+        }
     }
 }

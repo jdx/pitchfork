@@ -216,6 +216,8 @@ The split follows POSIX rules, so a path with spaces or backslashes has to be qu
 
 When the shell is cmd.exe with `/C` last, the `run` string is handed to it as `/S /C "<run>"`, so double quotes in it reach cmd as written, e.g. `run = '"C:\Program Files\app\app.exe" --name "a b"'`. A daemon with `mise = true` is the exception: mise starts cmd itself and quotes the string again, so a `run` containing `"` may not reach cmd intact there.
 
+When the shell is PowerShell (`powershell` or `pwsh`) with `-Command` last, a `run` string that starts with a quote is run with the call operator, as `& <run>`, so a quoted program path works there too, e.g. `run = '"C:\Program Files\app\app.exe" --port 8080'`.
+
 **Common configurations:** - `"cmd /C"` — Default - `"powershell -Command"` / `"pwsh -Command"` — PowerShell - `"sh -c"` — Git for Windows' sh, when `Git\bin` is on `PATH`
 
 ## `general.worktree`

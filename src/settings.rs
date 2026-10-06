@@ -265,6 +265,11 @@ pub struct SettingsGeneral {
     /// `mise = true` is the exception: mise starts cmd itself and quotes the
     /// string again, so a `run` containing `"` may not reach cmd intact there.
     ///
+    /// When the shell is PowerShell (`powershell` or `pwsh`) with `-Command`
+    /// last, a `run` string that starts with a quote is run with the call
+    /// operator, as `& <run>`, so a quoted program path works there too, e.g.
+    /// `run = '"C:\Program Files\app\app.exe" --port 8080'`.
+    ///
     /// **Common configurations:**
     /// - `"cmd /C"` — Default
     /// - `"powershell -Command"` / `"pwsh -Command"` — PowerShell
