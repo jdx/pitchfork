@@ -31,6 +31,12 @@ struct Cache {
     initialized: bool,
     meta: Option<(SystemTime, u64)>,
     entries: Vec<Entry>,
+    /// Registered labels keyed by the primary checkout they name, built from
+    /// `entries` on first use so a hostname lookup never walks the filesystem.
+    label_index: Option<(
+        std::time::Instant,
+        std::collections::HashMap<PathBuf, String>,
+    )>,
 }
 static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| Mutex::new(Cache::default()));
 
@@ -108,6 +114,7 @@ pub fn entries() -> Vec<Entry> {
         };
         cache.meta = meta;
         cache.initialized = true;
+        cache.label_index = None;
     }
     let mut entries = cache.entries.clone();
     drop(cache);
@@ -203,17 +210,84 @@ pub fn namespace_for_dir(dir: &Path) -> Option<String> {
         .map(|e| e.namespace)
 }
 
-/// The hostname label a registration names for the project at `dir`.
+/// How long a built label index answers lookups. Long enough that one hostname
+/// pass over every daemon reads the filesystem once, short enough that a moved
+/// checkout is picked up without a registry change.
+const LABEL_INDEX_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The hostname label a registration names for the project whose primary
+/// checkout is `primary`.
 ///
 /// A pure lookup in the cached registry. It is what lets a tool register a
 /// project under a generated namespace (needed to keep daemon IDs unique) and
 /// still get the hostname it advertises.
-pub fn label_for_dir(dir: &Path) -> Option<String> {
-    let dir = normalize(dir);
-    entries()
+///
+/// A registration made from the primary checkout wins. Failing that, one made
+/// from a linked worktree of it counts too: a tool registers the checkout it
+/// runs in, which is often a worktree, and the project's hostnames must not
+/// change depending on which checkout registered first.
+pub fn label_for_checkout(primary: &Path) -> Option<String> {
+    // Refreshes the cache, and drops the index with it, when the registry changed.
+    drop(entries());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let Cache {
+        entries,
+        label_index,
+        ..
+    } = &mut *cache;
+    // The index records where Git pointers led, which moving a checkout changes
+    // without touching the registry, so it only serves lookups for a moment.
+    if label_index
+        .as_ref()
+        .is_none_or(|(built, _)| built.elapsed() > LABEL_INDEX_TTL)
+    {
+        *label_index = Some((
+            std::time::Instant::now(),
+            label_index_of(entries, crate::proxy::hostname::detect_checkout),
+        ));
+    }
+    label_index
+        .as_ref()
+        .and_then(|(_, index)| index.get(&normalize(primary)).cloned())
+}
+
+/// Every registered label, keyed by the primary checkout it names.
+///
+/// A registration made from the primary itself wins over one made from a linked
+/// worktree, and among worktrees the lowest path wins, so the result never
+/// depends on registry order.
+fn label_index_of(
+    entries: &[Entry],
+    checkout_of: impl Fn(&Path) -> crate::proxy::hostname::Checkout,
+) -> std::collections::HashMap<PathBuf, String> {
+    let mut chosen: std::collections::HashMap<PathBuf, (bool, &Path, &str)> = Default::default();
+    for entry in entries {
+        let Some(label) = entry
+            .label
+            .as_deref()
+            .filter(|_| entry.source == "registry")
+        else {
+            continue;
+        };
+        let checkout = checkout_of(&entry.dir);
+        // A registration for a subdirectory (a monorepo package, say) names
+        // that directory's project, not the repository around it.
+        if checkout.root() != entry.dir {
+            continue;
+        }
+        let primary = checkout.primary.clone();
+        let candidate = (checkout.worktree.is_some(), entry.dir.as_path(), label);
+        match chosen.get(&primary) {
+            Some(best) if (best.0, best.1) <= (candidate.0, candidate.1) => {}
+            _ => {
+                chosen.insert(primary, candidate);
+            }
+        }
+    }
+    chosen
         .into_iter()
-        .find(|e| e.source == "registry" && e.dir == dir)
-        .and_then(|e| e.label)
+        .map(|(primary, (_, _, label))| (primary, label.to_string()))
+        .collect()
 }
 
 /// Mutate under the same lock as the existing namespace and slug writers.
@@ -382,5 +456,93 @@ mod tests {
         let raw: Registrations = toml::from_str(doc).unwrap();
         let again = toml::to_string(&raw.namespaces["shop-528f92b13a6784f0"]).unwrap();
         assert!(again.contains("label = \"shop\""), "{again}");
+    }
+
+    fn labelled(dir: &Path, label: Option<&str>) -> Entry {
+        Entry {
+            namespace: format!("ns-{}", dir.display()),
+            dir: normalize(dir),
+            config: vec![],
+            label: label.map(String::from),
+            source: "registry",
+        }
+    }
+
+    /// A real primary checkout with linked worktrees named `names`, so the Git
+    /// pointer files that `detect_checkout` follows are what the tests use.
+    fn repo_with_worktrees(names: &[&str]) -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("shop");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let worktrees = names
+            .iter()
+            .map(|name| {
+                let admin = repo.join(".git/worktrees").join(name);
+                std::fs::create_dir_all(&admin).unwrap();
+                let wt = temp.path().join(name);
+                std::fs::create_dir_all(&wt).unwrap();
+                std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+                wt
+            })
+            .collect();
+        (temp, repo, worktrees)
+    }
+
+    fn pick(entries: &[Entry], primary: &Path) -> Option<String> {
+        label_index_of(entries, crate::proxy::hostname::detect_checkout)
+            .get(&normalize(primary))
+            .cloned()
+    }
+
+    #[test]
+    fn label_registered_from_a_linked_worktree_names_the_project() {
+        let (temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
+        let entries = vec![labelled(&worktrees[0], Some("shop-web"))];
+        assert_eq!(pick(&entries, &repo).as_deref(), Some("shop-web"));
+        // Another project is not claimed by it.
+        let other = temp.path().join("other");
+        std::fs::create_dir_all(other.join(".git")).unwrap();
+        assert_eq!(pick(&entries, &other), None);
+    }
+
+    #[test]
+    fn primary_checkout_label_beats_a_worktree_label() {
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
+        let entries = vec![
+            labelled(&worktrees[0], Some("from-worktree")),
+            labelled(&repo, Some("from-primary")),
+        ];
+        assert_eq!(pick(&entries, &repo).as_deref(), Some("from-primary"));
+    }
+
+    #[test]
+    fn worktree_labels_are_chosen_independently_of_registry_order() {
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["a", "b"]);
+        let a = labelled(&worktrees[0], Some("label-a"));
+        let b = labelled(&worktrees[1], Some("label-b"));
+        for entries in [vec![a.clone(), b.clone()], vec![b, a]] {
+            assert_eq!(pick(&entries, &repo).as_deref(), Some("label-a"));
+        }
+    }
+
+    #[test]
+    fn a_label_registered_for_a_subdirectory_does_not_name_the_repository() {
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
+        let package = repo.join("packages/web");
+        let wt_package = worktrees[0].join("packages/web");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(&wt_package).unwrap();
+        let entries = vec![
+            labelled(&package, Some("web-package")),
+            labelled(&wt_package, Some("web-package-wt")),
+        ];
+        assert_eq!(pick(&entries, &repo), None);
+    }
+
+    #[test]
+    fn unlabelled_registrations_name_nothing() {
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
+        let entries = vec![labelled(&worktrees[0], None)];
+        assert_eq!(pick(&entries, &repo), None);
     }
 }
