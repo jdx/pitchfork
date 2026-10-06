@@ -108,7 +108,7 @@ mod imp {
             return Ok(SYSTEM_REGISTRATION.into());
         }
         let home =
-            std::env::home_dir().ok_or_else(|| miette::miette!("failed to find home directory"))?;
+            dirs::home_dir().ok_or_else(|| miette::miette!("failed to find home directory"))?;
         Ok(home.join("Library/LaunchAgents/pitchfork.plist"))
     }
 
