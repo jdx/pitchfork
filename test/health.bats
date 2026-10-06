@@ -101,6 +101,34 @@ EOF
   pitchfork stop healthy
 }
 
+@test "health cmd array runs its program without a shell" {
+  # The probe passes only if the file name, with its space and `$`, reaches
+  # the program as one argument; through a shell it would split and expand,
+  # every probe would fail, and the daemon would be killed.
+  create_pitchfork_toml <<'EOF'
+[daemons.healthy_array]
+run = "touch 'health $marker'; sleep 300"
+health_cmd = { run = ["python3", "-c", "import os, sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)", "health $marker"], interval = "1s", retries = 2 }
+EOF
+
+  run pitchfork start healthy_array
+  assert_success
+  wait_for_status healthy_array running 30
+
+  local pid_before pid_after
+  pid_before=$(get_daemon_pid healthy_array)
+  [[ -n "$pid_before" ]] || return 1
+
+  # Several health intervals must pass without the daemon being touched.
+  sleep 5
+
+  pid_after=$(get_daemon_pid healthy_array)
+  [[ "$pid_after" == "$pid_before" ]] || return 1
+  [[ "$(_health_kills)" -eq 0 ]] || return 1
+
+  pitchfork stop healthy_array
+}
+
 @test "a health check removed from the config stops applying on the next start" {
   create_pitchfork_toml <<EOF
 [daemons.wasunhealthy]

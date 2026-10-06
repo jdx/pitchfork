@@ -1532,6 +1532,28 @@ impl PitchforkToml {
                 }
             }
 
+            if let Some(RunCommand::Argv(argv)) = raw_daemon.health_cmd.as_ref().map(|c| &c.run) {
+                match argv.first().map(String::as_str) {
+                    // An empty program would fail every probe, and the daemon
+                    // would be killed once its health check retries ran out.
+                    None | Some("") => {
+                        return Err(ConfigParseError::EmptyHealthCmdArgv {
+                            daemon: short_name.clone(),
+                            path: path.to_path_buf(),
+                        }
+                        .into());
+                    }
+                    Some("exec") => {
+                        return Err(ConfigParseError::ExecInHealthCmdArgv {
+                            daemon: short_name.clone(),
+                            path: path.to_path_buf(),
+                        }
+                        .into());
+                    }
+                    Some(_) => {}
+                }
+            }
+
             let daemon = PitchforkTomlDaemon {
                 run: raw_daemon.run,
                 auto: raw_daemon.auto,
@@ -2829,6 +2851,95 @@ ready_cmd = "redis-cli ping"
                 .contains("starts its ready_cmd array with \"exec\"")),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_health_cmd_array_parses_and_round_trips() {
+        let pt = PitchforkToml::parse_str(
+            r#"
+[daemons.api]
+run = "node server.js"
+health_cmd = ["node", "my server.js", "--name=\"a b\"", "it's", "a&b", "%PATH%", "$HOME"]
+
+[daemons.db]
+run = "postgres"
+health_cmd = { run = ["pg_isready", "-h", "localhost"], interval = "5s", retries = 2 }
+
+[daemons.cache]
+run = "redis-server"
+health_cmd = "redis-cli ping"
+"#,
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap();
+        let health = |pt: &PitchforkToml, ns: &str, name: &str| {
+            pt.daemons[&DaemonId::new(ns, name)]
+                .health_cmd
+                .clone()
+                .unwrap()
+        };
+        assert_eq!(
+            health(&pt, "my-project", "api").run,
+            RunCommand::Argv(awkward_argv())
+        );
+        let db = health(&pt, "my-project", "db");
+        assert_eq!(
+            db.run,
+            RunCommand::Argv(
+                ["pg_isready", "-h", "localhost"]
+                    .map(str::to_string)
+                    .to_vec()
+            )
+        );
+        assert_eq!(db.interval, Some(std::time::Duration::from_secs(5)));
+        assert_eq!(db.retries, Some(2));
+        assert_eq!(health(&pt, "my-project", "cache").run, "redis-cli ping");
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        let mut written = PitchforkToml::new(path.clone());
+        written.namespace = Some("test-project".to_string());
+        for name in ["api", "db"] {
+            written.daemons.insert(
+                DaemonId::new("test-project", name),
+                PitchforkTomlDaemon {
+                    run: "true".into(),
+                    health_cmd: Some(health(&pt, "my-project", name)),
+                    ..PitchforkTomlDaemon::default()
+                },
+            );
+        }
+        written.write().unwrap();
+        let parsed = PitchforkToml::read(&path).unwrap();
+        for name in ["api", "db"] {
+            assert_eq!(
+                health(&parsed, "test-project", name),
+                health(&pt, "my-project", name)
+            );
+        }
+    }
+
+    #[test]
+    fn test_health_cmd_array_must_name_a_program_and_not_exec() {
+        for (health_cmd, expected) in [
+            ("[]", "has no program in its health_cmd array"),
+            ("[\"\"]", "has no program in its health_cmd array"),
+            (
+                "{ run = [\"exec\", \"pg_isready\"] }",
+                "starts its health_cmd array with \"exec\"",
+            ),
+        ] {
+            let err = PitchforkToml::parse_str(
+                &format!("[daemons.api]\nrun = \"true\"\nhealth_cmd = {health_cmd}\n"),
+                Path::new("/tmp/my-project/pitchfork.toml"),
+            )
+            .unwrap_err();
+            assert!(
+                err.chain()
+                    .any(|cause| cause.to_string().contains(expected)),
+                "unexpected error for {health_cmd}: {err:?}"
+            );
+        }
     }
 
     #[test]

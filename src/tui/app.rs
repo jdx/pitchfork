@@ -351,6 +351,19 @@ fn argv_to_edit_text(argv: &[String]) -> String {
     }
 }
 
+/// Why the editor's text cannot be saved as an argv command, if it cannot.
+fn argv_edit_error(text: &str) -> Option<String> {
+    match edit_text_to_argv(text).as_deref() {
+        Ok([]) => Some("Required".to_string()),
+        Ok([program, ..]) if program.is_empty() => Some("The program name is empty".to_string()),
+        Ok([program, ..]) if program == "exec" => {
+            Some("Remove exec: this command starts the program without a shell".to_string())
+        }
+        Ok(_) => None,
+        Err(_) => Some("Unbalanced quotes".to_string()),
+    }
+}
+
 /// Split the editor's text back into arguments; `Err` for an unclosed quote.
 fn edit_text_to_argv(text: &str) -> Result<Vec<String>, String> {
     if cfg!(windows) {
@@ -644,9 +657,12 @@ impl EditorState {
                     field.value = FormFieldValue::OptionalPort(config.ready_port.clone())
                 }
                 "health_cmd" => {
-                    field.value = FormFieldValue::OptionalText(
-                        config.health_cmd.as_ref().map(|c| c.run.clone()),
-                    )
+                    field.value = FormFieldValue::OptionalText(config.health_cmd.as_ref().map(
+                        |c| match &c.run {
+                            RunCommand::Argv(argv) => argv_to_edit_text(argv),
+                            RunCommand::Shell(run) => run.clone(),
+                        },
+                    ))
                 }
                 "health_http" => {
                     field.value = FormFieldValue::OptionalText(
@@ -760,9 +776,19 @@ impl EditorState {
                 }
                 ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = p.clone(),
                 ("health_cmd", FormFieldValue::OptionalText(s)) => {
-                    config.health_cmd = s.clone().map(|run| {
+                    config.health_cmd = s.clone().map(|text| {
                         let mut cmd = self.preserved_health_cmd.clone().unwrap_or_default();
-                        cmd.run = run;
+                        // An array stays an array, edited or not, as for `run`.
+                        cmd.run = match &cmd.run {
+                            RunCommand::Argv(argv) if argv_to_edit_text(argv) == text => {
+                                RunCommand::Argv(argv.clone())
+                            }
+                            RunCommand::Argv(_) => match edit_text_to_argv(&text) {
+                                Ok(words) if !words.is_empty() => words.into(),
+                                _ => text.into(),
+                            },
+                            RunCommand::Shell(_) => text.into(),
+                        };
                         cmd
                     })
                 }
@@ -975,6 +1001,10 @@ impl EditorState {
 
         // Validate fields
         let run_is_argv = self.preserved_run_argv.is_some();
+        let health_cmd_is_argv = self
+            .preserved_health_cmd
+            .as_ref()
+            .is_some_and(|c| c.run.is_argv());
         for field in &mut self.fields {
             // Keep parse errors from set_text (e.g. out-of-range ready_port):
             // the typed value was already dropped, so saving now would
@@ -990,27 +1020,15 @@ impl EditorState {
                     valid = false;
                 }
                 ("run", FormFieldValue::Text(s)) if run_is_argv => {
-                    match edit_text_to_argv(s).as_deref() {
-                        Ok([]) => {
-                            field.error = Some("Required".to_string());
-                            valid = false;
-                        }
-                        Ok([program, ..]) if program.is_empty() => {
-                            field.error = Some("The program name is empty".to_string());
-                            valid = false;
-                        }
-                        Ok([program, ..]) if program == "exec" => {
-                            field.error = Some(
-                                "Remove exec: this command starts the program without a shell"
-                                    .to_string(),
-                            );
-                            valid = false;
-                        }
-                        Ok(_) => {}
-                        Err(_) => {
-                            field.error = Some("Unbalanced quotes".to_string());
-                            valid = false;
-                        }
+                    if let Some(error) = argv_edit_error(s) {
+                        field.error = Some(error);
+                        valid = false;
+                    }
+                }
+                ("health_cmd", FormFieldValue::OptionalText(Some(s))) if health_cmd_is_argv => {
+                    if let Some(error) = argv_edit_error(s) {
+                        field.error = Some(error);
+                        valid = false;
                     }
                 }
                 ("ready_http", FormFieldValue::OptionalText(Some(url)))
@@ -2080,6 +2098,76 @@ mod run_argv_editor_review_tests {
                 "--port".into(),
                 "8080".into()
             ])
+        );
+    }
+}
+
+#[cfg(test)]
+mod health_cmd_argv_editor_tests {
+    use super::*;
+    use crate::config_types::HealthCmd;
+
+    fn argv(words: &[&str]) -> RunCommand {
+        RunCommand::Argv(words.iter().map(|w| w.to_string()).collect())
+    }
+
+    fn editor(health_cmd: HealthCmd) -> EditorState {
+        let config = PitchforkTomlDaemon {
+            run: "sleep 60".into(),
+            health_cmd: Some(health_cmd),
+            ..PitchforkTomlDaemon::default()
+        };
+        EditorState::new_edit("api".to_string(), &config, PathBuf::from("pitchfork.toml"))
+    }
+
+    fn set_health_cmd(editor: &mut EditorState, text: &str) {
+        let field = editor
+            .fields
+            .iter_mut()
+            .find(|f| f.name == "health_cmd")
+            .unwrap();
+        field.set_text(text.to_string());
+    }
+
+    #[test]
+    fn an_untouched_array_is_saved_as_an_array_with_its_settings() {
+        let health_cmd = HealthCmd {
+            run: argv(&["pg_isready", "-h", "my host"]),
+            interval: Some(std::time::Duration::from_secs(5)),
+            ..HealthCmd::default()
+        };
+        let editor = editor(health_cmd.clone());
+        assert_eq!(editor.to_daemon_config().health_cmd, Some(health_cmd));
+    }
+
+    #[test]
+    fn an_edited_array_stays_an_array() {
+        let mut editor = editor(HealthCmd::new(argv(&["pg_isready"])));
+        set_health_cmd(&mut editor, "pg_isready -h 'my host'");
+        assert!(editor.validate());
+        assert_eq!(
+            editor.to_daemon_config().health_cmd.unwrap().run,
+            argv(&["pg_isready", "-h", "my host"])
+        );
+    }
+
+    #[test]
+    fn an_edited_array_must_still_parse() {
+        let mut editor = editor(HealthCmd::new(argv(&["pg_isready"])));
+        set_health_cmd(&mut editor, "pg_isready -h 'my host");
+        assert!(!editor.validate());
+        set_health_cmd(&mut editor, "exec pg_isready");
+        assert!(!editor.validate());
+    }
+
+    #[test]
+    fn a_string_stays_a_string() {
+        let mut editor = editor(HealthCmd::new("curl -f http://localhost"));
+        set_health_cmd(&mut editor, "curl -f 'http://localhost/a b'");
+        assert!(editor.validate());
+        assert_eq!(
+            editor.to_daemon_config().health_cmd.unwrap().run,
+            "curl -f 'http://localhost/a b'"
         );
     }
 }

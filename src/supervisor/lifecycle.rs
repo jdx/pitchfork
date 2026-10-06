@@ -308,20 +308,21 @@ fn terminal_exit_state(
 ///
 /// Config load checks the array as written, but a template can still render
 /// the program to nothing, or to `exec`.
-/// Why a daemon's `ready_cmd` array cannot be run, if it cannot: its program,
-/// after templates are rendered, is empty or `exec`. Config load rejects both
-/// as written, but a template can still render to them, and a probe that can
-/// never run would keep the start waiting for readiness.
-fn invalid_ready_cmd_program(id: &DaemonId, ready_cmd: Option<&ReadyCmd>) -> Option<String> {
-    let RunCommand::Argv(argv) = &ready_cmd?.run else {
+/// Why a daemon's `ready_cmd` or `health_cmd` array (named by `field`)
+/// cannot be run, if it cannot: its program, after templates are rendered, is
+/// empty or `exec`. Config load rejects both as written, but a template can
+/// still render to them, and a probe that can never run would keep the start
+/// waiting for readiness, or fail every health check.
+fn invalid_probe_program(id: &DaemonId, field: &str, run: Option<&RunCommand>) -> Option<String> {
+    let RunCommand::Argv(argv) = run? else {
         return None;
     };
     match argv.first().map(String::as_str) {
         None | Some("") => Some(format!(
-            "daemon {id} has no program to run in its ready_cmd array"
+            "daemon {id} has no program to run in its {field} array"
         )),
         Some("exec") => Some(format!(
-            "daemon {id} starts its ready_cmd array with \"exec\"; a ready_cmd array runs the program directly, so remove \"exec\""
+            "daemon {id} starts its {field} array with \"exec\"; a {field} array runs the program directly, so remove \"exec\""
         )),
         Some(_) => None,
     }
@@ -1148,7 +1149,14 @@ impl Supervisor {
         // wrapping.
         // The program and arguments that start the daemon, before any mise
         // wrapping, and the script for the shell when `run` is a string.
-        if let Some(error) = invalid_ready_cmd_program(id, opts.ready_cmd.as_ref()) {
+        if let Some(error) = invalid_probe_program(
+            id,
+            "ready_cmd",
+            opts.ready_cmd.as_ref().map(|c| &c.run),
+        )
+        .or_else(|| {
+            invalid_probe_program(id, "health_cmd", opts.health_cmd.as_ref().map(|c| &c.run))
+        }) {
             return Ok(IpcResponse::DaemonFailed { error });
         }
 
@@ -4074,21 +4082,24 @@ mod launch_command_tests {
     }
 
     #[test]
-    fn refuses_a_ready_cmd_array_whose_program_rendered_empty_or_to_exec() {
-        use super::invalid_ready_cmd_program;
-        use crate::pitchfork_toml::ReadyCmd;
+    fn refuses_a_probe_array_whose_program_rendered_empty_or_to_exec() {
+        use super::invalid_probe_program;
+        use crate::pitchfork_toml::RunCommand;
         let id = DaemonId::new("proj", "api");
-        let check = |run: Vec<String>| invalid_ready_cmd_program(&id, Some(&ReadyCmd::new(run)));
-        assert!(check(vec![]).is_some());
-        assert!(check(words(&["", "-h"])).is_some());
-        assert!(check(words(&["exec", "pg_isready"])).is_some());
-        assert_eq!(check(words(&["pg_isready", ""])), None);
-        // The string form goes through the shell, and no ready_cmd is fine.
+        for field in ["ready_cmd", "health_cmd"] {
+            let check =
+                |run: Vec<String>| invalid_probe_program(&id, field, Some(&RunCommand::Argv(run)));
+            assert!(check(vec![]).unwrap().contains(field));
+            assert!(check(words(&["", "-h"])).is_some());
+            assert!(check(words(&["exec", "pg_isready"])).is_some());
+            assert_eq!(check(words(&["pg_isready", ""])), None);
+        }
+        // The string form goes through the shell, and no command is fine.
         assert_eq!(
-            invalid_ready_cmd_program(&id, Some(&ReadyCmd::new(""))),
+            invalid_probe_program(&id, "health_cmd", Some(&RunCommand::Shell(String::new()))),
             None
         );
-        assert_eq!(invalid_ready_cmd_program(&id, None), None);
+        assert_eq!(invalid_probe_program(&id, "health_cmd", None), None);
     }
 
     fn words(words: &[&str]) -> Vec<String> {
