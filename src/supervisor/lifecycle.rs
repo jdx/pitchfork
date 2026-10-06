@@ -12,7 +12,7 @@ use crate::error::PortError;
 use crate::ipc::IpcResponse;
 use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
-use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
+use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, RunCommand};
 use crate::procs::PROCS;
 use crate::settings::{resolve_shell, settings};
 use crate::shell::{HideConsoleWindow, Shell, ShellScript};
@@ -133,30 +133,55 @@ fn apply_runtime_env(
     }
 }
 
+/// A probe whose result channel is already closed. The caller treats it the
+/// same as a probe that exited non-zero and respawns it after the
+/// ready_check_interval, preserving the existing retry behaviour.
+fn closed_cmd_probe() -> CmdProbe {
+    let (cancel_tx, _) = tokio::sync::oneshot::channel();
+    let (_, result_rx) = tokio::sync::oneshot::channel();
+    CmdProbe {
+        cancel_tx,
+        result_rx,
+    }
+}
+
 pub(crate) fn spawn_cmd_probe(
     id: &DaemonId,
-    cmd: &str,
+    cmd: &RunCommand,
     dir: &std::path::Path,
     retry_count: u32,
     daemon_env: Option<&IndexMap<String, String>>,
     resolved_ports: &[u16],
 ) -> CmdProbe {
-    // Use the same shell as daemon run and hooks. A probe is not worth failing
-    // the daemon over, so an unparseable setting degrades to the platform's own
-    // shell here rather than propagating; run_once has already rejected the
-    // start by then, so this only fires for a daemon whose settings changed
-    // under it.
-    let mut command = match resolve_shell() {
-        Ok(parts) => {
-            let (program, args) = parts.split_first().unwrap();
+    let mut command = match cmd {
+        // The argv form: the program and its arguments as written, with no
+        // shell to reinterpret them, as for a `run` array.
+        RunCommand::Argv(argv) => {
+            let Some((program, args)) = argv.split_first().filter(|(p, _)| !p.is_empty()) else {
+                warn!("daemon {id}: ready_cmd array has no program to run");
+                return closed_cmd_probe();
+            };
             let mut c = tokio::process::Command::new(program);
-            c.shell_script(program, args, cmd);
+            c.args(args);
             c
         }
-        Err(e) => {
-            warn!("daemon {id}: {e}; using the platform shell for this probe");
-            Shell::default_for_platform().command(cmd)
-        }
+        // Use the same shell as daemon run and hooks. A probe is not worth
+        // failing the daemon over, so an unparseable setting degrades to the
+        // platform's own shell here rather than propagating; run_once has
+        // already rejected the start by then, so this only fires for a daemon
+        // whose settings changed under it.
+        RunCommand::Shell(cmd) => match resolve_shell() {
+            Ok(parts) => {
+                let (program, args) = parts.split_first().unwrap();
+                let mut c = tokio::process::Command::new(program);
+                c.shell_script(program, args, cmd);
+                c
+            }
+            Err(e) => {
+                warn!("daemon {id}: {e}; using the platform shell for this probe");
+                Shell::default_for_platform().command(cmd)
+            }
+        },
     };
     command
         .current_dir(dir)
@@ -169,15 +194,7 @@ pub(crate) fn spawn_cmd_probe(
         Ok(child) => child,
         Err(e) => {
             warn!("daemon {id}: failed to spawn command probe: {e}");
-            // Return a probe whose result channel is already closed. The caller will
-            // treat this the same as a probe that exited non-zero and respawn after
-            // the ready_check_interval, preserving the existing retry behaviour.
-            let (cancel_tx, _) = tokio::sync::oneshot::channel();
-            let (_, result_rx) = tokio::sync::oneshot::channel();
-            return CmdProbe {
-                cancel_tx,
-                result_rx,
-            };
+            return closed_cmd_probe();
         }
     };
 
@@ -291,6 +308,25 @@ fn terminal_exit_state(
 ///
 /// Config load checks the array as written, but a template can still render
 /// the program to nothing, or to `exec`.
+/// Why a daemon's `ready_cmd` array cannot be run, if it cannot: its program,
+/// after templates are rendered, is empty or `exec`. Config load rejects both
+/// as written, but a template can still render to them, and a probe that can
+/// never run would keep the start waiting for readiness.
+fn invalid_ready_cmd_program(id: &DaemonId, ready_cmd: Option<&ReadyCmd>) -> Option<String> {
+    let RunCommand::Argv(argv) = &ready_cmd?.run else {
+        return None;
+    };
+    match argv.first().map(String::as_str) {
+        None | Some("") => Some(format!(
+            "daemon {id} has no program to run in its ready_cmd array"
+        )),
+        Some("exec") => Some(format!(
+            "daemon {id} starts its ready_cmd array with \"exec\"; a ready_cmd array runs the program directly, so remove \"exec\""
+        )),
+        Some(_) => None,
+    }
+}
+
 fn invalid_argv_program(id: &DaemonId, argv: &[String]) -> Option<String> {
     match argv.first().map(String::as_str) {
         None | Some("") => Some(format!(
@@ -1112,6 +1148,10 @@ impl Supervisor {
         // wrapping.
         // The program and arguments that start the daemon, before any mise
         // wrapping, and the script for the shell when `run` is a string.
+        if let Some(error) = invalid_ready_cmd_program(id, opts.ready_cmd.as_ref()) {
+            return Ok(IpcResponse::DaemonFailed { error });
+        }
+
         let (mut words, script) = if opts.no_shell {
             // The argv form of `run`: started as written, with no shell to
             // reinterpret quotes, `%`, `&` or anything else in the arguments.
@@ -3930,15 +3970,52 @@ mod ready_check_tests {
     #[tokio::test]
     async fn spawn_cmd_probe_reports_success() {
         let id = DaemonId::new("global", "probe-test");
-        let probe = spawn_cmd_probe(&id, "true", &std::env::temp_dir(), 0, None, &[]);
+        let probe = spawn_cmd_probe(&id, &"true".into(), &std::env::temp_dir(), 0, None, &[]);
         let status = probe.result_rx.await.unwrap().unwrap();
         assert!(status.success());
+    }
+
+    /// The argv form runs the program with each argument exactly as written:
+    /// the probe passes only if the program sees a single argument containing
+    /// a space and characters a shell would expand.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_cmd_probe_runs_an_argv_without_a_shell() {
+        let id = DaemonId::new("global", "probe-test");
+        let argv = |arg: &str| -> RunCommand {
+            RunCommand::Argv(
+                ["test", arg, "=", "a b $HOME %PATH% &"]
+                    .map(str::to_string)
+                    .to_vec(),
+            )
+        };
+        let probe = spawn_cmd_probe(
+            &id,
+            &argv("a b $HOME %PATH% &"),
+            &std::env::temp_dir(),
+            0,
+            None,
+            &[],
+        );
+        assert!(probe.result_rx.await.unwrap().unwrap().success());
+        // Through a shell, the unquoted string would split and expand, and fail.
+        let probe = spawn_cmd_probe(
+            &id,
+            &"test a b $HOME %PATH% & = 'a b $HOME %PATH% &'".into(),
+            &std::env::temp_dir(),
+            0,
+            None,
+            &[],
+        );
+        assert!(!probe.result_rx.await.unwrap().unwrap().success());
+        let probe = spawn_cmd_probe(&id, &argv("different"), &std::env::temp_dir(), 0, None, &[]);
+        assert!(!probe.result_rx.await.unwrap().unwrap().success());
     }
 
     #[tokio::test]
     async fn spawn_cmd_probe_stops_on_request() {
         let id = DaemonId::new("global", "probe-test");
-        let probe = spawn_cmd_probe(&id, "sleep 30", &std::env::temp_dir(), 0, None, &[]);
+        let probe = spawn_cmd_probe(&id, &"sleep 30".into(), &std::env::temp_dir(), 0, None, &[]);
         let CmdProbe {
             cancel_tx,
             result_rx,
@@ -3961,7 +4038,7 @@ mod ready_check_tests {
         };
         let probe = spawn_cmd_probe(
             &id,
-            check,
+            &check.into(),
             &std::env::temp_dir(),
             2,
             Some(&daemon_env),
@@ -3994,6 +4071,24 @@ mod launch_command_tests {
         assert!(invalid_argv_program(&id, &words(&["", "server.js"])).is_some());
         assert!(invalid_argv_program(&id, &words(&["exec", "node"])).is_some());
         assert_eq!(invalid_argv_program(&id, &words(&["node", ""])), None);
+    }
+
+    #[test]
+    fn refuses_a_ready_cmd_array_whose_program_rendered_empty_or_to_exec() {
+        use super::invalid_ready_cmd_program;
+        use crate::pitchfork_toml::ReadyCmd;
+        let id = DaemonId::new("proj", "api");
+        let check = |run: Vec<String>| invalid_ready_cmd_program(&id, Some(&ReadyCmd::new(run)));
+        assert!(check(vec![]).is_some());
+        assert!(check(words(&["", "-h"])).is_some());
+        assert!(check(words(&["exec", "pg_isready"])).is_some());
+        assert_eq!(check(words(&["pg_isready", ""])), None);
+        // The string form goes through the shell, and no ready_cmd is fine.
+        assert_eq!(
+            invalid_ready_cmd_program(&id, Some(&ReadyCmd::new(""))),
+            None
+        );
+        assert_eq!(invalid_ready_cmd_program(&id, None), None);
     }
 
     fn words(words: &[&str]) -> Vec<String> {

@@ -405,10 +405,31 @@ depends = ["api"]
 
 ### `ready_cmd`
 
-Shell command to poll for readiness. Daemon is ready when command exits with code 0.
+Command to poll for readiness. Daemon is ready when command exits with code 0.
 Supports [templates](/guides/configuration-templates). It receives the same configured
 environment and pitchfork metadata as the daemon, including `$PORT`, `$PORT0`,
 `$PORT1`, and so on after port auto-bumping.
+
+Like [`run`](#run-required), it can be a command line for the shell or an array: the
+program to run, followed by its arguments. The array form runs the program
+directly, with no shell, so each argument reaches it exactly as written. It is
+also available in the object form, as `run`. Templates are rendered in each
+argument separately. An empty array, or one that starts with `"exec"`, is
+rejected.
+
+```toml
+[daemons.api]
+run = ["node", "server.js"]
+ready_cmd = ["node", "scripts/check health.js", "--url", "http://localhost:3000"]
+
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+ready_cmd = { run = ["pg_isready", "-h", "localhost"], timeout = "30s" }
+```
+
+Since there is no shell, `$PORT` in an array argument is passed as the
+literal text `$PORT`. The program still receives `PORT` in its environment;
+use the string form when the port has to appear in an argument.
 
 ```toml
 [daemons.postgres]

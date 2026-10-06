@@ -562,6 +562,28 @@ EOF
   pitchfork stop cmd_test
 }
 
+@test "ready cmd array runs its program without a shell" {
+  # The marker's name has a space and a `$`: as one argument of the array it
+  # reaches the program unchanged, where a shell would split and expand it.
+  create_pitchfork_toml <<'EOF'
+[daemons.cmd_array_test]
+run = "echo Starting; sleep 1; touch 'ready $marker'; echo Ready; sleep 60"
+ready_cmd = ["python3", "-c", "import os, sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)", "ready $marker"]
+EOF
+
+  local start_time elapsed
+  start_time=$(date +%s)
+  run pitchfork start cmd_array_test
+  elapsed=$(($(date +%s) - start_time))
+
+  assert_success
+  [[ $elapsed -ge 1 ]] || return 1
+  [[ $elapsed -lt 30 ]] || return 1
+  assert_file_exists "ready \$marker"
+
+  pitchfork stop cmd_array_test
+}
+
 @test "ready cmd timeout fails daemon and blocks dependent" {
   create_pitchfork_toml <<EOF
 [daemons.never_ready]

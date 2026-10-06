@@ -248,6 +248,32 @@ pub enum ConfigParseError {
     ExecInRunArgv { daemon: String, path: PathBuf },
 
     #[error(
+        "daemon '{daemon}' in {} has no program in its ready_cmd array",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::empty_ready_cmd),
+        url("https://pitchfork.jdx.dev/reference/configuration#ready-cmd"),
+        help(
+            "the first element of a `ready_cmd` array is the program to run; give it one, or use a string"
+        )
+    )]
+    EmptyReadyCmdArgv { daemon: String, path: PathBuf },
+
+    #[error(
+        "daemon '{daemon}' in {} starts its ready_cmd array with \"exec\"",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::exec_in_ready_cmd_array),
+        url("https://pitchfork.jdx.dev/reference/configuration#ready-cmd"),
+        help(
+            "a ready_cmd array runs the program directly, without a shell, so there is no shell for `exec` to replace; remove \"exec\" and start the array with the program"
+        )
+    )]
+    ExecInReadyCmdArgv { daemon: String, path: PathBuf },
+
+    #[error(
         "daemon '{daemon}' in {} sets proxy_tls_port = {port}, which is not one of its ports {declared:?}",
         path.display()
     )]
