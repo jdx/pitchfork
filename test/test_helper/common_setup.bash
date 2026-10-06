@@ -103,6 +103,9 @@ _common_setup() {
   if [[ -n "$_SETUP_SUPERVISOR_PID" ]]; then
     _SETUP_SUPERVISOR_IDENTITY="$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")"
   fi
+  # On Windows the identity comes from the state file instead, read now in
+  # case the test rewrites it (see `_stop_leaked_supervisors_windows`).
+  _SETUP_SUPERVISOR_START="$(_recorded_supervisor_start_time)"
 }
 
 # Print an identity token for $1 if it is a `pitchfork supervisor run` process
@@ -145,16 +148,25 @@ _recorded_supervisor_pid() {
     sed -E 's/.*= //'
 }
 
+# The supervisor's start time recorded in the state file, or nothing. On Windows
+# it is the process creation time as a FILETIME, as `start_time` records it.
+_recorded_supervisor_start_time() {
+  grep -A 10 '^\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" 2>/dev/null |
+    grep -E '^start_time = [0-9]+$' |
+    head -1 |
+    sed -E 's/.*= //'
+}
+
 # Stop any supervisor from this test that `pitchfork supervisor stop` missed.
 # Candidates are the supervisor started in setup and any supervisor whose
 # environment points at this test's state directory (for example one a CLI
 # command auto-started). Each candidate is bound to its identity (PID plus
 # start time) when it is found, and is only signalled while that identity still
 # matches, so a PID reused by another test's supervisor is never touched.
-# Unix only: Windows PIDs are handled by taskkill, and the Windows supervisor is
-# spawned without inheriting handles, so it cannot hold bats' pipes open.
+# On Windows, see `_stop_leaked_supervisors_windows`.
 _stop_leaked_supervisors() {
   if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    _stop_leaked_supervisors_windows
     return 0
   fi
   local -a ids=()
@@ -180,6 +192,87 @@ _stop_leaked_supervisors() {
     sleep 0.1
   done
   _signal_supervisors KILL "${ids[@]}" || true
+}
+
+# Every `pid:start_time` pair the state file records, one per line: the
+# supervisor's and each daemon's.
+_recorded_process_identities() {
+  awk '
+    /^\[/ { if (pid != "" && start != "") print pid ":" start; pid = ""; start = "" }
+    /^pid = [0-9]+$/ { pid = $3 }
+    /^start_time = [0-9]+$/ { start = $3 }
+    END { if (pid != "" && start != "") print pid ":" start }
+  ' "$PITCHFORK_STATE_DIR/state.toml" 2>/dev/null
+}
+
+# The Windows counterpart of `_stop_leaked_supervisors`. `ps` does not see the
+# Windows PIDs pitchfork records, so the candidates come from the state file:
+# the supervisor started in setup, the one recorded now, and every daemon
+# recorded, each with the start time recorded for it. The daemons are included
+# because a tree kill reaches only the supervisor's living descendants, not an
+# adopted daemon or a process whose parent has exited.
+#
+# A candidate is stopped only while a process with that PID was created at that
+# exact time, so a PID reused by anything else is never touched. It is stopped
+# through its job object, which pitchfork names after the PID and that time
+# and which also holds the processes whose parent has exited, then with its
+# tree, for whatever is outside a job. The check and the kills happen in one
+# PowerShell process that holds a handle to the checked process throughout:
+# Windows does not reuse a PID while a handle to the process is open.
+# `tasklist` runs first, once, so a teardown whose processes have all stopped
+# does not start PowerShell at all.
+_stop_leaked_supervisors_windows() {
+  local -a candidates=()
+  local candidate
+  for candidate in \
+    "${_SETUP_SUPERVISOR_PID:-}:${_SETUP_SUPERVISOR_START:-}" \
+    "$(_recorded_supervisor_pid):$(_recorded_supervisor_start_time)" \
+    $(_recorded_process_identities); do
+    [[ "$candidate" =~ ^[0-9]+:[0-9]+$ ]] || continue
+    [[ " ${candidates[*]} " == *" $candidate "* ]] || candidates+=("$candidate")
+  done
+  ((${#candidates[@]})) || return 0
+
+  local running
+  running=" $(tasklist //NH //FO CSV 2>/dev/null | awk -F'","' '{print $2}' | tr '\n' ' ') "
+  local alive=0
+  for candidate in "${candidates[@]}"; do
+    [[ "$running" == *" ${candidate%%:*} "* ]] && alive=1
+  done
+  ((alive)) || return 0
+
+  # Supervisors come first in the list, so none is left to restart a daemon.
+  PF_CANDIDATES="${candidates[*]}" powershell -NoProfile -Command '
+    Add-Type -Namespace PF -Name Job -MemberDefinition @"
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+      public static extern IntPtr OpenJobObjectW(uint access, bool inherit, string name);
+      [DllImport("kernel32.dll", SetLastError = true)]
+      public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+      [DllImport("kernel32.dll")]
+      public static extern bool CloseHandle(IntPtr handle);
+"@
+    foreach ($c in ($env:PF_CANDIDATES -split " ")) {
+      $id, $start = $c -split ":"
+      $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+      if (-not $p) { continue }
+      try {
+        $null = $p.Handle
+        if ($p.StartTime.ToFileTimeUtc() -eq [int64]$start) {
+          "# stopping leftover process: $id ($($p.ProcessName))"
+          # 0x0008 is JOB_OBJECT_TERMINATE.
+          $job = [PF.Job]::OpenJobObjectW(8, $false, "Local\pitchfork-daemon-$id-$start")
+          if ($job -ne [IntPtr]::Zero) {
+            "#   terminating its job"
+            [PF.Job]::TerminateJobObject($job, 1) | Out-Null
+            [PF.Job]::CloseHandle($job) | Out-Null
+          }
+          taskkill /F /T /PID $id | Out-Null
+        }
+      } catch {
+      } finally {
+        $p.Dispose()
+      }
+    }' 2>/dev/null | tr -d '\r' >&3 || true
 }
 
 # Send signal $1 to each identity in $2.. whose process still matches it.
