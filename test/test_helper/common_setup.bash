@@ -212,12 +212,15 @@ _recorded_process_identities() {
 # because a tree kill reaches only the supervisor's living descendants, not an
 # adopted daemon or a process whose parent has exited.
 #
-# A candidate is stopped, with its tree, only while a process with that PID was
-# created at that exact time, so a PID reused by anything else is never
-# touched. The check and the kill happen in one PowerShell process that holds a
-# handle to the checked process throughout: Windows does not reuse a PID while
-# a handle to the process is open. `tasklist` runs first, once, so a teardown
-# whose processes have all stopped does not start PowerShell at all.
+# A candidate is stopped only while a process with that PID was created at that
+# exact time, so a PID reused by anything else is never touched. It is stopped
+# through its job object, which pitchfork names after the PID and that time
+# and which also holds the processes whose parent has exited, then with its
+# tree, for whatever is outside a job. The check and the kills happen in one
+# PowerShell process that holds a handle to the checked process throughout:
+# Windows does not reuse a PID while a handle to the process is open.
+# `tasklist` runs first, once, so a teardown whose processes have all stopped
+# does not start PowerShell at all.
 _stop_leaked_supervisors_windows() {
   local -a candidates=()
   local candidate
@@ -240,6 +243,14 @@ _stop_leaked_supervisors_windows() {
 
   # Supervisors come first in the list, so none is left to restart a daemon.
   PF_CANDIDATES="${candidates[*]}" powershell -NoProfile -Command '
+    Add-Type -Namespace PF -Name Job -MemberDefinition @"
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+      public static extern IntPtr OpenJobObjectW(uint access, bool inherit, string name);
+      [DllImport("kernel32.dll", SetLastError = true)]
+      public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+      [DllImport("kernel32.dll")]
+      public static extern bool CloseHandle(IntPtr handle);
+"@
     foreach ($c in ($env:PF_CANDIDATES -split " ")) {
       $id, $start = $c -split ":"
       $p = Get-Process -Id $id -ErrorAction SilentlyContinue
@@ -248,6 +259,13 @@ _stop_leaked_supervisors_windows() {
         $null = $p.Handle
         if ($p.StartTime.ToFileTimeUtc() -eq [int64]$start) {
           "# stopping leftover process: $id ($($p.ProcessName))"
+          # 0x0008 is JOB_OBJECT_TERMINATE.
+          $job = [PF.Job]::OpenJobObjectW(8, $false, "Local\pitchfork-daemon-$id-$start")
+          if ($job -ne [IntPtr]::Zero) {
+            "#   terminating its job"
+            [PF.Job]::TerminateJobObject($job, 1) | Out-Null
+            [PF.Job]::CloseHandle($job) | Out-Null
+          }
           taskkill /F /T /PID $id | Out-Null
         }
       } catch {
