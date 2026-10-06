@@ -12,7 +12,7 @@ can do useful work, such as an HTTP health endpoint or a database query.
 | Check | Ready when… | Use it for… |
 | --- | --- | --- |
 | `ready_http` | An endpoint returns an accepted status | APIs and web servers |
-| `ready_cmd` | A shell command exits with code `0` | Database clients or custom probes |
+| `ready_cmd` | A command exits with code `0` | Database clients or custom probes |
 | `ready_port` | A TCP connection succeeds on `127.0.0.1` | Services without an application-level probe |
 | `ready_output` | A regex matches stdout or stderr | Services with a reliable startup message |
 | `ready_delay` | The process stays running for a fixed delay | A fallback when no other check is available |
@@ -61,6 +61,15 @@ The command runs in the daemon's working directory and receives its environment,
 including the resolved `$PORT`, `$PORT0`, `$PORT1`, and pitchfork metadata.
 This makes command checks useful with [port bumping](/guides/port-management).
 The default polling interval is `500ms`.
+
+To run the command without a shell, give the program and its arguments as an
+array, as for `run`. Each argument reaches the program exactly as written:
+
+```toml
+[daemons.database]
+run = "postgres -D data"
+ready_cmd = ["pg_isready", "-h", "127.0.0.1"]
+```
 
 ```sh
 pitchfork start database --cmd "pg_isready -h 127.0.0.1"

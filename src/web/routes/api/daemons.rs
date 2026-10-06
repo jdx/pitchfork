@@ -224,7 +224,7 @@ fn entry_to_api(
         ready_output: d.ready_output.as_ref().map(|o| o.pattern.clone()),
         ready_http_url: d.ready_http.as_ref().map(|r| r.url.clone()),
         ready_port: d.ready_port.as_ref().and_then(|p| p.as_port()),
-        ready_cmd: d.ready_cmd.as_ref().map(|r| r.run.clone()),
+        ready_cmd: d.ready_cmd.as_ref().map(|r| r.run.to_string()),
         health_cmd: d.health_cmd.as_ref().map(|c| c.run.clone()),
         health_http_url: d.health_http.as_ref().map(|h| h.url.clone()),
         health_port: d.health_port.as_ref().and_then(|p| p.as_port()),

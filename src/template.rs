@@ -397,7 +397,9 @@ fn render_daemon_templates_with(
 
     if let Some(ref cmd) = config.ready_cmd {
         config.ready_cmd = Some(crate::pitchfork_toml::ReadyCmd {
-            run: renderer.render(&cmd.run)?,
+            // Each argument of the argv form is rendered on its own and stays
+            // one argument, as for `run`.
+            run: cmd.run.try_map(|arg| renderer.render(arg))?,
             timeout: cmd.timeout,
         });
     }
@@ -973,6 +975,38 @@ mod tests {
         let on_output = hooks.on_output.unwrap();
         assert_eq!(on_output.run, "curl http://localhost:6379");
         assert_eq!(on_output.filter.as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn test_render_daemon_templates_ready_cmd_array_per_argument() {
+        use crate::config_types::ReadyCmd;
+        use crate::pitchfork_toml::RunCommand;
+
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            ready_cmd: Some(ReadyCmd::new(vec![
+                "redis-cli".to_string(),
+                "-p".to_string(),
+                "{{ daemons.redis.port }}".to_string(),
+                "ping {{ daemons.redis.port }}".to_string(),
+            ])),
+            ..Default::default()
+        };
+
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+
+        // Each argument is rendered on its own, and a rendered value with a
+        // space stays one argument.
+        assert_eq!(
+            config.ready_cmd.unwrap().run,
+            RunCommand::Argv(vec![
+                "redis-cli".to_string(),
+                "-p".to_string(),
+                "6379".to_string(),
+                "ping 6379".to_string(),
+            ])
+        );
     }
 
     #[test]

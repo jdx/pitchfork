@@ -398,7 +398,7 @@ fn merge_ready_cmd_override(
 ) -> Option<ReadyCmd> {
     match (configured, override_cmd) {
         (Some(mut ready_cmd), Some(cmd)) => {
-            ready_cmd.run = cmd;
+            ready_cmd.run = cmd.into();
             Some(ready_cmd)
         }
         (None, Some(cmd)) => Some(ReadyCmd::new(cmd)),
@@ -481,7 +481,7 @@ fn ready_check_type(opts: &RunOptions) -> ReadyCheckType {
     } else if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port()) {
         ReadyCheckType::Port(port)
     } else if let Some(ref cmd) = opts.ready_cmd {
-        ReadyCheckType::Cmd(cmd.run.clone())
+        ReadyCheckType::Cmd(cmd.run.to_string())
     } else if let Some(secs) = opts.ready_delay {
         ReadyCheckType::Delay(secs)
     } else {

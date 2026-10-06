@@ -14,6 +14,7 @@ use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::env;
+use crate::pitchfork_toml::RunCommand;
 use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::supervisor::lifecycle::spawn_cmd_probe;
@@ -422,7 +423,7 @@ async fn health_cmd_probe(id: &DaemonId, daemon: &Daemon, cmd: &HealthCmd) -> bo
     let dir = daemon.dir.as_deref().unwrap_or_else(|| env::CWD.as_path());
     let probe = spawn_cmd_probe(
         id,
-        &cmd.run,
+        &RunCommand::Shell(cmd.run.clone()),
         dir,
         daemon.retry_count,
         daemon.env.as_ref(),

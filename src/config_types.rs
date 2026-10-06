@@ -3,6 +3,7 @@
 //! These are thin wrappers (newtypes) around primitives with custom
 //! serialization, validation, or display logic.
 
+use crate::pitchfork_toml::RunCommand;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -53,6 +54,14 @@ pub trait StringOrStruct: Sized {
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<T, E> {
                 let short = T::Short::deserialize(serde::de::value::StrDeserializer::<E>::new(v))
                     .map_err(E::custom)?;
+                Ok(T::from_short(short))
+            }
+
+            // A shorthand that is an array, such as a `ready_cmd` program and
+            // its arguments. A `Short` that is a plain string rejects it.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, seq: A) -> Result<T, A::Error> {
+                let short =
+                    T::Short::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))?;
                 Ok(T::from_short(short))
             }
 
@@ -374,22 +383,24 @@ impl JsonSchema for ReadyHttp {
 
 /// Command readiness check configuration.
 ///
-/// Accepts two TOML forms:
+/// Accepts these TOML forms:
 /// ```toml
 /// ready_cmd = "pg_isready -h localhost"                        # shorthand, no timeout
+/// ready_cmd = ["pg_isready", "-h", "localhost"]                # shorthand, no shell
 /// ready_cmd = { run = "pg_isready -h localhost", timeout = "30s" } # full
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReadyCmd {
-    /// Shell command to run. Exit code 0 indicates readiness.
-    pub run: String,
+    /// Command to run, as a command line for the shell or as a program and
+    /// its arguments started without one. Exit code 0 indicates readiness.
+    pub run: RunCommand,
     /// Optional overall polling timeout. When set, the command readiness check stops
     /// after this deadline and the daemon fails if no other check succeeds.
     pub timeout: Option<std::time::Duration>,
 }
 
 impl ReadyCmd {
-    pub fn new(run: impl Into<String>) -> Self {
+    pub fn new(run: impl Into<RunCommand>) -> Self {
         Self {
             run: run.into(),
             timeout: None,
@@ -399,23 +410,23 @@ impl ReadyCmd {
 
 impl std::fmt::Display for ReadyCmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.run)
+        self.run.fmt(f)
     }
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[doc(hidden)]
 pub struct ReadyCmdRaw {
-    run: String,
+    run: RunCommand,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     timeout: Option<String>,
 }
 
 impl StringOrStruct for ReadyCmd {
-    type Short = String;
+    type Short = RunCommand;
     type Raw = ReadyCmdRaw;
 
-    fn from_short(run: String) -> Self {
+    fn from_short(run: RunCommand) -> Self {
         Self::new(run)
     }
 
@@ -431,7 +442,7 @@ impl StringOrStruct for ReadyCmd {
         self.timeout.is_none()
     }
 
-    fn to_short(&self) -> String {
+    fn to_short(&self) -> RunCommand {
         self.run.clone()
     }
 
@@ -462,13 +473,25 @@ impl JsonSchema for ReadyCmd {
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "Command readiness check: a shell command string, or { run, timeout } object with an optional overall polling timeout",
+            "description": "Command readiness check: a shell command string, a program and its arguments to run without a shell, or { run, timeout } object with an optional overall polling timeout",
             "oneOf": [
                 { "type": "string", "description": "Shell command that returns exit code 0 when ready" },
                 {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "minItems": 1,
+                    "description": "Program and its arguments, run without a shell, that returns exit code 0 when ready"
+                },
+                {
                     "type": "object",
                     "properties": {
-                        "run": { "type": "string", "description": "Shell command that returns exit code 0 when ready" },
+                        "run": {
+                            "description": "Command that returns exit code 0 when ready: a shell command string, or a program and its arguments to run without a shell",
+                            "oneOf": [
+                                { "type": "string" },
+                                { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+                            ]
+                        },
                         "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m')" }
                     },
                     "required": ["run"]

@@ -870,18 +870,37 @@
       ]
     },
     "ReadyCmd": {
-      "description": "Command readiness check: a shell command string, or { run, timeout } object with an optional overall polling timeout",
+      "description": "Command readiness check: a shell command string, a program and its arguments to run without a shell, or { run, timeout } object with an optional overall polling timeout",
       "oneOf": [
         {
           "description": "Shell command that returns exit code 0 when ready",
           "type": "string"
         },
         {
+          "description": "Program and its arguments, run without a shell, that returns exit code 0 when ready",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        {
           "type": "object",
           "properties": {
             "run": {
-              "description": "Shell command that returns exit code 0 when ready",
-              "type": "string"
+              "description": "Command that returns exit code 0 when ready: a shell command string, or a program and its arguments to run without a shell",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                }
+              ]
             },
             "timeout": {
               "description": "Overall readiness polling timeout (e.g. '30s', '5m')",

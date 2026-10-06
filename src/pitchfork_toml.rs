@@ -1510,6 +1510,28 @@ impl PitchforkToml {
                 }
             }
 
+            if let Some(RunCommand::Argv(argv)) = raw_daemon.ready_cmd.as_ref().map(|c| &c.run) {
+                match argv.first().map(String::as_str) {
+                    // An empty program would fail every probe, and with no
+                    // timeout the start would wait for readiness forever.
+                    None | Some("") => {
+                        return Err(ConfigParseError::EmptyReadyCmdArgv {
+                            daemon: short_name.clone(),
+                            path: path.to_path_buf(),
+                        }
+                        .into());
+                    }
+                    Some("exec") => {
+                        return Err(ConfigParseError::ExecInReadyCmdArgv {
+                            daemon: short_name.clone(),
+                            path: path.to_path_buf(),
+                        }
+                        .into());
+                    }
+                    Some(_) => {}
+                }
+            }
+
             let daemon = PitchforkTomlDaemon {
                 run: raw_daemon.run,
                 auto: raw_daemon.auto,
@@ -2692,6 +2714,119 @@ run = ["node", "my server.js", "--name=\"a b\"", "it's", "a&b", "%PATH%", "$HOME
             err.chain().any(|cause| cause
                 .to_string()
                 .contains("starts its run array with \"exec\"")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_ready_cmd_array_parses_in_both_forms() {
+        let pt = PitchforkToml::parse_str(
+            r#"
+[daemons.api]
+run = "node server.js"
+ready_cmd = ["node", "my server.js", "--name=\"a b\"", "it's", "a&b", "%PATH%", "$HOME"]
+
+[daemons.db]
+run = "postgres"
+ready_cmd = { run = ["pg_isready", "-h", "localhost"], timeout = "30s" }
+
+[daemons.cache]
+run = "redis-server"
+ready_cmd = "redis-cli ping"
+"#,
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap();
+
+        let ready = |name: &str| {
+            pt.daemons[&DaemonId::new("my-project", name)]
+                .ready_cmd
+                .clone()
+                .unwrap()
+        };
+        assert_eq!(ready("api").run, RunCommand::Argv(awkward_argv()));
+        assert_eq!(ready("api").timeout, None);
+        assert_eq!(
+            ready("db").run,
+            RunCommand::Argv(
+                ["pg_isready", "-h", "localhost"]
+                    .map(str::to_string)
+                    .to_vec()
+            )
+        );
+        assert_eq!(
+            ready("db").timeout,
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(ready("cache").run, "redis-cli ping");
+    }
+
+    #[test]
+    fn test_ready_cmd_array_write_roundtrip() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        let mut pt = PitchforkToml::new(path.clone());
+        pt.namespace = Some("test-project".to_string());
+        let short = ReadyCmd::new(awkward_argv());
+        let full = ReadyCmd {
+            run: RunCommand::Argv(
+                ["pg_isready", "-h", "localhost"]
+                    .map(str::to_string)
+                    .to_vec(),
+            ),
+            timeout: Some(std::time::Duration::from_secs(30)),
+        };
+        for (name, ready_cmd) in [("api", &short), ("db", &full)] {
+            pt.daemons.insert(
+                DaemonId::new("test-project", name),
+                PitchforkTomlDaemon {
+                    run: "true".into(),
+                    ready_cmd: Some(ready_cmd.clone()),
+                    ..PitchforkTomlDaemon::default()
+                },
+            );
+        }
+
+        pt.write().unwrap();
+
+        let parsed = PitchforkToml::read(&path).unwrap();
+        let ready = |name: &str| {
+            parsed.daemons[&DaemonId::new("test-project", name)]
+                .ready_cmd
+                .clone()
+        };
+        assert_eq!(ready("api"), Some(short));
+        assert_eq!(ready("db"), Some(full));
+    }
+
+    #[test]
+    fn test_ready_cmd_array_must_name_a_program() {
+        for ready_cmd in ["[]", "[\"\"]", "{ run = [\"\", \"-h\"] }"] {
+            let err = PitchforkToml::parse_str(
+                &format!("[daemons.api]\nrun = \"true\"\nready_cmd = {ready_cmd}\n"),
+                Path::new("/tmp/my-project/pitchfork.toml"),
+            )
+            .unwrap_err();
+            assert!(
+                err.chain().any(|cause| cause
+                    .to_string()
+                    .contains("has no program in its ready_cmd array")),
+                "unexpected error for {ready_cmd}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ready_cmd_array_rejects_exec() {
+        let err = PitchforkToml::parse_str(
+            "[daemons.api]\nrun = \"true\"\nready_cmd = { run = [\"exec\", \"pg_isready\"] }\n",
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap_err();
+        assert!(
+            err.chain().any(|cause| cause
+                .to_string()
+                .contains("starts its ready_cmd array with \"exec\"")),
             "unexpected error: {err:?}"
         );
     }
