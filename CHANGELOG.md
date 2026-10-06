@@ -8,6 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.30.0](https://github.com/jdx/pitchfork/compare/v2.29.0...v2.30.0) - 2026-10-06
+
+### Added
+
+- *(template)* defer run templates with unknown variables to mise x ([#966](https://github.com/jdx/pitchfork/pull/966))
+
+### Fixed
+
+- *(stop)* order stops by the dependencies daemons were started with ([#986](https://github.com/jdx/pitchfork/pull/986))
+- *(logs)* show the last N entries matching --jq with -n ([#985](https://github.com/jdx/pitchfork/pull/985))
+- *(wait)* follow daemons through file-watch restarts with a new restarting status ([#992](https://github.com/jdx/pitchfork/pull/992))
+- *(config)* write a new pitchfork.local.toml in the namespace pitchfork.toml declares ([#984](https://github.com/jdx/pitchfork/pull/984))
+- *(stop)* succeed with a warning when the supervisor is not running ([#991](https://github.com/jdx/pitchfork/pull/991))
+- *(supervisor)* stop a Windows daemon's whole process tree with a job object ([#980](https://github.com/jdx/pitchfork/pull/980))
+- *(hooks)* find the project of an adopted or retried daemon recorded without one ([#983](https://github.com/jdx/pitchfork/pull/983))
+- *(hooks)* read a daemon's hooks from its project when dir points elsewhere ([#981](https://github.com/jdx/pitchfork/pull/981))
+- *(logs)* keep a logfmt value's text unless it is plainly a number ([#978](https://github.com/jdx/pitchfork/pull/978))
+- *(wait)* keep waiting while a failed daemon still has retries left ([#979](https://github.com/jdx/pitchfork/pull/979))
+- *(proxy)* don't show a nested project's daemon the URL of a same-named root daemon ([#977](https://github.com/jdx/pitchfork/pull/977))
+- *(supervisor)* stop every daemon before the supervisor exits ([#973](https://github.com/jdx/pitchfork/pull/973))
+- *(watch)* treat glob characters in the project directory literally ([#974](https://github.com/jdx/pitchfork/pull/974))
+- *(config)* stop warning about the deprecated port fields pitchfork writes itself ([#976](https://github.com/jdx/pitchfork/pull/976))
+- *(config)* stop warning about the deprecated port fields pitchfork writes itself ([#970](https://github.com/jdx/pitchfork/pull/970))
+- *(config)* take a project's mise_bin only from its own files, and document how it resolves ([#972](https://github.com/jdx/pitchfork/pull/972))
+- *(cron)* give each scheduled run its full retries ([#969](https://github.com/jdx/pitchfork/pull/969))
+- *(supervisor)* use a project's mise_bin for mise = true daemons ([#968](https://github.com/jdx/pitchfork/pull/968))
+- *(supervisor)* stop applying a setting removed from the config on the next start ([#967](https://github.com/jdx/pitchfork/pull/967))
+- *(start)* start a stopped ad-hoc daemon again from its saved command ([#945](https://github.com/jdx/pitchfork/pull/945))
+- *(supervisor)* don't start a disabled daemon from cron, retries or boot_start ([#948](https://github.com/jdx/pitchfork/pull/948))
+- *(restart)* keep an ad-hoc daemon's ready check, port and retry on restart ([#943](https://github.com/jdx/pitchfork/pull/943))
+- *(supervisor)* stop autostopping a daemon once auto = stop is removed ([#964](https://github.com/jdx/pitchfork/pull/964))
+- *(cron)* don't put a config schedule on an ad-hoc run of the same id ([#935](https://github.com/jdx/pitchfork/pull/935))
+- *(config)* resolve a daemon name to the local daemon before another project's slug ([#962](https://github.com/jdx/pitchfork/pull/962))
+- *(deps)* declare the MSRV the dependencies need ([#960](https://github.com/jdx/pitchfork/pull/960))
+- *(stop)* stop a daemon with a very large stop_signal timeout without panicking ([#938](https://github.com/jdx/pitchfork/pull/938))
+
+### Other
+
+- *(deps)* lock file maintenance ([#994](https://github.com/jdx/pitchfork/pull/994))
+- *(proxy)* stop the DNS test port helper failing on Windows port exclusions ([#982](https://github.com/jdx/pitchfork/pull/982))
+- *(supervisor)* build the TLS settings for ready and health checks once ([#946](https://github.com/jdx/pitchfork/pull/946))
+- end miette bail! calls with a semicolon so clippy passes on Rust 1.99 ([#963](https://github.com/jdx/pitchfork/pull/963))
+
 ## [2.29.0](https://github.com/jdx/pitchfork/compare/v2.28.0...v2.29.0) - 2026-09-29
 
 ### Added
