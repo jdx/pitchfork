@@ -95,9 +95,22 @@ mod imp {
     /// `auto-launcher` does not emit (the macOS counterpart of systemd's
     /// `Restart=on-failure`).
     fn write_registration(launcher: &AutoLaunch) -> Result<()> {
+        // `enable` writes the plist anew, so a restart policy the user set on
+        // the registration is read first and put back afterwards.
+        #[cfg(target_os = "macos")]
+        let path = current_plist_path()?;
+        #[cfg(target_os = "macos")]
+        let previous = match std::fs::read(&path) {
+            Ok(previous) => Some(previous),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                warn!("cannot read the existing launchd plist to keep its restart policy: {e}");
+                None
+            }
+        };
         launcher.enable().into_diagnostic()?;
         #[cfg(target_os = "macos")]
-        add_keep_alive(&current_plist_path()?)?;
+        add_keep_alive(&path, previous.as_deref())?;
         Ok(())
     }
 
@@ -113,10 +126,21 @@ mod imp {
     }
 
     #[cfg(target_os = "macos")]
-    fn add_keep_alive(path: &std::path::Path) -> Result<()> {
-        let contents = std::fs::read(path).into_diagnostic()?;
+    fn add_keep_alive(path: &std::path::Path, previous: Option<&[u8]>) -> Result<()> {
+        let mut contents = std::fs::read(path).into_diagnostic()?;
+        let mut changed = false;
+        if let Some(restored) =
+            previous.and_then(|p| super::launchd_with_restart_policy_of(&contents, p))
+        {
+            contents = restored;
+            changed = true;
+        }
         if let Some(updated) = super::launchd_with_keep_alive(&contents) {
-            std::fs::write(path, updated).into_diagnostic()?;
+            contents = updated;
+            changed = true;
+        }
+        if changed {
+            std::fs::write(path, contents).into_diagnostic()?;
         }
         Ok(())
     }
@@ -683,28 +707,61 @@ fn launchd_program_arguments(plist: &[u8]) -> Option<Vec<String>> {
         .collect()
 }
 
+/// The launchd keys that make up a registration's restart policy.
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+const LAUNCHD_RESTART_KEYS: [&str; 2] = ["KeepAlive", "ThrottleInterval"];
+
+/// `plist` with the restart policy (`KeepAlive`, `ThrottleInterval`) of
+/// `previous`, the registration it replaces, or `None` when `previous` has
+/// none to carry over (or either cannot be parsed). Rewriting a registration,
+/// as repairing a stale executable path does, must not drop a policy the user
+/// set on it.
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+fn launchd_with_restart_policy_of(plist: &[u8], previous: &[u8]) -> Option<Vec<u8>> {
+    let previous = plist::Value::from_reader(std::io::Cursor::new(previous)).ok()?;
+    let previous = previous.as_dictionary()?;
+    let mut value = plist::Value::from_reader(std::io::Cursor::new(plist)).ok()?;
+    let dict = value.as_dictionary_mut()?;
+    let mut changed = false;
+    for key in LAUNCHD_RESTART_KEYS {
+        if let Some(policy) = previous.get(key)
+            && dict.get(key) != Some(policy)
+        {
+            dict.insert(key.into(), policy.clone());
+            changed = true;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let mut out = Vec::new();
+    plist::to_writer_xml(&mut out, &value).ok()?;
+    Some(out)
+}
+
 /// `plist` with launchd's crash-restart keys added, or `None` when it already
-/// has them (or cannot be parsed). `SuccessfulExit = false` restarts the
-/// supervisor after a crash or SIGKILL but not after a clean exit, so
+/// has a `KeepAlive` (or cannot be parsed). `SuccessfulExit = false` restarts
+/// the supervisor after a crash or SIGKILL but not after a clean exit, so
 /// `pitchfork supervisor stop` and `launchctl bootout` still stay stopped. The
 /// 10s throttle matches the systemd unit's `RestartSec=10`.
+///
+/// Only a plist with no `KeepAlive` at all gets them: one written before
+/// crash-restart was added. A `KeepAlive` of any other value, like a
+/// `ThrottleInterval` already there, is local launchd policy the user set on
+/// the registration, and is kept.
 #[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
 fn launchd_with_keep_alive(plist: &[u8]) -> Option<Vec<u8>> {
     let mut value = plist::Value::from_reader(std::io::Cursor::new(plist)).ok()?;
     let dict = value.as_dictionary_mut()?;
-    let mut keep_alive = plist::Dictionary::new();
-    keep_alive.insert("SuccessfulExit".into(), plist::Value::Boolean(false));
-    let keep_alive = plist::Value::Dictionary(keep_alive);
-    if dict.get("KeepAlive") == Some(&keep_alive)
-        && dict
-            .get("ThrottleInterval")
-            .and_then(|v| v.as_signed_integer())
-            == Some(10)
-    {
+    if dict.contains_key("KeepAlive") {
         return None;
     }
-    dict.insert("KeepAlive".into(), keep_alive);
-    dict.insert("ThrottleInterval".into(), plist::Value::Integer(10.into()));
+    let mut keep_alive = plist::Dictionary::new();
+    keep_alive.insert("SuccessfulExit".into(), plist::Value::Boolean(false));
+    dict.insert("KeepAlive".into(), plist::Value::Dictionary(keep_alive));
+    if !dict.contains_key("ThrottleInterval") {
+        dict.insert("ThrottleInterval".into(), plist::Value::Integer(10.into()));
+    }
     let mut out = Vec::new();
     plist::to_writer_xml(&mut out, &value).ok()?;
     Some(out)
@@ -713,7 +770,10 @@ fn launchd_with_keep_alive(plist: &[u8]) -> Option<Vec<u8>> {
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::imp::service_args;
-    use super::{launchd_program_arguments, launchd_with_keep_alive, systemd_exec_start};
+    use super::{
+        launchd_program_arguments, launchd_with_keep_alive, launchd_with_restart_policy_of,
+        systemd_exec_start,
+    };
     use crate::env::invoking_user_arg;
 
     fn argv(args: Option<Vec<String>>) -> Vec<std::ffi::OsString> {
@@ -813,5 +873,83 @@ mod tests {
         assert_eq!(launchd_program_arguments(&updated).unwrap().len(), 2);
         assert_eq!(launchd_with_keep_alive(&updated), None);
         assert_eq!(launchd_with_keep_alive(b"not a plist"), None);
+    }
+
+    /// A rewritten registration, as `auto-launcher` writes it, takes back
+    /// the restart policy of the one it replaces, and then needs no default.
+    #[test]
+    fn launchd_rewrite_keeps_the_previous_restart_policy() {
+        let rewritten = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>pitchfork</string>
+    <key>ProgramArguments</key><array><string>/new/pitchfork</string></array>
+</dict>
+</plist>"#;
+        let previous = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>pitchfork</string>
+    <key>ProgramArguments</key><array><string>/old/pitchfork</string></array>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>30</integer>
+</dict>
+</plist>"#;
+        let restored = launchd_with_restart_policy_of(rewritten, previous).unwrap();
+        let value = plist::Value::from_reader(std::io::Cursor::new(&restored)).unwrap();
+        let dict = value.as_dictionary().unwrap();
+        assert_eq!(dict.get("KeepAlive").unwrap().as_boolean(), Some(true));
+        assert_eq!(
+            dict.get("ThrottleInterval").unwrap().as_signed_integer(),
+            Some(30)
+        );
+        assert_eq!(
+            launchd_program_arguments(&restored).unwrap(),
+            vec!["/new/pitchfork".to_string()]
+        );
+        assert_eq!(launchd_with_keep_alive(&restored), None);
+
+        // A previous registration with no policy leaves the defaults to come.
+        let no_policy = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>Label</key><string>pitchfork</string></dict></plist>"#;
+        assert_eq!(launchd_with_restart_policy_of(rewritten, no_policy), None);
+        assert_eq!(
+            launchd_with_restart_policy_of(rewritten, b"not a plist"),
+            None
+        );
+        assert!(launchd_with_keep_alive(rewritten).is_some());
+    }
+
+    /// A `KeepAlive` the user set on the registration is their launchd
+    /// policy, not a registration from before crash-restart was added.
+    #[test]
+    fn launchd_plist_keeps_a_local_keep_alive_policy() {
+        let plist = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>pitchfork</string>
+    <key>ProgramArguments</key><array><string>/bin/pitchfork</string><string>supervisor</string></array>
+    <key>KeepAlive</key><true/>
+    <key>ExitTimeOut</key><integer>240</integer>
+</dict>
+</plist>"#;
+        assert_eq!(launchd_with_keep_alive(plist), None);
+
+        // Without a KeepAlive, a ThrottleInterval already there is kept too.
+        let plist = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>pitchfork</string>
+    <key>ThrottleInterval</key><integer>30</integer>
+</dict>
+</plist>"#;
+        let updated = launchd_with_keep_alive(plist).unwrap();
+        let value = plist::Value::from_reader(std::io::Cursor::new(&updated)).unwrap();
+        let dict = value.as_dictionary().unwrap();
+        assert!(dict.get("KeepAlive").unwrap().as_dictionary().is_some());
+        assert_eq!(
+            dict.get("ThrottleInterval").unwrap().as_signed_integer(),
+            Some(30)
+        );
     }
 }
