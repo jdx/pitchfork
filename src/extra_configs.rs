@@ -33,7 +33,10 @@ struct Cache {
     entries: Vec<Entry>,
     /// Registered labels keyed by the primary checkout they name, built from
     /// `entries` on first use so a hostname lookup never walks the filesystem.
-    label_index: Option<std::collections::HashMap<PathBuf, String>>,
+    label_index: Option<(
+        std::time::Instant,
+        std::collections::HashMap<PathBuf, String>,
+    )>,
 }
 static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| Mutex::new(Cache::default()));
 
@@ -207,6 +210,11 @@ pub fn namespace_for_dir(dir: &Path) -> Option<String> {
         .map(|e| e.namespace)
 }
 
+/// How long a built label index answers lookups. Long enough that one hostname
+/// pass over every daemon reads the filesystem once, short enough that a moved
+/// checkout is picked up without a registry change.
+const LABEL_INDEX_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The hostname label a registration names for the project whose primary
 /// checkout is `primary`.
 ///
@@ -227,14 +235,22 @@ pub fn label_for_checkout(primary: &Path) -> Option<String> {
         label_index,
         ..
     } = &mut *cache;
-    label_index
-        .get_or_insert_with(|| {
+    // The index records where Git pointers led, which moving a checkout changes
+    // without touching the registry, so it only serves lookups for a moment.
+    if label_index
+        .as_ref()
+        .is_none_or(|(built, _)| built.elapsed() > LABEL_INDEX_TTL)
+    {
+        *label_index = Some((
+            std::time::Instant::now(),
             label_index_of(entries, |dir| {
                 crate::proxy::hostname::detect_checkout(dir).primary
-            })
-        })
-        .get(&normalize(primary))
-        .cloned()
+            }),
+        ));
+    }
+    label_index
+        .as_ref()
+        .and_then(|(_, index)| index.get(&normalize(primary)).cloned())
 }
 
 /// Every registered label, keyed by the primary checkout it names.
