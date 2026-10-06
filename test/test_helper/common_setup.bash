@@ -103,6 +103,9 @@ _common_setup() {
   if [[ -n "$_SETUP_SUPERVISOR_PID" ]]; then
     _SETUP_SUPERVISOR_IDENTITY="$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")"
   fi
+  # On Windows the identity comes from the state file instead, read now in
+  # case the test rewrites it (see `_stop_leaked_supervisors_windows`).
+  _SETUP_SUPERVISOR_START="$(_recorded_supervisor_start_time)"
 }
 
 # Print an identity token for $1 if it is a `pitchfork supervisor run` process
@@ -145,16 +148,25 @@ _recorded_supervisor_pid() {
     sed -E 's/.*= //'
 }
 
+# The supervisor's start time recorded in the state file, or nothing. On Windows
+# it is the process creation time as a FILETIME, as `start_time` records it.
+_recorded_supervisor_start_time() {
+  grep -A 10 '^\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" 2>/dev/null |
+    grep -E '^start_time = [0-9]+$' |
+    head -1 |
+    sed -E 's/.*= //'
+}
+
 # Stop any supervisor from this test that `pitchfork supervisor stop` missed.
 # Candidates are the supervisor started in setup and any supervisor whose
 # environment points at this test's state directory (for example one a CLI
 # command auto-started). Each candidate is bound to its identity (PID plus
 # start time) when it is found, and is only signalled while that identity still
 # matches, so a PID reused by another test's supervisor is never touched.
-# Unix only: Windows PIDs are handled by taskkill, and the Windows supervisor is
-# spawned without inheriting handles, so it cannot hold bats' pipes open.
+# On Windows, see `_stop_leaked_supervisors_windows`.
 _stop_leaked_supervisors() {
   if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    _stop_leaked_supervisors_windows
     return 0
   fi
   local -a ids=()
@@ -180,6 +192,36 @@ _stop_leaked_supervisors() {
     sleep 0.1
   done
   _signal_supervisors KILL "${ids[@]}" || true
+}
+
+# The Windows counterpart of `_stop_leaked_supervisors`. `ps` does not see the
+# Windows PIDs pitchfork records, so the candidates are the supervisor started
+# in setup and the one the state file records now, each with the start time the
+# state file gave it. A candidate is stopped, with its whole tree (the daemons
+# and log sinks it started), only while a pitchfork process with that PID was
+# created at that exact time, so a PID reused by another test is never touched.
+# `tasklist` checks the PID cheaply first; PowerShell reads the creation time
+# only when a pitchfork process holds it.
+_stop_leaked_supervisors_windows() {
+  local -A seen=()
+  local pid start
+  local -a candidates=(
+    "${_SETUP_SUPERVISOR_PID:-}:${_SETUP_SUPERVISOR_START:-}"
+    "$(_recorded_supervisor_pid):$(_recorded_supervisor_start_time)"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    pid="${candidate%%:*}"
+    start="${candidate#*:}"
+    [[ -n "$pid" && -n "$start" && -z "${seen[$candidate]:-}" ]] || continue
+    seen[$candidate]=1
+    tasklist //FI "PID eq $pid" //NH 2>/dev/null | grep -qi "pitchfork" || continue
+    powershell -NoProfile -Command \
+      "\$p = Get-Process -Id $pid -ErrorAction SilentlyContinue; if (\$p -and \$p.StartTime.ToFileTimeUtc() -eq $start) { exit 0 } else { exit 1 }" \
+      2>/dev/null || continue
+    echo "# stopping leftover supervisor: $pid" >&3
+    taskkill //F //T //PID "$pid" >/dev/null 2>&1 || true
+  done
 }
 
 # Send signal $1 to each identity in $2.. whose process still matches it.
