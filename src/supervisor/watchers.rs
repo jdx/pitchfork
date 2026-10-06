@@ -779,16 +779,7 @@ impl Supervisor {
     /// Also removes stale `config_registered` entries for daemons whose cron
     /// config has been removed, so they stop firing.
     async fn register_config_cron_daemons(&self) -> Result<()> {
-        // Reading the config of every known project walks the filesystem and
-        // can start git or jj to find worktrees, so it runs on a blocking
-        // worker rather than holding up the async runtime every cron check.
-        let config =
-            match tokio::task::spawn_blocking(PitchforkToml::all_merged_all_namespaces).await {
-                Ok(config) => config?,
-                Err(e) => {
-                    miette::bail!("reading config for the cron check panicked: {e}");
-                }
-            };
+        let config = PitchforkToml::all_merged_all_namespaces().await?;
 
         let config_cron_ids: HashSet<&DaemonId> = config
             .daemons
@@ -1002,7 +993,7 @@ impl Supervisor {
                                     }
                                 };
                                 let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-                                let mut opts = daemon.to_run_options(cmd);
+                                let mut opts = daemon.to_run_options(cmd).await;
                                 opts.dir = crate::config_types::Dir(dir);
                                 opts
                             }
@@ -1052,16 +1043,9 @@ impl Supervisor {
         if !daemon.scheduled_from_config {
             return None;
         }
-        // Reading config walks the filesystem, so it runs on a blocking
-        // worker rather than holding up the other daemons' cron checks.
-        let pt = match tokio::task::spawn_blocking(PitchforkToml::all_merged_all_namespaces).await {
-            Ok(Ok(pt)) => pt,
-            Ok(Err(e)) => return Some(Err(e)),
-            Err(e) => {
-                return Some(Err(miette::miette!(
-                    "reading config for cron daemon {id} panicked: {e}"
-                )));
-            }
+        let pt = match PitchforkToml::all_merged_all_namespaces().await {
+            Ok(pt) => pt,
+            Err(e) => return Some(Err(e)),
         };
         let Some(config) = pt.daemons.get(id).filter(|d| d.cron.is_some()) else {
             return Some(Err(miette::miette!(
@@ -1109,7 +1093,7 @@ impl Supervisor {
         // Reading config walks the filesystem, so it runs on a blocking worker
         // rather than holding up the watcher.
         let found = match tokio::task::spawn_blocking(move || {
-            let all = PitchforkToml::all_merged_all_namespaces().ok();
+            let all = PitchforkToml::all_merged_all_namespaces_blocking().ok();
             daemons
                 .into_iter()
                 .map(|(id, project_dir, dir, stored)| {
@@ -1188,8 +1172,8 @@ impl Supervisor {
 
     /// Watch files for daemons that have `watch` patterns configured.
     /// When a watched file changes, the daemon is automatically restarted.
-    pub(crate) fn daemon_file_watch(&self) -> Result<()> {
-        let pt = PitchforkToml::all_merged_all_namespaces()?;
+    pub(crate) async fn daemon_file_watch(&self) -> Result<()> {
+        let pt = PitchforkToml::all_merged_all_namespaces().await?;
 
         // Collect all daemons with watch patterns and their base directories
         let watch_configs: Vec<WatchConfig> = pt
@@ -1610,7 +1594,7 @@ impl Supervisor {
         }
 
         // Restart the daemon
-        let mut run_opts = daemon.to_run_options(cmd);
+        let mut run_opts = daemon.to_run_options(cmd).await;
         run_opts.force = true;
         run_opts.retry_count = 0;
         run_opts.wait_ready = false; // Don't block on file-triggered restarts

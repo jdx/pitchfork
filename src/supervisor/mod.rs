@@ -855,7 +855,7 @@ impl Supervisor {
 
         self.cron_watch()?;
         self.signals()?;
-        self.daemon_file_watch()?;
+        self.daemon_file_watch().await?;
 
         // In container mode, install SIGCHLD handler to reap orphaned/zombie processes
         #[cfg(unix)]
@@ -1820,10 +1820,17 @@ impl Supervisor {
         // sum of the slowest stop per level. If an external manager (docker,
         // systemd) kills us before this completes, cleanup_orphaned_daemons()
         // recovers the leftover processes and stale state on the next start.
-        let stop_levels = {
-            let state = self.state_file.lock().await;
-            reverse_stop_order(&active_ids, &state.daemons)
-        };
+        let daemons = self.state_file.lock().await.daemons.clone();
+        let ids = active_ids.clone();
+        let stop_levels =
+            match tokio::task::spawn_blocking(move || reverse_stop_order(&ids, &daemons)).await {
+                Ok(levels) => levels,
+                // Stopping everything at once still stops everything.
+                Err(e) => {
+                    error!("computing the shutdown order panicked: {e}");
+                    vec![active_ids.clone()]
+                }
+            };
         for level in &stop_levels {
             let mut tasks = Vec::new();
             for id in level {

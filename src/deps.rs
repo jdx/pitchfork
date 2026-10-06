@@ -163,6 +163,9 @@ pub fn resolve_dependencies(
 /// visible from the current directory need not include the daemons' own
 /// projects. Falls back to a single level containing all IDs if the state
 /// file cannot be read.
+///
+/// Reads the state file and possibly config, so an async caller runs it on a
+/// blocking worker.
 pub fn compute_reverse_stop_order(active_ids: &[DaemonId]) -> Vec<Vec<DaemonId>> {
     if active_ids.is_empty() {
         return Vec::new();
@@ -189,6 +192,9 @@ pub fn compute_reverse_stop_order(active_ids: &[DaemonId]) -> Vec<Vec<DaemonId>>
 /// project, since a daemon can depend on one in another namespace. One found
 /// in neither depends on nothing. Daemons left in a dependency cycle, and what they depend on,
 /// are stopped together in the last level.
+///
+/// Looking a daemon up reads config, so an async caller runs this on a
+/// blocking worker.
 pub fn reverse_stop_order(
     active_ids: &[DaemonId],
     daemons: &BTreeMap<DaemonId, Daemon>,
@@ -197,7 +203,7 @@ pub fn reverse_stop_order(
     reverse_stop_order_with(active_ids, daemons, &mut |project, id| {
         configs
             .entry(project.to_path_buf())
-            .or_insert_with(|| PitchforkToml::all_merged_all_namespaces_from(project).ok())
+            .or_insert_with(|| PitchforkToml::all_merged_all_namespaces_from_blocking(project).ok())
             .as_ref()
             .and_then(|pt| pt.daemons.get(id))
             .map(|d| d.depends.clone())

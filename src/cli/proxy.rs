@@ -555,7 +555,7 @@ impl ProxyStatus {
         };
 
         let slugs = PitchforkToml::read_global_slugs();
-        let config = PitchforkToml::all_merged_all_namespaces().ok();
+        let config = PitchforkToml::all_merged_all_namespaces().await.ok();
         let state_file =
             crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE).ok();
         let standard_port = if s.proxy.https { 443u16 } else { 80u16 };

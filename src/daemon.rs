@@ -392,24 +392,32 @@ impl Daemon {
     ///
     /// Carries over all configuration fields from the daemon state.
     /// Callers can override specific fields on the returned value.
-    pub fn to_run_options(&self, cmd: Vec<String>) -> RunOptions {
+    pub async fn to_run_options(&self, cmd: Vec<String>) -> RunOptions {
         // Re-read on_output_hook from fresh config so restarts (retry, watch,
         // cron) always pick up the current hook configuration.
         // Read it from the daemon's project directory, which need not be in
         // the supervisor's cwd ancestry (e.g. daemons started via slugs), nor
         // contain the daemon's working directory when `dir` points elsewhere.
-        let on_output_hook = self
-            .watch_base_dir
-            .as_deref()
-            .or(self.dir.as_deref())
-            .and_then(|dir| crate::pitchfork_toml::PitchforkToml::all_merged_from(dir).ok())
-            .or_else(|| crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces().ok())
-            .and_then(|pt| {
-                pt.daemons
-                    .get(&self.id)
-                    .and_then(|d| d.hooks.as_ref())
-                    .and_then(|h| h.on_output.clone())
-            });
+        // Reading config walks the filesystem, so it runs on a blocking worker.
+        let id = self.id.clone();
+        let project_dir = self.watch_base_dir.clone().or_else(|| self.dir.clone());
+        let on_output_hook = tokio::task::spawn_blocking(move || {
+            project_dir
+                .as_deref()
+                .and_then(|dir| crate::pitchfork_toml::PitchforkToml::all_merged_from(dir).ok())
+                .or_else(|| {
+                    crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_blocking().ok()
+                })
+                .and_then(|pt| {
+                    pt.daemons
+                        .get(&id)
+                        .and_then(|d| d.hooks.as_ref())
+                        .and_then(|h| h.on_output.clone())
+                })
+        })
+        .await
+        .ok()
+        .flatten();
 
         RunOptions {
             id: self.id.clone(),
@@ -500,13 +508,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_restart_from_the_saved_record_keeps_the_deferred_template_context() {
+    #[tokio::test]
+    async fn a_restart_from_the_saved_record_keeps_the_deferred_template_context() {
         let daemon = Daemon {
             deferred_template_context: Some("{\"name\":\"api\"}".to_string()),
             ..Daemon::default()
         };
-        let opts = daemon.to_run_options(vec!["echo".to_string()]);
+        let opts = daemon.to_run_options(vec!["echo".to_string()]).await;
         assert_eq!(
             opts.deferred_template_context.as_deref(),
             Some("{\"name\":\"api\"}")

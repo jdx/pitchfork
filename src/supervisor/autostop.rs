@@ -256,7 +256,7 @@ impl Supervisor {
     /// Start daemons configured with `boot_start = true`
     pub(crate) async fn start_boot_daemons(&self) -> Result<()> {
         info!("Scanning for boot_start daemons");
-        let pt = PitchforkToml::all_merged_all_namespaces()?;
+        let pt = PitchforkToml::all_merged_all_namespaces().await?;
         let disabled = self.state_file.lock().await.disabled.clone();
 
         let boot_daemons: Vec<_> = pt

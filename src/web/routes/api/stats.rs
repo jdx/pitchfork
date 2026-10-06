@@ -21,7 +21,7 @@ pub async fn stats() -> Json<ApiStats> {
         Err(_) => StateFile::new(env::PITCHFORK_STATE_FILE.clone()),
     };
 
-    let pt = match PitchforkToml::all_merged_all_namespaces() {
+    let pt = match PitchforkToml::all_merged_all_namespaces().await {
         Ok(pt) => pt,
         Err(_) => {
             return Json(ApiStats {

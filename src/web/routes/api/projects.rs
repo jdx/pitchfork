@@ -904,7 +904,7 @@ fn config_entries_blocking(
 ) -> (Vec<(String, ApiDaemonEntry)>, Resolvable) {
     // The same view the supervisor's start path builds, so "resolvable" here
     // means exactly "a start request would find a config".
-    let merged = PitchforkToml::all_merged_all_namespaces()
+    let merged = PitchforkToml::all_merged_all_namespaces_blocking()
         .inspect_err(|e| log::warn!("Failed to load merged config: {e}"))
         .ok();
     let resolvable: Resolvable = merged
