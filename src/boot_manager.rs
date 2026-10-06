@@ -100,7 +100,14 @@ mod imp {
         #[cfg(target_os = "macos")]
         let path = current_plist_path()?;
         #[cfg(target_os = "macos")]
-        let previous = std::fs::read(&path).ok();
+        let previous = match std::fs::read(&path) {
+            Ok(previous) => Some(previous),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                warn!("cannot read the existing launchd plist to keep its restart policy: {e}");
+                None
+            }
+        };
         launcher.enable().into_diagnostic()?;
         #[cfg(target_os = "macos")]
         add_keep_alive(&path, previous.as_deref())?;
@@ -121,14 +128,19 @@ mod imp {
     #[cfg(target_os = "macos")]
     fn add_keep_alive(path: &std::path::Path, previous: Option<&[u8]>) -> Result<()> {
         let mut contents = std::fs::read(path).into_diagnostic()?;
+        let mut changed = false;
         if let Some(restored) =
             previous.and_then(|p| super::launchd_with_restart_policy_of(&contents, p))
         {
             contents = restored;
-            std::fs::write(path, &contents).into_diagnostic()?;
+            changed = true;
         }
         if let Some(updated) = super::launchd_with_keep_alive(&contents) {
-            std::fs::write(path, updated).into_diagnostic()?;
+            contents = updated;
+            changed = true;
+        }
+        if changed {
+            std::fs::write(path, contents).into_diagnostic()?;
         }
         Ok(())
     }
