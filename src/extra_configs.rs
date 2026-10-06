@@ -31,6 +31,9 @@ struct Cache {
     initialized: bool,
     meta: Option<(SystemTime, u64)>,
     entries: Vec<Entry>,
+    /// Registered labels keyed by the primary checkout they name, built from
+    /// `entries` on first use so a hostname lookup never walks the filesystem.
+    label_index: Option<std::collections::HashMap<PathBuf, String>>,
 }
 static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| Mutex::new(Cache::default()));
 
@@ -108,6 +111,7 @@ pub fn entries() -> Vec<Entry> {
         };
         cache.meta = meta;
         cache.initialized = true;
+        cache.label_index = None;
     }
     let mut entries = cache.entries.clone();
     drop(cache);
@@ -215,31 +219,55 @@ pub fn namespace_for_dir(dir: &Path) -> Option<String> {
 /// runs in, which is often a worktree, and the project's hostnames must not
 /// change depending on which checkout registered first.
 pub fn label_for_checkout(primary: &Path) -> Option<String> {
-    pick_checkout_label(&entries(), primary, |dir| {
-        crate::proxy::hostname::detect_checkout(dir).primary
-    })
+    // Refreshes the cache, and drops the index with it, when the registry changed.
+    drop(entries());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let Cache {
+        entries,
+        label_index,
+        ..
+    } = &mut *cache;
+    label_index
+        .get_or_insert_with(|| {
+            label_index_of(entries, |dir| {
+                crate::proxy::hostname::detect_checkout(dir).primary
+            })
+        })
+        .get(&normalize(primary))
+        .cloned()
 }
 
-fn pick_checkout_label(
+/// Every registered label, keyed by the primary checkout it names.
+///
+/// A registration made from the primary itself wins over one made from a linked
+/// worktree, and among worktrees the lowest path wins, so the result never
+/// depends on registry order.
+fn label_index_of(
     entries: &[Entry],
-    primary: &Path,
     primary_of: impl Fn(&Path) -> PathBuf,
-) -> Option<String> {
-    let primary = normalize(primary);
-    let labelled = || {
-        entries
-            .iter()
-            .filter(|e| e.source == "registry" && e.label.is_some())
-    };
-    labelled()
-        .find(|e| e.dir == primary)
-        .or_else(|| {
-            // Lowest path first, so the choice never depends on registry order.
-            labelled()
-                .filter(|e| primary_of(&e.dir) == primary)
-                .min_by(|a, b| a.dir.cmp(&b.dir))
-        })
-        .and_then(|e| e.label.clone())
+) -> std::collections::HashMap<PathBuf, String> {
+    let mut chosen: std::collections::HashMap<PathBuf, (bool, &Path, &str)> = Default::default();
+    for entry in entries {
+        let Some(label) = entry
+            .label
+            .as_deref()
+            .filter(|_| entry.source == "registry")
+        else {
+            continue;
+        };
+        let primary = primary_of(&entry.dir);
+        let candidate = (entry.dir != primary, entry.dir.as_path(), label);
+        match chosen.get(&primary) {
+            Some(best) if (best.0, best.1) <= (candidate.0, candidate.1) => {}
+            _ => {
+                chosen.insert(primary, candidate);
+            }
+        }
+    }
+    chosen
+        .into_iter()
+        .map(|(primary, (_, _, label))| (primary, label.to_string()))
+        .collect()
 }
 
 /// Mutate under the same lock as the existing namespace and slug writers.
@@ -441,9 +469,11 @@ mod tests {
     }
 
     fn pick(entries: &[Entry], primary: &Path) -> Option<String> {
-        pick_checkout_label(entries, primary, |dir| {
+        label_index_of(entries, |dir| {
             crate::proxy::hostname::detect_checkout(dir).primary
         })
+        .get(&normalize(primary))
+        .cloned()
     }
 
     #[test]
