@@ -207,19 +207,18 @@ mod tests {
     #[test]
     fn terminating_the_job_ends_a_child_whose_parent_has_exited() {
         // cmd starts a ping and exits at once, leaving the ping without a
-        // parent, the case walking the tree misses. The first ping only delays
-        // that, so the job is in place before the orphan starts.
+        // parent, the case walking the tree misses. It waits for a line on
+        // stdin first, sent once the job is in place, so the orphan cannot
+        // start outside it however long that takes.
         let mut cmd = tokio::process::Command::new("cmd");
-        cmd.args([
-            "/c",
-            "ping -n 2 127.0.0.1 >nul & start /b ping -n 30 127.0.0.1",
-        ]);
+        cmd.args(["/c", "set /p go= & start /b ping -n 30 127.0.0.1"]);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         rt.block_on(async {
             let mut child = cmd
+                .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
@@ -231,6 +230,11 @@ mod tests {
             let name = job_name(pid, process).unwrap();
             let query = OwnedHandle(unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) });
             assert!(!query.0.is_null());
+            let mut stdin = child.stdin.take().unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut stdin, b"go\r\n")
+                .await
+                .unwrap();
+            drop(stdin);
             child.wait().await.unwrap();
 
             // cmd has exited; the ping it started is still in the job.
