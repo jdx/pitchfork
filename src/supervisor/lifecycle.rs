@@ -1298,10 +1298,6 @@ impl Supervisor {
             None => cmd.args(&args),
         };
         cmd.current_dir(&opts.dir).hide_console_window();
-        // Suspended until it is in a job of its own, so its whole process
-        // tree can be stopped; see `win_job`.
-        #[cfg(windows)]
-        crate::win_job::start_suspended(&mut cmd);
 
         #[cfg(unix)]
         if pty_pair.is_none() {
@@ -1368,17 +1364,11 @@ impl Supervisor {
         // consistently fails to spawn would otherwise accumulate sinks.
         // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
+        // In a job of its own, so its whole process tree can be stopped; see
+        // `win_job`.
         #[cfg(windows)]
-        if let (Some(pid), Some(process)) = (child.id(), child.raw_handle())
-            && let Err(e) = crate::win_job::contain_and_resume(process as _, pid)
-        {
-            // A daemon left suspended never runs, yet its PID exists: reported
-            // as started, a delay-only ready check would even call it ready.
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            return Err(miette::miette!(
-                "failed to resume daemon {id} (pid {pid}) after starting it suspended: {e}"
-            ));
+        if let (Some(pid), Some(process)) = (child.id(), child.raw_handle()) {
+            crate::win_job::contain_spawned(process as _, pid);
         }
         let spawned_pid = child.id();
         // Register the daemon as monitored BEFORE persisting the Running

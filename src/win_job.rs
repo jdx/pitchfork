@@ -8,8 +8,12 @@
 //! daemon starts joins its job, whatever becomes of its parent, and
 //! terminating the job ends them all at once.
 //!
-//! The daemon is started suspended and assigned to the job before it runs, so
-//! nothing it starts can escape by starting first. The job allows breakaway:
+//! The daemon is put in its job right after it is spawned. Starting it
+//! suspended until then would close the instant in which it could start a
+//! child outside the job, but a supervisor killed in that instant would leave
+//! the daemon suspended for good, never running yet holding its output pipe
+//! open. A child started in that instant is still stopped through the tree
+//! walk while its parent is alive. The job allows breakaway:
 //! a program that starts a child with `CREATE_BREAKAWAY_FROM_JOB` would
 //! otherwise fail to start it, so such a child leaves the job and is not
 //! stopped with the daemon.
@@ -24,18 +28,13 @@
 use windows_sys::Win32::Foundation::{
     CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
-};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation, OpenJobObjectW,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
-use windows_sys::Win32::System::Threading::{
-    CREATE_SUSPENDED, GetCurrentProcess, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
-};
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 /// `JOB_OBJECT_TERMINATE`, the access right `TerminateJobObject` needs. It lives
 /// in windows-sys' `SystemServices`, too large a feature for one constant.
@@ -47,29 +46,18 @@ const JOB_OBJECT_QUERY: u32 = 0x0004;
 /// The exit code a process ended by its job's termination reports.
 const TERMINATED_EXIT_CODE: u32 = 1;
 
-/// Make `cmd` start its process suspended, for [`contain_and_resume`] to put
-/// in a job before it runs.
-///
-/// Replaces the command's creation flags, so it is called after
-/// `hide_console_window`, whose flag it keeps.
-pub(crate) fn start_suspended(cmd: &mut tokio::process::Command) {
-    cmd.creation_flags(crate::shell::console_creation_flags() | CREATE_SUSPENDED);
-}
-
-/// Put the suspended process `pid`, whose handle is `process`, in a job of its
-/// own, then let it run.
+/// Put the just-spawned process `pid`, whose handle is `process`, in a job of
+/// its own.
 ///
 /// A process that could not be put in a job still runs, with a warning, and
-/// is stopped by walking its tree as before. One that could not be resumed
-/// never runs, so that is an error: the caller must not report it started.
-pub(crate) fn contain_and_resume(process: HANDLE, pid: u32) -> std::io::Result<()> {
+/// is stopped by walking its tree as before.
+pub(crate) fn contain_spawned(process: HANDLE, pid: u32) {
     if let Err(e) = contain(process, pid) {
         warn!(
             "daemon process {pid} runs without a job object, so a process it starts whose \
              parent has exited will not be stopped with it: {e}"
         );
     }
-    resume(pid)
 }
 
 fn contain(process: HANDLE, pid: u32) -> std::io::Result<()> {
@@ -110,40 +98,6 @@ fn contain(process: HANDLE, pid: u32) -> std::io::Result<()> {
     };
     if ok == 0 {
         return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Resume every thread of the suspended process `pid`: its main thread, the
-/// only one a process started suspended has.
-fn resume(pid: u32) -> std::io::Result<()> {
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
-    }
-    let snapshot = OwnedHandle(snapshot);
-    let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-    entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
-    let mut resumed = 0;
-    let mut more = unsafe { Thread32First(snapshot.0, &mut entry) } != 0;
-    while more {
-        if entry.th32OwnerProcessID == pid {
-            let thread =
-                OwnedHandle(unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) });
-            if thread.0.is_null() {
-                return Err(std::io::Error::last_os_error());
-            }
-            if unsafe { ResumeThread(thread.0) } == u32::MAX {
-                return Err(std::io::Error::last_os_error());
-            }
-            resumed += 1;
-        }
-        more = unsafe { Thread32Next(snapshot.0, &mut entry) } != 0;
-    }
-    if resumed == 0 {
-        return Err(std::io::Error::other(format!(
-            "no thread of process {pid} found"
-        )));
     }
     Ok(())
 }
@@ -252,28 +206,35 @@ mod tests {
 
     #[test]
     fn terminating_the_job_ends_a_child_whose_parent_has_exited() {
-        // `cmd /c start /b` leaves a ping running after cmd itself exits, so
-        // the ping's parent is gone, the case walking the tree misses.
+        // cmd starts a ping and exits at once, leaving the ping without a
+        // parent, the case walking the tree misses. It waits for a line on
+        // stdin first, sent once the job is in place, so the orphan cannot
+        // start outside it however long that takes.
         let mut cmd = tokio::process::Command::new("cmd");
-        cmd.args(["/c", "start", "/b", "ping", "-n", "30", "127.0.0.1"]);
-        start_suspended(&mut cmd);
+        cmd.args(["/c", "set /p go= & start /b ping -n 30 127.0.0.1"]);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         rt.block_on(async {
             let mut child = cmd
+                .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
                 .unwrap();
             let pid = child.id().unwrap();
             let process = child.raw_handle().unwrap() as HANDLE;
-            contain_and_resume(process, pid).unwrap();
+            contain_spawned(process, pid);
             let job = DaemonJob::open(pid, process).expect("the daemon has a job");
             let name = job_name(pid, process).unwrap();
             let query = OwnedHandle(unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) });
             assert!(!query.0.is_null());
+            let mut stdin = child.stdin.take().unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut stdin, b"go\r\n")
+                .await
+                .unwrap();
+            drop(stdin);
             child.wait().await.unwrap();
 
             // cmd has exited; the ping it started is still in the job.
