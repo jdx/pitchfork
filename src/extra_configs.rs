@@ -243,9 +243,7 @@ pub fn label_for_checkout(primary: &Path) -> Option<String> {
     {
         *label_index = Some((
             std::time::Instant::now(),
-            label_index_of(entries, |dir| {
-                crate::proxy::hostname::detect_checkout(dir).primary
-            }),
+            label_index_of(entries, crate::proxy::hostname::detect_checkout),
         ));
     }
     label_index
@@ -260,7 +258,7 @@ pub fn label_for_checkout(primary: &Path) -> Option<String> {
 /// depends on registry order.
 fn label_index_of(
     entries: &[Entry],
-    primary_of: impl Fn(&Path) -> PathBuf,
+    checkout_of: impl Fn(&Path) -> crate::proxy::hostname::Checkout,
 ) -> std::collections::HashMap<PathBuf, String> {
     let mut chosen: std::collections::HashMap<PathBuf, (bool, &Path, &str)> = Default::default();
     for entry in entries {
@@ -271,8 +269,14 @@ fn label_index_of(
         else {
             continue;
         };
-        let primary = primary_of(&entry.dir);
-        let candidate = (entry.dir != primary, entry.dir.as_path(), label);
+        let checkout = checkout_of(&entry.dir);
+        // A registration for a subdirectory (a monorepo package, say) names
+        // that directory's project, not the repository around it.
+        if checkout.root() != entry.dir {
+            continue;
+        }
+        let primary = checkout.primary.clone();
+        let candidate = (checkout.worktree.is_some(), entry.dir.as_path(), label);
         match chosen.get(&primary) {
             Some(best) if (best.0, best.1) <= (candidate.0, candidate.1) => {}
             _ => {
@@ -485,11 +489,9 @@ mod tests {
     }
 
     fn pick(entries: &[Entry], primary: &Path) -> Option<String> {
-        label_index_of(entries, |dir| {
-            crate::proxy::hostname::detect_checkout(dir).primary
-        })
-        .get(&normalize(primary))
-        .cloned()
+        label_index_of(entries, crate::proxy::hostname::detect_checkout)
+            .get(&normalize(primary))
+            .cloned()
     }
 
     #[test]
@@ -521,6 +523,20 @@ mod tests {
         for entries in [vec![a.clone(), b.clone()], vec![b, a]] {
             assert_eq!(pick(&entries, &repo).as_deref(), Some("label-a"));
         }
+    }
+
+    #[test]
+    fn a_label_registered_for_a_subdirectory_does_not_name_the_repository() {
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
+        let package = repo.join("packages/web");
+        let wt_package = worktrees[0].join("packages/web");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(&wt_package).unwrap();
+        let entries = vec![
+            labelled(&package, Some("web-package")),
+            labelled(&wt_package, Some("web-package-wt")),
+        ];
+        assert_eq!(pick(&entries, &repo), None);
     }
 
     #[test]
