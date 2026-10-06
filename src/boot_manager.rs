@@ -91,6 +91,36 @@ mod imp {
         env::invoking_user_arg(argv?.into_iter().map(Into::into))
     }
 
+    /// Write the launchd registration, then add the crash-restart keys that
+    /// `auto-launcher` does not emit (the macOS counterpart of systemd's
+    /// `Restart=on-failure`).
+    fn write_registration(launcher: &AutoLaunch) -> Result<()> {
+        launcher.enable().into_diagnostic()?;
+        #[cfg(target_os = "macos")]
+        add_keep_alive(&current_plist_path()?)?;
+        Ok(())
+    }
+
+    /// The launchd plist `auto-launcher` writes at the current privilege level.
+    #[cfg(target_os = "macos")]
+    fn current_plist_path() -> Result<std::path::PathBuf> {
+        if nix::unistd::Uid::effective().is_root() {
+            return Ok(SYSTEM_REGISTRATION.into());
+        }
+        let home =
+            std::env::home_dir().ok_or_else(|| miette::miette!("failed to find home directory"))?;
+        Ok(home.join("Library/LaunchAgents/pitchfork.plist"))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn add_keep_alive(path: &std::path::Path) -> Result<()> {
+        let contents = std::fs::read(path).into_diagnostic()?;
+        if let Some(updated) = super::launchd_with_keep_alive(&contents) {
+            std::fs::write(path, updated).into_diagnostic()?;
+        }
+        Ok(())
+    }
+
     impl BootManager {
         /// Manager whose current-level registration records the user this
         /// process acts on behalf of (see [`env::boot_service_invoking_user`]).
@@ -281,6 +311,14 @@ mod imp {
             if registered.as_deref() != Some(self.app_path.as_str()) {
                 return Ok(false);
             }
+            // Registrations written before crash-restart was added lack it.
+            #[cfg(target_os = "macos")]
+            {
+                let plist = std::fs::read(current_plist_path()?).into_diagnostic()?;
+                if super::launchd_with_keep_alive(&plist).is_some() {
+                    return Ok(false);
+                }
+            }
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             if nix::unistd::Uid::effective().is_root() {
                 return Ok(registered_system_invoking_user() == self.invoking_user);
@@ -371,7 +409,7 @@ mod imp {
                 );
             }
 
-            self.current.enable().into_diagnostic()?;
+            write_registration(&self.current)?;
 
             #[cfg(target_os = "macos")]
             self.cleanup_legacy(true)?;
@@ -383,7 +421,7 @@ mod imp {
         /// updating its binary path and recorded invoking user.
         pub fn refresh(&self) -> Result<()> {
             self.validate_executable()?;
-            self.current.enable().into_diagnostic()?;
+            write_registration(&self.current)?;
 
             #[cfg(target_os = "macos")]
             self.cleanup_legacy(false)?;
@@ -473,7 +511,7 @@ mod imp {
             // Calling enable() directly (without disable first) ensures that
             // if it fails, the stale registration is still present rather than
             // missing entirely — a stale path is better than no path.
-            if let Err(e) = launcher.enable() {
+            if let Err(e) = write_registration(launcher) {
                 warn!("failed to re-register boot start with current path: {e}");
                 return;
             }
@@ -645,10 +683,37 @@ fn launchd_program_arguments(plist: &[u8]) -> Option<Vec<String>> {
         .collect()
 }
 
+/// `plist` with launchd's crash-restart keys added, or `None` when it already
+/// has them (or cannot be parsed). `SuccessfulExit = false` restarts the
+/// supervisor after a crash or SIGKILL but not after a clean exit, so
+/// `pitchfork supervisor stop` and `launchctl bootout` still stay stopped. The
+/// 10s throttle matches the systemd unit's `RestartSec=10`.
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+fn launchd_with_keep_alive(plist: &[u8]) -> Option<Vec<u8>> {
+    let mut value = plist::Value::from_reader(std::io::Cursor::new(plist)).ok()?;
+    let dict = value.as_dictionary_mut()?;
+    let mut keep_alive = plist::Dictionary::new();
+    keep_alive.insert("SuccessfulExit".into(), plist::Value::Boolean(false));
+    let keep_alive = plist::Value::Dictionary(keep_alive);
+    if dict.get("KeepAlive") == Some(&keep_alive)
+        && dict
+            .get("ThrottleInterval")
+            .and_then(|v| v.as_signed_integer())
+            == Some(10)
+    {
+        return None;
+    }
+    dict.insert("KeepAlive".into(), keep_alive);
+    dict.insert("ThrottleInterval".into(), plist::Value::Integer(10.into()));
+    let mut out = Vec::new();
+    plist::to_writer_xml(&mut out, &value).ok()?;
+    Some(out)
+}
+
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::imp::service_args;
-    use super::{launchd_program_arguments, systemd_exec_start};
+    use super::{launchd_program_arguments, launchd_with_keep_alive, systemd_exec_start};
     use crate::env::invoking_user_arg;
 
     fn argv(args: Option<Vec<String>>) -> Vec<std::ffi::OsString> {
@@ -720,5 +785,33 @@ mod tests {
             crate::env::invoking_user_arg(argv).as_deref(),
             Some("alice")
         );
+    }
+
+    #[test]
+    fn launchd_plist_gains_crash_restart_keys_once() {
+        let plist = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>pitchfork</string>
+    <key>ProgramArguments</key><array><string>/bin/pitchfork</string><string>supervisor</string></array>
+    <key>RunAtLoad</key><true/>
+</dict>
+</plist>"#;
+        let updated = launchd_with_keep_alive(plist).unwrap();
+        let value = plist::Value::from_reader(std::io::Cursor::new(&updated)).unwrap();
+        let dict = value.as_dictionary().unwrap();
+        let keep_alive = dict.get("KeepAlive").unwrap().as_dictionary().unwrap();
+        assert_eq!(
+            keep_alive.get("SuccessfulExit").unwrap().as_boolean(),
+            Some(false)
+        );
+        assert_eq!(
+            dict.get("ThrottleInterval").unwrap().as_signed_integer(),
+            Some(10)
+        );
+        assert_eq!(dict.get("RunAtLoad").unwrap().as_boolean(), Some(true));
+        assert_eq!(launchd_program_arguments(&updated).unwrap().len(), 2);
+        assert_eq!(launchd_with_keep_alive(&updated), None);
+        assert_eq!(launchd_with_keep_alive(b"not a plist"), None);
     }
 }
