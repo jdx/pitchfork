@@ -64,6 +64,18 @@ Inspect the listener before changing or stopping anything:
 lsof -nP -iTCP:3000 -sTCP:LISTEN
 ```
 
+The error names the address where the port is taken (`0.0.0.0`, `127.0.0.1` or
+`[::1]`) and, when it can find one, the process holding it: one listening on
+the port, or failing that, one with a connection on it. If it says no process
+holding the port could be found, the port may belong to another user's
+process, or to a connection no process owns any more, such as one that was
+never accepted or is still closing. List every socket on the port, with the
+owners of other users' sockets too:
+
+```sh
+sudo lsof -nP -iTCP:3000
+```
+
 Choose another port or configure [port bumping](/guides/port-management).
 For the web dashboard, choose a different starting port:
 

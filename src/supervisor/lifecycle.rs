@@ -1104,11 +1104,17 @@ impl Supervisor {
                     // Convert PortError to structured IPC response
                     if let Some(port_error) = e.downcast_ref::<PortError>() {
                         match port_error {
-                            PortError::InUse { port, process, pid } => {
+                            PortError::InUse {
+                                port,
+                                address,
+                                process,
+                                pid,
+                            } => {
                                 return Ok(IpcResponse::PortConflict {
                                     port: *port,
                                     process: process.clone(),
                                     pid: *pid,
+                                    address: address.clone(),
                                 });
                             }
                             PortError::NoAvailablePort {
@@ -1135,9 +1141,14 @@ impl Supervisor {
             // the wrong process.
             if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port())
                 && port > 0
-                && let Some((pid, process)) = detect_port_conflict(port).await
+                && let Some((address, pid, process)) = detect_port_conflict(port).await
             {
-                return Ok(IpcResponse::PortConflict { port, process, pid });
+                return Ok(IpcResponse::PortConflict {
+                    port,
+                    process,
+                    pid,
+                    address: Some(address),
+                });
             }
             (
                 Vec::new(),
@@ -3156,9 +3167,9 @@ async fn check_ports_available(
             // Another process could grab the port between our check and the daemon actually
             // binding. This is inherent to the approach and acceptable for our use case
             // since we're primarily detecting conflicts with already-running daemons.
-            if is_port_in_use(port).await {
+            if let Some(address) = port_bind_conflict(port).await {
                 all_available = false;
-                conflicting_port = Some(port);
+                conflicting_port = Some((port, address));
                 break;
             }
         }
@@ -3183,10 +3194,16 @@ async fn check_ports_available(
         // Port is in use
         if bump_offset == 0
             && !auto_bump
-            && let Some(port) = conflicting_port
+            && let Some((port, address)) = conflicting_port
         {
-            let (pid, process) = identify_port_owner(port).await;
-            return Err(PortError::InUse { port, process, pid }.into());
+            let (pid, process) = identify_port_owner(port, address).await;
+            return Err(PortError::InUse {
+                port,
+                address: Some(shown_address(address)),
+                process,
+                pid,
+            }
+            .into());
         }
     }
 
@@ -3200,36 +3217,120 @@ async fn check_ports_available(
 
 /// Check whether a port is currently in use by attempting to bind on multiple addresses.
 ///
-/// Returns `true` when at least one bind attempt gets `AddrInUse`, meaning another
-/// process is listening.  Other errors (e.g. `AddrNotAvailable` on an address family
+/// Returns the address of the first bind that gets `AddrInUse`, meaning another socket
+/// holds the port there. Other errors (e.g. `AddrNotAvailable` on an address family
 /// the OS doesn't support) are ignored so they don't produce false positives.
-async fn is_port_in_use(port: u16) -> bool {
+async fn port_bind_conflict(port: u16) -> Option<std::net::IpAddr> {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     tokio::task::spawn_blocking(move || {
-        for &addr in &["0.0.0.0", "127.0.0.1", "::1"] {
+        for addr in [
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ] {
             match std::net::TcpListener::bind((addr, port)) {
                 Ok(listener) => drop(listener),
-                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return true,
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return Some(addr),
                 Err(_) => continue,
             }
         }
-        false
+        None
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(None)
+}
+
+/// An address as a message shows it: IPv6 in brackets, as in `[::1]`.
+fn shown_address(addr: std::net::IpAddr) -> String {
+    match addr {
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+        std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+    }
+}
+
+/// How well a socket listening on `listening` accounts for a bind to
+/// `conflict` failing on the same port, best first, or `None` when it cannot:
+/// the same address; a wildcard and a specific address of one family, which
+/// conflict with each other; then `[::]`, which also takes IPv4 unless it is
+/// IPv6-only. An IPv4-mapped IPv6 address, as a dual-stack socket shows an
+/// IPv4 connection, counts as the IPv4 address.
+fn listener_match(listening: std::net::IpAddr, conflict: std::net::IpAddr) -> Option<u8> {
+    use std::net::IpAddr;
+    let listening = listening.to_canonical();
+    if listening == conflict {
+        return Some(0);
+    }
+    match (listening, conflict) {
+        (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_))
+            if listening.is_unspecified() || conflict.is_unspecified() =>
+        {
+            Some(1)
+        }
+        (IpAddr::V6(v6), IpAddr::V4(_)) if v6.is_unspecified() => Some(2),
+        _ => None,
+    }
+}
+
+/// A TCP socket on this machine, as the port owner lookup sees it.
+struct TcpSocket {
+    addr: std::net::SocketAddr,
+    listening: bool,
+    pid: u32,
+    process: String,
+}
+
+/// The process whose TCP socket on `port` best accounts for the bind to
+/// `conflict` failing (see [`listener_match`]), among `sockets`. A listening
+/// socket comes first; one that is not listening but is bound to the port,
+/// such as a connection a listener accepted, can hold it too. `None` when
+/// none can.
+///
+/// A `[::]` socket holds an IPv4 port only if it is not IPv6-only, which the
+/// socket list does not tell, so it is named for an IPv4 conflict only when no
+/// IPv4 socket, listening or not, could account for it.
+fn pick_port_owner(
+    sockets: impl IntoIterator<Item = TcpSocket>,
+    port: u16,
+    conflict: std::net::IpAddr,
+) -> Option<(u32, String)> {
+    sockets
+        .into_iter()
+        .filter(|s| s.addr.port() == port)
+        .filter_map(|s| {
+            let matched = listener_match(s.addr.ip(), conflict)?;
+            let rank = (matched == 2, !s.listening, matched);
+            Some((rank, s.pid, s.process))
+        })
+        .min_by_key(|(rank, _, _)| *rank)
+        .map(|(_, pid, process)| (pid, process))
 }
 
 /// Best-effort lookup of the process occupying a port via `listeners::get_all()`.
 ///
-/// Returns `(pid, process_name)`.  Falls back to `(0, "unknown")` when the
-/// system call fails (permission error, unsupported OS, etc.).
-async fn identify_port_owner(port: u16) -> (u32, String) {
+/// Only a TCP socket on an address that conflicts with `conflict`, the address
+/// whose bind found the port taken, is taken as the holder: another process
+/// may listen on the same port on an address that does not. A listening
+/// socket is preferred (see [`pick_port_owner`]).
+///
+/// Returns `(pid, process_name)`.  Falls back to `(0, "unknown")` when no such
+/// socket is found or the system call fails (permission error, unsupported OS, etc.).
+async fn identify_port_owner(port: u16, conflict: std::net::IpAddr) -> (u32, String) {
     tokio::task::spawn_blocking(move || {
         listeners::get_all()
             .ok()
             .and_then(|list| {
-                list.into_iter()
-                    .find(|l| l.socket.port() == port)
-                    .map(|l| (l.process.pid, l.process.name))
+                // UDP sockets share port numbers with TCP but never block a
+                // TCP bind.
+                let tcp = list
+                    .into_iter()
+                    .filter(|l| l.protocol == listeners::Protocol::TCP)
+                    .map(|l| TcpSocket {
+                        addr: l.socket,
+                        listening: l.state == listeners::SocketState::Listen,
+                        pid: l.process.pid,
+                        process: l.process.name,
+                    });
+                pick_port_owner(tcp, port, conflict)
             })
             .unwrap_or((0, "unknown".to_string()))
     })
@@ -3237,15 +3338,14 @@ async fn identify_port_owner(port: u16) -> (u32, String) {
     .unwrap_or((0, "unknown".to_string()))
 }
 
-/// Detect whether a port is in use, and if so, identify the owning process.
+/// Detect whether a port is in use, and if so, where and by which process.
 ///
-/// Combines `is_port_in_use` (reliable bind probe) with `identify_port_owner`
+/// Combines `port_bind_conflict` (reliable bind probe) with `identify_port_owner`
 /// (best-effort process lookup).  Returns `None` when the port is free.
-async fn detect_port_conflict(port: u16) -> Option<(u32, String)> {
-    if !is_port_in_use(port).await {
-        return None;
-    }
-    Some(identify_port_owner(port).await)
+async fn detect_port_conflict(port: u16) -> Option<(String, u32, String)> {
+    let address = port_bind_conflict(port).await?;
+    let (pid, process) = identify_port_owner(port, address).await;
+    Some((shown_address(address), pid, process))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -3394,6 +3494,143 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
             "daemon {id}: active port detection exhausted all retries for pid {pid} and its descendants"
         );
     });
+}
+
+#[cfg(test)]
+mod port_conflict_tests {
+    use super::{
+        TcpSocket, check_ports_available, listener_match, pick_port_owner, port_bind_conflict,
+        shown_address,
+    };
+    use crate::error::PortError;
+    use std::net::{IpAddr, SocketAddr};
+
+    #[tokio::test]
+    async fn a_taken_port_is_reported_with_its_address_and_holder() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Which bind finds it taken depends on the OS: Linux refuses the
+        // wildcard bind as well, macOS only the 127.0.0.1 one.
+        let address = shown_address(port_bind_conflict(port).await.unwrap());
+        assert!(
+            ["0.0.0.0", "127.0.0.1"].contains(&address.as_str()),
+            "{address}"
+        );
+
+        let err = check_ports_available(&[port], false, 0).await.unwrap_err();
+        match err.downcast_ref::<PortError>() {
+            Some(PortError::InUse {
+                port: p,
+                address: Some(a),
+                pid,
+                ..
+            }) => {
+                assert_eq!(*p, port);
+                assert_eq!(*a, address);
+                // The holder is this test process, which lists its own sockets.
+                assert_eq!(*pid, std::process::id());
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        drop(listener);
+        assert_eq!(port_bind_conflict(port).await, None);
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    fn socket(addr: &str, listening: bool, pid: u32) -> TcpSocket {
+        TcpSocket {
+            addr: addr.parse::<SocketAddr>().unwrap(),
+            listening,
+            pid,
+            process: format!("p{pid}"),
+        }
+    }
+
+    #[test]
+    fn only_a_listener_whose_address_conflicts_is_named() {
+        let all = || {
+            [
+                socket("192.0.2.1:3000", true, 1),
+                socket("127.0.0.1:3000", true, 2),
+                socket("[::1]:3000", true, 3),
+                socket("127.0.0.1:4000", true, 4),
+            ]
+        };
+        // The exact address wins over a wildcard or another address.
+        assert_eq!(
+            pick_port_owner(all(), 3000, ip("127.0.0.1")),
+            Some((2, "p2".into()))
+        );
+        assert_eq!(
+            pick_port_owner(all(), 3000, ip("::1")),
+            Some((3, "p3".into()))
+        );
+        // A wildcard bind conflicts with any listener of its family.
+        let v4 = pick_port_owner(all(), 3000, ip("0.0.0.0")).unwrap().0;
+        assert!([1, 2].contains(&v4));
+        // No socket on a conflicting address: nobody is named.
+        assert_eq!(
+            pick_port_owner([socket("[::1]:3000", true, 3)], 3000, ip("127.0.0.1")),
+            None
+        );
+        assert_eq!(pick_port_owner(all(), 5000, ip("127.0.0.1")), None);
+
+        // A listener comes before a socket that is not listening, which is
+        // named when it is all there is.
+        let both = [
+            socket("127.0.0.1:3000", false, 5),
+            socket("0.0.0.0:3000", true, 6),
+        ];
+        assert_eq!(
+            pick_port_owner(both, 3000, ip("127.0.0.1")),
+            Some((6, "p6".into()))
+        );
+        assert_eq!(
+            pick_port_owner([socket("127.0.0.1:3000", false, 5)], 3000, ip("127.0.0.1")),
+            Some((5, "p5".into()))
+        );
+
+        // `[::]` may be IPv6-only, so an IPv4 socket, even one that is not
+        // listening, is named before it for an IPv4 conflict.
+        let v6_wildcard = || {
+            [
+                socket("[::]:3000", true, 7),
+                socket("127.0.0.1:3000", false, 8),
+            ]
+        };
+        assert_eq!(
+            pick_port_owner(v6_wildcard(), 3000, ip("127.0.0.1")),
+            Some((8, "p8".into()))
+        );
+        assert_eq!(
+            pick_port_owner(v6_wildcard(), 3000, ip("0.0.0.0")),
+            Some((8, "p8".into()))
+        );
+        // With no IPv4 socket, it is the only one that can hold the port.
+        assert_eq!(
+            pick_port_owner([socket("[::]:3000", true, 7)], 3000, ip("127.0.0.1")),
+            Some((7, "p7".into()))
+        );
+        // A dual-stack socket shows an IPv4 connection as IPv4-mapped.
+        assert_eq!(
+            pick_port_owner(
+                [socket("[::ffff:127.0.0.1]:3000", false, 9)],
+                3000,
+                ip("127.0.0.1")
+            ),
+            Some((9, "p9".into()))
+        );
+
+        assert_eq!(listener_match(ip("0.0.0.0"), ip("127.0.0.1")), Some(1));
+        assert_eq!(listener_match(ip("::"), ip("127.0.0.1")), Some(2));
+        assert_eq!(listener_match(ip("::1"), ip("127.0.0.1")), None);
+        assert_eq!(listener_match(ip("192.0.2.1"), ip("127.0.0.1")), None);
+        assert_eq!(shown_address(ip("::1")), "[::1]");
+    }
 }
 
 #[cfg(test)]
