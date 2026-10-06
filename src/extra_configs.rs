@@ -410,70 +410,77 @@ mod tests {
         assert!(again.contains("label = \"shop\""), "{again}");
     }
 
-    fn labelled(dir: &str, label: Option<&str>) -> Entry {
+    fn labelled(dir: &Path, label: Option<&str>) -> Entry {
         Entry {
-            namespace: format!("ns-{dir}"),
-            dir: PathBuf::from(dir),
+            namespace: format!("ns-{}", dir.display()),
+            dir: normalize(dir),
             config: vec![],
             label: label.map(String::from),
             source: "registry",
         }
     }
 
-    /// Worktrees of `/work/shop` sit under `/work/shop-wt/`; everything else is
-    /// its own checkout.
-    fn primary_of(dir: &Path) -> PathBuf {
-        if dir.starts_with("/work/shop-wt") {
-            PathBuf::from("/work/shop")
-        } else {
-            dir.to_path_buf()
-        }
+    /// A real primary checkout with linked worktrees named `names`, so the Git
+    /// pointer files that `detect_checkout` follows are what the tests use.
+    fn repo_with_worktrees(names: &[&str]) -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("shop");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let worktrees = names
+            .iter()
+            .map(|name| {
+                let admin = repo.join(".git/worktrees").join(name);
+                std::fs::create_dir_all(&admin).unwrap();
+                let wt = temp.path().join(name);
+                std::fs::create_dir_all(&wt).unwrap();
+                std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+                wt
+            })
+            .collect();
+        (temp, repo, worktrees)
+    }
+
+    fn pick(entries: &[Entry], primary: &Path) -> Option<String> {
+        pick_checkout_label(entries, primary, |dir| {
+            crate::proxy::hostname::detect_checkout(dir).primary
+        })
     }
 
     #[test]
     fn label_registered_from_a_linked_worktree_names_the_project() {
-        let entries = vec![labelled("/work/shop-wt/feature", Some("shop-web"))];
-        assert_eq!(
-            pick_checkout_label(&entries, Path::new("/work/shop"), primary_of).as_deref(),
-            Some("shop-web")
-        );
+        let (temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
+        let entries = vec![labelled(&worktrees[0], Some("shop-web"))];
+        assert_eq!(pick(&entries, &repo).as_deref(), Some("shop-web"));
         // Another project is not claimed by it.
-        assert_eq!(
-            pick_checkout_label(&entries, Path::new("/work/other"), primary_of),
-            None
-        );
+        let other = temp.path().join("other");
+        std::fs::create_dir_all(other.join(".git")).unwrap();
+        assert_eq!(pick(&entries, &other), None);
     }
 
     #[test]
     fn primary_checkout_label_beats_a_worktree_label() {
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
         let entries = vec![
-            labelled("/work/shop-wt/feature", Some("from-worktree")),
-            labelled("/work/shop", Some("from-primary")),
+            labelled(&worktrees[0], Some("from-worktree")),
+            labelled(&repo, Some("from-primary")),
         ];
-        assert_eq!(
-            pick_checkout_label(&entries, Path::new("/work/shop"), primary_of).as_deref(),
-            Some("from-primary")
-        );
+        assert_eq!(pick(&entries, &repo).as_deref(), Some("from-primary"));
     }
 
     #[test]
     fn worktree_labels_are_chosen_independently_of_registry_order() {
-        let a = labelled("/work/shop-wt/a", Some("label-a"));
-        let b = labelled("/work/shop-wt/b", Some("label-b"));
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["a", "b"]);
+        let a = labelled(&worktrees[0], Some("label-a"));
+        let b = labelled(&worktrees[1], Some("label-b"));
         for entries in [vec![a.clone(), b.clone()], vec![b, a]] {
-            assert_eq!(
-                pick_checkout_label(&entries, Path::new("/work/shop"), primary_of).as_deref(),
-                Some("label-a")
-            );
+            assert_eq!(pick(&entries, &repo).as_deref(), Some("label-a"));
         }
     }
 
     #[test]
     fn unlabelled_registrations_name_nothing() {
-        let entries = vec![labelled("/work/shop-wt/feature", None)];
-        assert_eq!(
-            pick_checkout_label(&entries, Path::new("/work/shop"), primary_of),
-            None
-        );
+        let (_temp, repo, worktrees) = repo_with_worktrees(&["feature"]);
+        let entries = vec![labelled(&worktrees[0], None)];
+        assert_eq!(pick(&entries, &repo), None);
     }
 }
