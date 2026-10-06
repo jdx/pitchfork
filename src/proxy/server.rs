@@ -3824,27 +3824,16 @@ async fn start_with_dependencies(
     daemon_id: &DaemonId,
     config_dir: &std::path::Path,
 ) -> std::result::Result<(), ResolveResult> {
-    let loaded = {
-        let dir = config_dir.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_from(&dir)
-        })
-        .await
-    };
+    let loaded =
+        crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_from(config_dir).await;
     let pt = match loaded {
-        Ok(Ok(pt)) => pt,
-        Ok(Err(e)) => {
+        Ok(pt) => pt,
+        Err(e) => {
             log::warn!(
                 "Auto-start: failed to load config from {}: {e}",
                 config_dir.display()
             );
             return Err(ResolveResult::NotFound);
-        }
-        Err(e) => {
-            log::warn!("Auto-start: config loading task failed for {daemon_id}: {e}");
-            return Err(ResolveResult::Error(format!(
-                "Failed to load configuration: {e}"
-            )));
         }
     };
 

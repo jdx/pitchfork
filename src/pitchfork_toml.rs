@@ -1112,13 +1112,37 @@ impl PitchforkToml {
     /// this also iterates all `[namespaces]` entries and loads their daemon configs.
     /// Use this when you need a complete view (e.g. `start` for a daemon from
     /// another namespace).
-    pub fn all_merged_all_namespaces() -> Result<Self> {
-        Self::all_merged_all_namespaces_from(&env::CWD)
+    ///
+    /// The read walks the filesystem and can start `git` or `jj` to find
+    /// worktrees, so it runs on a blocking worker: being `async` is what keeps
+    /// an async caller from running it on the runtime by accident. Code already
+    /// on a blocking thread uses [`Self::all_merged_all_namespaces_blocking`].
+    pub async fn all_merged_all_namespaces() -> Result<Self> {
+        Self::all_merged_all_namespaces_from(&env::CWD).await
+    }
+
+    /// [`Self::all_merged_all_namespaces`] starting from `start_dir`.
+    pub(crate) async fn all_merged_all_namespaces_from(start_dir: &Path) -> Result<Self> {
+        let start_dir = start_dir.to_path_buf();
+        match tokio::task::spawn_blocking(move || {
+            Self::all_merged_all_namespaces_from_blocking(&start_dir)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => Err(miette::miette!("reading the merged config panicked: {e}")),
+        }
+    }
+
+    /// [`Self::all_merged_all_namespaces`] on the calling thread, for code that
+    /// is already on a blocking thread and must not wait on the runtime.
+    pub fn all_merged_all_namespaces_blocking() -> Result<Self> {
+        Self::all_merged_all_namespaces_from_blocking(&env::CWD)
     }
 
     /// Core of [`Self::all_merged_all_namespaces`], parameterized by the
     /// starting directory so it is testable without touching the global `CWD`.
-    pub(crate) fn all_merged_all_namespaces_from(start_dir: &Path) -> Result<Self> {
+    pub(crate) fn all_merged_all_namespaces_from_blocking(start_dir: &Path) -> Result<Self> {
         let mut pt = Self::all_merged_from(start_dir)?;
 
         let namespaces = Self::read_global_namespaces();
@@ -3081,7 +3105,7 @@ dir = "~/projects/web"
         super::invalidate_config_cache();
 
         // Resolve from inside the worktree: both namespaces must be visible.
-        let pt = PitchforkToml::all_merged_all_namespaces_from(&wt).unwrap();
+        let pt = PitchforkToml::all_merged_all_namespaces_from_blocking(&wt).unwrap();
 
         let main_id = DaemonId::new("my-repo", "api");
         let wt_id = DaemonId::new("my-repo-feature", "worker");
@@ -3092,7 +3116,7 @@ dir = "~/projects/web"
         assert!(pt.daemons.contains_key(&wt_id), "worktree daemon missing");
 
         // Resolving from the main checkout must also see the worktree daemon.
-        let pt_from_main = PitchforkToml::all_merged_all_namespaces_from(&repo).unwrap();
+        let pt_from_main = PitchforkToml::all_merged_all_namespaces_from_blocking(&repo).unwrap();
         assert!(pt_from_main.daemons.contains_key(&wt_id));
 
         // Clean up.

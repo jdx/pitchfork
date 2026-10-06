@@ -100,11 +100,11 @@ impl List {
         let global_slugs = PitchforkToml::read_global_slugs();
         // Hostnames are derived from where each daemon's config lives, so the
         // full cross-namespace config is needed to build them.
-        let host_config = s
-            .proxy
-            .enable
-            .then(PitchforkToml::all_merged_all_namespaces)
-            .and_then(|r| r.ok());
+        let host_config = if s.proxy.enable {
+            PitchforkToml::all_merged_all_namespaces().await.ok()
+        } else {
+            None
+        };
 
         if !self.status.is_empty() {
             entries.retain(|entry| {

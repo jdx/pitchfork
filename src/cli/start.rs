@@ -202,11 +202,11 @@ impl Start {
                 .enable
                 .then(PitchforkToml::read_global_slugs)
                 .unwrap_or_default();
-            let host_config = settings()
-                .proxy
-                .enable
-                .then(PitchforkToml::all_merged_all_namespaces)
-                .and_then(|r| r.ok());
+            let host_config = if settings().proxy.enable {
+                PitchforkToml::all_merged_all_namespaces().await.ok()
+            } else {
+                None
+            };
             for (id, _start_time, resolved_ports) in &result.started {
                 let s = settings();
                 if s.proxy.enable && !resolved_ports.is_empty() {

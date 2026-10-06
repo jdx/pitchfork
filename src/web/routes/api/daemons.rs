@@ -322,7 +322,8 @@ async fn proxy_hosts_for(
     }
     tokio::task::spawn_blocking(move || {
         let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-        let config = crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces().ok();
+        let config =
+            crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_blocking().ok();
         ids.into_iter()
             .filter_map(|id| {
                 let host = crate::proxy::hostname::host_for_daemon(

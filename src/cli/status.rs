@@ -38,11 +38,11 @@ pub struct Status {
 
 /// The hostname to show for a daemon: its legacy slug, or the automatic
 /// hostname derived from where its config lives.
-fn daemon_host(
+async fn daemon_host(
     id: &crate::daemon_id::DaemonId,
     global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
 ) -> Option<String> {
-    let config = PitchforkToml::all_merged_all_namespaces().ok();
+    let config = PitchforkToml::all_merged_all_namespaces().await.ok();
     crate::proxy::hostname::host_for_daemon(
         id,
         config.as_ref().and_then(|pt| pt.daemons.get(id)),
@@ -52,11 +52,11 @@ fn daemon_host(
 
 /// The TLS mode the proxy uses for a daemon's hostname, resolved the way the
 /// router resolves it rather than from the daemon's recorded state.
-fn daemon_proxy_tls_mode(
+async fn daemon_proxy_tls_mode(
     id: &crate::daemon_id::DaemonId,
     global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
 ) -> crate::pitchfork_toml::ProxyTlsMode {
-    let config = PitchforkToml::all_merged_all_namespaces().ok();
+    let config = PitchforkToml::all_merged_all_namespaces().await.ok();
     proxy_tls_mode(
         id,
         config.as_ref().and_then(|pt| pt.daemons.get(id)),
@@ -78,7 +78,7 @@ impl Status {
             match StateFile::get().daemons.get(&qualified_id) {
                 Some(d) => (d.clone(), d.config_registered),
                 None => {
-                    let config = PitchforkToml::all_merged_all_namespaces()?;
+                    let config = PitchforkToml::all_merged_all_namespaces().await?;
                     match config.daemons.get(&qualified_id) {
                         Some(dc) => (build_placeholder_daemon(&qualified_id, dc), true),
                         None => {
@@ -93,13 +93,21 @@ impl Status {
             let proxy_url = if s.proxy.enable
                 && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
             {
-                build_proxy_url(daemon_host(&qualified_id, &global_slugs).as_deref(), &s)
+                build_proxy_url(
+                    daemon_host(&qualified_id, &global_slugs).await.as_deref(),
+                    &s,
+                )
             } else {
                 None
             };
-            let proxy_tls = proxy_url
-                .as_ref()
-                .map(|_| daemon_proxy_tls_mode(&qualified_id, &global_slugs).to_string());
+            let proxy_tls = match proxy_url {
+                Some(_) => Some(
+                    daemon_proxy_tls_mode(&qualified_id, &global_slugs)
+                        .await
+                        .to_string(),
+                ),
+                None => None,
+            };
             let entry = JsonStatusEntry {
                 id: qualified_id.qualified(),
                 namespace: qualified_id.namespace().to_string(),
@@ -170,9 +178,12 @@ impl Status {
         }
         let s = settings();
         if s.proxy.enable && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty()) {
-            match build_proxy_url(daemon_host(&qualified_id, &global_slugs).as_deref(), &s) {
+            match build_proxy_url(
+                daemon_host(&qualified_id, &global_slugs).await.as_deref(),
+                &s,
+            ) {
                 // Like `list`, only the non-default mode is called out.
-                Some(url) => match daemon_proxy_tls_mode(&qualified_id, &global_slugs) {
+                Some(url) => match daemon_proxy_tls_mode(&qualified_id, &global_slugs).await {
                     mode if mode.is_passthrough() => println!("Proxy: {url} ({mode})"),
                     _ => println!("Proxy: {url}"),
                 },

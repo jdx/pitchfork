@@ -12,7 +12,6 @@ use crate::shell::{HideConsoleWindow, ShellScript};
 use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml, template};
 use indexmap::IndexMap;
-use miette::IntoDiagnostic;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -89,7 +88,7 @@ impl HookDirs {
             None => {
                 let id = daemon.id.clone();
                 tokio::task::spawn_blocking(move || {
-                    PitchforkToml::all_merged_all_namespaces()
+                    PitchforkToml::all_merged_all_namespaces_blocking()
                         .ok()
                         .and_then(|pt| defining_project_dir(&pt, &id))
                 })
@@ -109,9 +108,7 @@ fn defining_project_dir(pt: &PitchforkToml, id: &DaemonId) -> Option<PathBuf> {
 }
 
 async fn load_hook_config(daemon_dir: PathBuf) -> Result<PitchforkToml> {
-    tokio::task::spawn_blocking(move || PitchforkToml::all_merged_all_namespaces_from(&daemon_dir))
-        .await
-        .into_diagnostic()?
+    PitchforkToml::all_merged_all_namespaces_from(&daemon_dir).await
 }
 
 /// Create a tokio Command for a hook using the resolved shell for this platform

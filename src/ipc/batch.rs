@@ -727,7 +727,7 @@ impl IpcClient {
         ids: &[DaemonId],
         opts: StartOptions,
     ) -> Result<StartResult> {
-        let pt = PitchforkToml::all_merged_all_namespaces()?;
+        let pt = PitchforkToml::all_merged_all_namespaces().await?;
         self.start_daemons_with_config(ids, opts, pt).await
     }
 
@@ -1375,7 +1375,7 @@ impl IpcClient {
         id: &DaemonId,
         overrides: Option<&StartOptions>,
     ) -> Result<RunResult> {
-        let pt = PitchforkToml::all_merged_all_namespaces()?;
+        let pt = PitchforkToml::all_merged_all_namespaces().await?;
         // Claimed with everything it depends on, as `start_daemons` does, so
         // starting it here keeps the same daemons out of idle shutdown.
         let claimed: Vec<DaemonId> = resolve_dependencies(std::slice::from_ref(id), &pt.daemons)
@@ -1471,7 +1471,16 @@ impl IpcClient {
         let mut any_failed = false;
 
         // Use shared reverse dependency ordering
-        let stop_levels = compute_reverse_stop_order(&requested_ids);
+        let ids = requested_ids.clone();
+        let stop_levels =
+            match tokio::task::spawn_blocking(move || compute_reverse_stop_order(&ids)).await {
+                Ok(levels) => levels,
+                // Stopping everything at once still stops everything.
+                Err(e) => {
+                    warn!("computing the stop order panicked: {e}");
+                    vec![requested_ids.clone()]
+                }
+            };
 
         for level in stop_levels {
             // Filter to only running daemons in this level
