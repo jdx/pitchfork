@@ -392,9 +392,15 @@ pub fn start_in_background() -> Result<()> {
                         // kernel sends the foreground process group when the
                         // controlling terminal hangs up (an ssh logout, a closed
                         // terminal), and SIGHUP makes it stop every daemon.
-                        // Failure (already a group leader) changes nothing that
-                        // matters, so it is ignored.
-                        libc::setsid();
+                        // The result is deliberately ignored. In a freshly forked
+                        // child setsid() fails only if a sandbox (seccomp, ...)
+                        // denies it, or the child is already a process group
+                        // leader, which duct never arranges. Failing the spawn
+                        // would stop pitchfork working at all there, which is
+                        // worse than a supervisor that is merely not detached:
+                        // that is how it behaved before. This hook cannot log
+                        // (async-signal-safe only), so it cannot warn either.
+                        let _ = libc::setsid();
                         cloexec_inherited_fds(max_fd);
                         Ok(())
                     });
