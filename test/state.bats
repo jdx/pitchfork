@@ -58,6 +58,29 @@ EOF
   [[ "$output" != *"SIGSEGV"* ]]
 }
 
+@test "a failed initial state publication clears the child before a later flush" {
+  create_pitchfork_toml <<EOF
+[daemons.publish_failure]
+run = "sleep 30"
+EOF
+  # A directory at the file's destination makes the atomic rename fail,
+  # including on Windows; the supervisor is already running from setup.
+  mv "$PITCHFORK_STATE_DIR/state.toml" "$PITCHFORK_STATE_DIR/state.before"
+  mkdir "$PITCHFORK_STATE_DIR/state.toml"
+  run pitchfork start publish_failure
+  assert_failure
+  rmdir "$PITCHFORK_STATE_DIR/state.toml"
+  # Let the next background flush publish the corrected in-memory record.
+  wait_for_state 'failed'
+  run pitchfork status publish_failure --json
+  assert_success
+  assert_output --partial '"pid": null'
+  assert_output --partial 'failed'
+  run pitchfork start publish_failure
+  assert_success
+  wait_for_status publish_failure running
+}
+
 @test "state file is not rewritten when content is unchanged" {
   create_pitchfork_toml <<EOF
 [daemons.state_test]

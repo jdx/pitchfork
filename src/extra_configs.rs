@@ -91,10 +91,9 @@ pub fn namespace_has_running_daemon(namespace: &str) -> bool {
 
 /// Registration observed before a start runs hooks or waits for ports.
 pub fn namespace_start_snapshot(namespace: &str) -> Result<Option<NamespaceEntry>> {
-    Ok(PitchforkToml::read(&*env::PITCHFORK_GLOBAL_CONFIG_USER)?
-        .namespaces
-        .get(namespace)
-        .cloned())
+    Ok(PitchforkToml::read(&*env::PITCHFORK_GLOBAL_CONFIG_USER)
+        .ok()
+        .and_then(|config| config.namespaces.get(namespace).cloned()))
 }
 
 /// Serialize spawning and publishing its PID with registry mutations. Hooks
@@ -116,11 +115,16 @@ fn namespace_start_guard_in(
     }
     let lock = xx::fslock::get(path, false).into_diagnostic()?;
     let pt = match std::fs::read_to_string(path) {
-        Ok(raw) => PitchforkToml::parse_str(&raw, path)?,
+        Ok(raw) => match PitchforkToml::parse_str(&raw, path) {
+            Ok(config) => config,
+            // Registry writers cannot mutate an unreadable configuration.
+            // Keep their lock, but let valid project daemons start as before.
+            Err(_) => return Ok(lock),
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             PitchforkToml::new(path.to_path_buf())
         }
-        Err(err) => return Err(err).into_diagnostic(),
+        Err(_) => return Ok(lock),
     };
     if pt.namespaces.get(namespace) != expected {
         miette::bail!(
@@ -484,6 +488,20 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn malformed_global_config_does_not_block_project_starts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(&path, "[namespaces\ninvalid").unwrap();
+        assert!(namespace_start_guard_in(&path, "app", None).is_ok());
+        let old = NamespaceEntry {
+            dir: PathBuf::from("/project"),
+            config: vec![],
+            label: None,
+        };
+        assert!(namespace_start_guard_in(&path, "app", Some(&old)).is_ok());
     }
 
     #[test]
