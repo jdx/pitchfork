@@ -1545,36 +1545,17 @@ impl Supervisor {
 
         // Registry writers read the persisted state, rather than the
         // supervisor's in-memory state. Publish before releasing their lock.
-        let mut state_file = self.state_file.lock().await;
-        if let Err(error) = state_file.write() {
-            // Keep both locks through termination and reaping: background
-            // flushes must not publish the failed start's dirty Running state.
+        let published = self.state_file.lock().await.write();
+        if let Err(error) = published {
+            // A PID that registry writers cannot see must not keep running.
             if let Err(stop_error) = PROCS
                 .kill_process_group_async(pid, 15, Some(Duration::ZERO))
                 .await
             {
                 warn!("failed to stop unpublished daemon {id}: {stop_error}");
-                child.kill().await.into_diagnostic()?;
-            }
-            // A child exit is not reaped just by dropping its handle. A
-            // process-cache refresh may have reaped it first; either way it
-            // has finished before the registry lock is released.
-            if let Err(wait_error) = child.wait().await {
-                warn!("failed to reap unpublished daemon {id}: {wait_error}");
-            }
-            let mut failed = daemon.clone();
-            failed.pid = None;
-            failed.title = None;
-            failed.start_time = None;
-            failed.boot_time = None;
-            failed.status = DaemonStatus::Failed(error.to_string());
-            state_file.insert_daemon(id, failed);
-            if let Err(write_error) = state_file.write() {
-                warn!("failed to persist unsuccessful start of {id}: {write_error}");
             }
             return Err(error);
         }
-        drop(state_file);
         drop(registration_guard);
 
         // Running state and PID are now persisted: concurrent run/stop calls
