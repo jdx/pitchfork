@@ -406,7 +406,9 @@ fn render_daemon_templates_with(
 
     if let Some(ref hc) = config.health_cmd {
         config.health_cmd = Some(crate::pitchfork_toml::HealthCmd {
-            run: renderer.render(&hc.run)?,
+            // As for `ready_cmd`, each argument of the argv form is rendered
+            // on its own and stays one argument.
+            run: hc.run.try_map(|arg| renderer.render(arg))?,
             interval: hc.interval,
             timeout: hc.timeout,
             retries: hc.retries,
@@ -1007,6 +1009,42 @@ mod tests {
                 "ping 6379".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn test_render_daemon_templates_health_cmd_array_per_argument() {
+        use crate::config_types::HealthCmd;
+        use crate::pitchfork_toml::RunCommand;
+
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            health_cmd: Some(HealthCmd {
+                run: RunCommand::Argv(vec![
+                    "redis-cli".to_string(),
+                    "-p".to_string(),
+                    "{{ daemons.redis.port }}".to_string(),
+                    "ping {{ daemons.redis.port }}".to_string(),
+                ]),
+                interval: Some(std::time::Duration::from_secs(5)),
+                ..HealthCmd::default()
+            }),
+            ..Default::default()
+        };
+
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+
+        let health_cmd = config.health_cmd.unwrap();
+        assert_eq!(
+            health_cmd.run,
+            RunCommand::Argv(vec![
+                "redis-cli".to_string(),
+                "-p".to_string(),
+                "6379".to_string(),
+                "ping 6379".to_string(),
+            ])
+        );
+        assert_eq!(health_cmd.interval, Some(std::time::Duration::from_secs(5)));
     }
 
     #[test]

@@ -466,7 +466,7 @@ See [ready checks](/guides/ready-checks).
 
 ### `health_cmd`
 
-Shell command to probe periodically. Exit code `0` is healthy.
+Command to probe periodically. Exit code `0` is healthy.
 
 ```toml
 [daemons.redis]
@@ -478,6 +478,22 @@ retry = 3
 
 The shorthand is `health_cmd = "redis-cli ping"`. The command receives the
 daemon's working directory and environment, including resolved ports.
+
+As with [`ready_cmd`](#ready-cmd), the command can also be an array, the program
+followed by its arguments, which runs directly with no shell. It works both as
+the shorthand and as `run` in the object form, and templates are rendered in
+each argument separately. An array with no program, or one that starts with
+`"exec"`, is rejected.
+
+```toml
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+health_cmd = ["pg_isready", "-h", "localhost"]
+
+[daemons.replica]
+run = "postgres -D /var/lib/pgsql/replica"
+health_cmd = { run = ["pg_isready", "-h", "localhost", "-p", "5433"], interval = "10s", retries = 3 }
+```
 
 ### `health_http`
 

@@ -274,6 +274,32 @@ pub enum ConfigParseError {
     ExecInReadyCmdArgv { daemon: String, path: PathBuf },
 
     #[error(
+        "daemon '{daemon}' in {} has no program in its health_cmd array",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::empty_health_cmd),
+        url("https://pitchfork.jdx.dev/reference/configuration#health-cmd"),
+        help(
+            "the first element of a `health_cmd` array is the program to run; give it one, or use a string"
+        )
+    )]
+    EmptyHealthCmdArgv { daemon: String, path: PathBuf },
+
+    #[error(
+        "daemon '{daemon}' in {} starts its health_cmd array with \"exec\"",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::exec_in_health_cmd_array),
+        url("https://pitchfork.jdx.dev/reference/configuration#health-cmd"),
+        help(
+            "a health_cmd array runs the program directly, without a shell, so there is no shell for `exec` to replace; remove \"exec\" and start the array with the program"
+        )
+    )]
+    ExecInHealthCmdArgv { daemon: String, path: PathBuf },
+
+    #[error(
         "daemon '{daemon}' in {} sets proxy_tls_port = {port}, which is not one of its ports {declared:?}",
         path.display()
     )]

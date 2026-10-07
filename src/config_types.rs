@@ -479,8 +479,9 @@ impl JsonSchema for ReadyCmd {
                 {
                     "type": "array",
                     "items": { "type": "string" },
+                    "prefixItems": [{ "type": "string", "minLength": 1, "not": { "const": "exec" } }],
                     "minItems": 1,
-                    "description": "Program and its arguments, run without a shell, that returns exit code 0 when ready"
+                    "description": "Program and its arguments, run without a shell, that returns exit code 0 when ready. The program comes first, and is neither empty nor \"exec\"."
                 },
                 {
                     "type": "object",
@@ -489,7 +490,12 @@ impl JsonSchema for ReadyCmd {
                             "description": "Command that returns exit code 0 when ready: a shell command string, or a program and its arguments to run without a shell",
                             "oneOf": [
                                 { "type": "string" },
-                                { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+                                {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "prefixItems": [{ "type": "string", "minLength": 1, "not": { "const": "exec" } }],
+                                    "minItems": 1
+                                }
                             ]
                         },
                         "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m')" }
@@ -508,11 +514,13 @@ impl JsonSchema for ReadyCmd {
 /// Command health check configuration.
 /// TOML forms:
 ///   health_cmd = "openssl s_client -connect localhost:8443 -brief </dev/null"
+///   health_cmd = ["pg_isready", "-h", "localhost"]   # no shell
 ///   health_cmd = { run = "...", interval = "10s", timeout = "10s", retries = 3 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HealthCmd {
-    /// Shell command to run. Exit code 0 = healthy.
-    pub run: String,
+    /// Command to run, as a command line for the shell or as a program and
+    /// its arguments started without one. Exit code 0 = healthy.
+    pub run: RunCommand,
     /// Time between probes. None = the `supervisor.health_check_interval` setting (default 10s).
     pub interval: Option<std::time::Duration>,
     /// Per-probe timeout. None = the `supervisor.health_cmd_timeout` setting (default 10s).
@@ -522,7 +530,7 @@ pub struct HealthCmd {
 }
 
 impl HealthCmd {
-    pub fn new(run: impl Into<String>) -> Self {
+    pub fn new(run: impl Into<RunCommand>) -> Self {
         Self {
             run: run.into(),
             interval: None,
@@ -534,14 +542,14 @@ impl HealthCmd {
 
 impl std::fmt::Display for HealthCmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.run)
+        self.run.fmt(f)
     }
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[doc(hidden)]
 pub struct HealthCmdRaw {
-    run: String,
+    run: RunCommand,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     interval: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -551,10 +559,10 @@ pub struct HealthCmdRaw {
 }
 
 impl StringOrStruct for HealthCmd {
-    type Short = String;
+    type Short = RunCommand;
     type Raw = HealthCmdRaw;
 
-    fn from_short(run: String) -> Self {
+    fn from_short(run: RunCommand) -> Self {
         Self::new(run)
     }
 
@@ -578,7 +586,7 @@ impl StringOrStruct for HealthCmd {
         self.interval.is_none() && self.timeout.is_none() && self.retries.is_none()
     }
 
-    fn to_short(&self) -> String {
+    fn to_short(&self) -> RunCommand {
         self.run.clone()
     }
 
@@ -611,13 +619,31 @@ impl JsonSchema for HealthCmd {
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "Command health check: a shell command string, or { run, interval, timeout, retries } object with periodic probing",
+            "description": "Command health check: a shell command string, a program and its arguments to run without a shell, or { run, interval, timeout, retries } object with periodic probing",
             "oneOf": [
                 { "type": "string", "description": "Shell command that returns exit code 0 when healthy" },
                 {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "prefixItems": [{ "type": "string", "minLength": 1, "not": { "const": "exec" } }],
+                    "minItems": 1,
+                    "description": "Program and its arguments, run without a shell, that returns exit code 0 when healthy. The program comes first, and is neither empty nor \"exec\"."
+                },
+                {
                     "type": "object",
                     "properties": {
-                        "run": { "type": "string", "description": "Shell command that returns exit code 0 when healthy" },
+                        "run": {
+                            "description": "Command that returns exit code 0 when healthy: a shell command string, or a program and its arguments to run without a shell",
+                            "oneOf": [
+                                { "type": "string" },
+                                {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "prefixItems": [{ "type": "string", "minLength": 1, "not": { "const": "exec" } }],
+                                    "minItems": 1
+                                }
+                            ]
+                        },
                         "interval": { "type": "string", "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s)." },
                         "timeout": { "type": "string", "description": "Per-probe timeout (e.g. '10s', '5m'). Omit to use the `supervisor.health_cmd_timeout` setting (default 10s)." },
                         "retries": { "type": "integer", "minimum": 1, "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3)." }

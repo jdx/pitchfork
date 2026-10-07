@@ -412,7 +412,7 @@ fn merge_health_cmd_override(
 ) -> Option<HealthCmd> {
     match (configured, override_cmd) {
         (Some(mut health_cmd), Some(cmd)) => {
-            health_cmd.run = cmd;
+            health_cmd.run = cmd.into();
             Some(health_cmd)
         }
         (None, Some(cmd)) => Some(HealthCmd::new(cmd)),

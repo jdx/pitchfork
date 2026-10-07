@@ -121,11 +121,28 @@
       ]
     },
     "HealthCmd": {
-      "description": "Command health check: a shell command string, or { run, interval, timeout, retries } object with periodic probing",
+      "description": "Command health check: a shell command string, a program and its arguments to run without a shell, or { run, interval, timeout, retries } object with periodic probing",
       "oneOf": [
         {
           "description": "Shell command that returns exit code 0 when healthy",
           "type": "string"
+        },
+        {
+          "description": "Program and its arguments, run without a shell, that returns exit code 0 when healthy. The program comes first, and is neither empty nor \"exec\".",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "prefixItems": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "not": {
+                "const": "exec"
+              }
+            }
+          ]
         },
         {
           "type": "object",
@@ -140,8 +157,28 @@
               "minimum": 1
             },
             "run": {
-              "description": "Shell command that returns exit code 0 when healthy",
-              "type": "string"
+              "description": "Command that returns exit code 0 when healthy: a shell command string, or a program and its arguments to run without a shell",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "prefixItems": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "not": {
+                        "const": "exec"
+                      }
+                    }
+                  ]
+                }
+              ]
             },
             "timeout": {
               "description": "Per-probe timeout (e.g. '10s', '5m'). Omit to use the `supervisor.health_cmd_timeout` setting (default 10s).",
@@ -877,12 +914,21 @@
           "type": "string"
         },
         {
-          "description": "Program and its arguments, run without a shell, that returns exit code 0 when ready",
+          "description": "Program and its arguments, run without a shell, that returns exit code 0 when ready. The program comes first, and is neither empty nor \"exec\".",
           "type": "array",
           "items": {
             "type": "string"
           },
-          "minItems": 1
+          "minItems": 1,
+          "prefixItems": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "not": {
+                "const": "exec"
+              }
+            }
+          ]
         },
         {
           "type": "object",
@@ -898,7 +944,16 @@
                   "items": {
                     "type": "string"
                   },
-                  "minItems": 1
+                  "minItems": 1,
+                  "prefixItems": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "not": {
+                        "const": "exec"
+                      }
+                    }
+                  ]
                 }
               ]
             },

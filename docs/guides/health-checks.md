@@ -42,6 +42,15 @@ retry = true
 Exit code `0` is healthy. Commands receive the daemon's working directory,
 environment, and resolved port variables.
 
+To run the command without a shell, give the program and its arguments as an
+array, as for `run`. Each argument reaches the program exactly as written:
+
+```toml
+[daemons.database]
+run = "postgres -D data"
+health_cmd = { run = ["pg_isready", "-h", "127.0.0.1"], interval = "10s" }
+```
+
 For a simple listening check:
 
 ```toml
