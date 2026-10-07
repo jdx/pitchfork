@@ -271,6 +271,7 @@ EOF
 }
 
 @test "clean --prune forgets namespaces, slugs and config files of deleted directories" {
+  skip_on_windows "hand-written config uses MSYS paths the native binary cannot resolve"
   local gone="$TEST_TEMP_DIR/scratch-gone" kept="$TEST_TEMP_DIR/scratch-kept" live="$TEST_TEMP_DIR/scratch-live"
   local partial_dir="$TEST_TEMP_DIR/scratch-partial"
   mkdir -p "$gone" "$kept" "$live" "$partial_dir"
