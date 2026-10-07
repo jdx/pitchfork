@@ -18,7 +18,12 @@ Examples:
     pitchfork clean                 Remove all stopped/failed entries
     pitchfork clean my-worktree     Remove entries in one namespace
     pitchfork clean --daemon api    Remove the local namespace's api entry
-    pitchfork clean --prune         Remove entries whose directories disappeared
+    pitchfork clean --prune         Also forget projects whose directories disappeared
+
+With --prune, entries are removed when their working directory no longer
+exists: stopped daemon records, plus `[namespaces]` and `[slugs]` entries in
+the global config and external config files (`pitchfork config add`) that
+point at deleted paths. Namespaces with a running daemon are never touched.
     pitchfork c                     Alias for 'clean'
 
 ## Arguments
@@ -26,5 +31,5 @@ Examples:
 
 ## Flags
 - **`--daemon <ID>`** — Only clean these daemons (repeatable; bare names use the current namespace)
-- **`--prune`** — Only clean registrations whose working directories no longer exist
+- **`--prune`** — Only clean registrations whose working directories no longer exist. Also prunes stale namespaces, slugs and config files from the global config
 - **`-h --help`** — Print help

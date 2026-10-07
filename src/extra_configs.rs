@@ -68,6 +68,27 @@ pub fn normalize(path: &Path) -> PathBuf {
     result
 }
 
+/// Whether the filesystem positively reports `path` as nonexistent. An I/O
+/// error (permissions, a flaky mount) is not "gone": callers delete on this.
+pub fn path_is_gone(path: &Path) -> bool {
+    matches!(std::fs::exists(path), Ok(false))
+}
+
+/// Whether the state file records a running daemon in `namespace`. A
+/// namespace with live daemons must keep its registration, or a new project
+/// registered under the name would find the old project's running daemons.
+pub fn namespace_has_running_daemon(namespace: &str) -> bool {
+    crate::state_file::StateFile::read(&*env::PITCHFORK_STATE_FILE)
+        .map(|state| {
+            state
+                .daemons
+                .iter()
+                .any(|(id, d)| d.pid.is_some() && id.namespace() == namespace)
+        })
+        // Unknown state: err on the side of keeping the registration.
+        .unwrap_or(true)
+}
+
 pub fn resolve_path(dir: &Path, path: &str) -> PathBuf {
     let path = env::expand_tilde(path);
     normalize(&if path.is_absolute() {
@@ -307,6 +328,17 @@ pub fn add(namespace: &str, dir: &Path, file: &Path, label: Option<&str>) -> Res
     };
     let dir = normalize(dir);
     let file = normalize(file);
+    // A registration for this namespace whose directory is gone (a deleted
+    // scratch project, say) must not block registering it at a new directory.
+    let mut replaced_stale = false;
+    if let Some(old) = pt.namespaces.get(namespace)
+        && normalize(&old.dir) != dir
+        && path_is_gone(&old.dir)
+        && !namespace_has_running_daemon(namespace)
+    {
+        pt.namespaces.shift_remove(namespace);
+        replaced_stale = true;
+    }
     for (name, entry) in &pt.namespaces {
         if (name == namespace && normalize(&entry.dir) != dir)
             || (name != namespace
@@ -327,7 +359,7 @@ pub fn add(namespace: &str, dir: &Path, file: &Path, label: Option<&str>) -> Res
             config: Vec::new(),
             label: None,
         });
-    let mut changed = false;
+    let mut changed = replaced_stale;
     if let Some(label) = label
         && entry.label.as_deref() != Some(label)
     {

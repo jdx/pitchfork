@@ -2116,6 +2116,22 @@ impl PitchforkToml {
 
         let dir = env::expand_tilde(dir);
         if let Some(entry) = pt.namespaces.get_mut(name) {
+            if crate::extra_configs::path_is_gone(&entry.dir)
+                && crate::extra_configs::normalize(&entry.dir)
+                    != crate::extra_configs::normalize(&dir)
+            {
+                if crate::extra_configs::namespace_has_running_daemon(name) {
+                    // Retargeting would show the old project's running daemons
+                    // to the new one.
+                    miette::bail!(
+                        "namespace '{name}' has running daemons from {}, which no longer exists; stop them first",
+                        entry.dir.display()
+                    );
+                }
+                // The old project is gone: its attachments and label go with it.
+                entry.config.clear();
+                entry.label = None;
+            }
             if !entry.config.is_empty()
                 && crate::extra_configs::normalize(&entry.dir)
                     != crate::extra_configs::normalize(&dir)
@@ -2162,6 +2178,118 @@ impl PitchforkToml {
             pt.write_unlocked()?;
         }
         Ok(removed)
+    }
+}
+
+/// What [`PitchforkToml::prune_stale_registrations`] removed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PruneReport {
+    /// `[namespaces]` entries whose project directory no longer exists.
+    pub namespaces: Vec<String>,
+    /// `[slugs]` entries that pointed at a removed or missing directory.
+    pub slugs: Vec<String>,
+    /// Attached external configuration files that no longer exist.
+    pub config_files: usize,
+}
+
+impl PruneReport {
+    pub fn is_empty(&self) -> bool {
+        self.namespaces.is_empty() && self.slugs.is_empty() && self.config_files == 0
+    }
+}
+
+impl PitchforkToml {
+    /// Drop `[namespaces]`, `[slugs]` and attached external config files in the
+    /// user-level global config that point at paths that no longer exist.
+    ///
+    /// Tools and scratch projects register namespaces and slugs and are rarely
+    /// able to unregister them when their directory is deleted, so the registry
+    /// otherwise only ever grows.
+    ///
+    /// * `keep` names namespaces that must be left alone, typically those with
+    ///   a running daemon.
+    /// * `only` limits the pass to the listed namespaces; empty means all.
+    ///
+    /// A path is only treated as gone when the filesystem answers that it does
+    /// not exist: an I/O error (permissions, a flaky mount) keeps the entry.
+    pub fn prune_stale_registrations(
+        keep: &std::collections::HashSet<String>,
+        only: &[String],
+    ) -> Result<PruneReport> {
+        let global_path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
+        let mut report = PruneReport::default();
+        if !global_path.exists() {
+            return Ok(report);
+        }
+        let _lock = xx::fslock::get(global_path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
+        let raw = std::fs::read_to_string(global_path).map_err(|e| FileError::ReadError {
+            path: global_path.to_path_buf(),
+            source: e,
+        })?;
+        let mut pt = Self::parse_str(&raw, global_path)?;
+        let in_scope = |ns: &str| only.is_empty() || only.iter().any(|o| o == ns);
+
+        for (name, entry) in pt.namespaces.iter_mut() {
+            if keep.contains(name) || !in_scope(name) {
+                continue;
+            }
+            if crate::extra_configs::path_is_gone(&entry.dir) {
+                report.namespaces.push(name.clone());
+                continue;
+            }
+            let before = entry.config.len();
+            entry
+                .config
+                .retain(|file| !crate::extra_configs::path_is_gone(file));
+            let dropped = before - entry.config.len();
+            if dropped > 0 {
+                report.config_files += dropped;
+                if entry.config.is_empty() {
+                    // Same as detaching the last file: the label goes with it.
+                    entry.label = None;
+                }
+            }
+        }
+        for name in &report.namespaces {
+            pt.namespaces.shift_remove(name);
+        }
+
+        if only.is_empty() || !report.namespaces.is_empty() {
+            for (slug, entry) in &pt.slugs {
+                // A slug of a namespace with a running daemon stays, even if
+                // its own directory moved.
+                if entry.namespace.as_ref().is_some_and(|ns| keep.contains(ns)) {
+                    continue;
+                }
+                let ns_pruned = entry
+                    .namespace
+                    .as_ref()
+                    .is_some_and(|ns| report.namespaces.contains(ns));
+                let dir_gone = entry
+                    .dir
+                    .as_ref()
+                    .is_some_and(|d| crate::extra_configs::path_is_gone(d));
+                // A slug that names a directory directly is only in scope for
+                // an unscoped pass, since it belongs to no namespace.
+                let scoped_ok = only.is_empty() || ns_pruned;
+                if scoped_ok && (ns_pruned || dir_gone) {
+                    report.slugs.push(slug.clone());
+                }
+            }
+            for slug in &report.slugs {
+                pt.slugs.shift_remove(slug);
+            }
+        }
+
+        if !report.is_empty() {
+            pt.write_unlocked()?;
+            if !report.slugs.is_empty() {
+                let slug_names: Vec<String> = pt.slugs.keys().cloned().collect();
+                crate::proxy::hosts::sync_hosts_from_settings_with_slugs(&slug_names);
+            }
+        }
+        Ok(report)
     }
 }
 

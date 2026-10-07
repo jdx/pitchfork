@@ -8,7 +8,6 @@ use crate::daemon::Daemon;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::error::FileError;
 use crate::pitchfork_toml::CpuLimit;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::HealthCmd;
@@ -681,14 +680,13 @@ impl Supervisor {
 
             let mut missing = HashMap::new();
             for (id, dir) in candidates {
-                if !tokio::fs::try_exists(&dir)
-                    .await
-                    .map_err(|source| FileError::ReadError {
-                        path: dir.clone(),
-                        source,
-                    })?
-                {
-                    missing.insert(id, dir);
+                match tokio::fs::try_exists(&dir).await {
+                    Ok(false) => {
+                        missing.insert(id, dir);
+                    }
+                    Ok(true) => {}
+                    // Unknown is not gone: keep the record, prune the rest.
+                    Err(e) => warn!("cannot check {} to prune {id}: {e}", dir.display()),
                 }
             }
 
