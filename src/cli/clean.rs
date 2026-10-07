@@ -107,6 +107,11 @@ impl Clean {
                     report.slugs.len(),
                     report.config_files
                 );
+                if !report.slugs.is_empty()
+                    && let Err(e) = ipc.sync_mdns().await
+                {
+                    warn!("could not refresh mDNS after pruning slugs: {e}");
+                }
             }
         }
         Ok(())
