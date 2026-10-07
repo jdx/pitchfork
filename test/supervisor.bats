@@ -66,6 +66,13 @@ get_supervisor_pid() {
   # A session leader has pid == pgid == sid; the caller's shell does not.
   [[ "$(ps -o pgid= -p "$pid" | tr -d ' ')" == "$pid" ]]
   [[ "$(ps -o pgid= -p "$pid" | tr -d ' ')" != "$(ps -o pgid= -p $$ | tr -d ' ')" ]]
+
+  # setpgid(0, 0) alone would pass the checks above; only setsid() also leaves
+  # the caller's session. macOS `ps` has no portable session id, so check on Linux.
+  if [[ "$(uname -s)" == Linux ]]; then
+    [[ "$(ps -o sid= -p "$pid" | tr -d ' ')" == "$pid" ]]
+    [[ "$(ps -o sid= -p "$pid" | tr -d ' ')" != "$(ps -o sid= -p $$ | tr -d ' ')" ]]
+  fi
 }
 
 # A caller's non-CLOEXEC descriptors (bats' fd 3, pipes from a wrapping
