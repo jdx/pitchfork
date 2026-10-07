@@ -31,24 +31,6 @@ use tokio::select;
 use tokio::sync::oneshot;
 use tokio::time;
 
-/// Reap a failed start within its shared-lock budget. An external reaper may
-/// already have collected the child, so an error only counts as exit when the
-/// process group has no live member.
-async fn wait_for_unpublished_exit(
-    child: &mut tokio::process::Child,
-    pid: u32,
-    timeout: Duration,
-) -> bool {
-    match time::timeout(timeout, child.wait()).await {
-        Ok(Ok(_)) => !PROCS.process_group_has_live_member(pid),
-        Ok(Err(error)) => {
-            warn!("failed to reap unpublished pid {pid}: {error}");
-            !PROCS.process_group_has_live_member(pid)
-        }
-        Err(_) => false,
-    }
-}
-
 /// Cache for compiled regex patterns to avoid recompilation on daemon restarts
 static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
@@ -877,14 +859,6 @@ impl Supervisor {
         let Some(pid) = daemon.pid else {
             return Ok(None);
         };
-        if daemon.status.is_failed() && PROCS.process_group_has_live_member(pid) {
-            // An unsuccessful publication keeps a surviving process group
-            // tracked until its cleanup monitor finishes. Its leader may be
-            // gone while a descendant is still stuck; do not replace it.
-            return Ok(Some(IpcResponse::DaemonFailed {
-                error: "the previous failed start is still being cleaned up".into(),
-            }));
-        }
         if opts.force {
             // A forced start replaces the running instance, so the daemon is
             // recorded as restarting rather than stopped until the new
@@ -1573,50 +1547,30 @@ impl Supervisor {
         // supervisor's in-memory state. Publish before releasing their lock.
         let mut state_file = self.state_file.lock().await;
         if let Err(error) = state_file.write() {
-            // Stop promptly, but never hold shared locks through an unbounded
-            // wait for a child stuck in uninterruptible I/O.
+            // Keep both locks through termination and reaping: background
+            // flushes must not publish the failed start's dirty Running state.
             if let Err(stop_error) = PROCS
                 .kill_process_group_async(pid, 15, Some(Duration::ZERO))
                 .await
             {
                 warn!("failed to stop unpublished daemon {id}: {stop_error}");
-                if let Err(kill_error) = child.start_kill() {
-                    warn!("failed to signal unpublished daemon {id}: {kill_error}");
-                }
+                child.kill().await.into_diagnostic()?;
             }
-            let exited = wait_for_unpublished_exit(&mut child, pid, Duration::from_secs(1)).await;
+            // A child exit is not reaped just by dropping its handle. A
+            // process-cache refresh may have reaped it first; either way it
+            // has finished before the registry lock is released.
+            if let Err(wait_error) = child.wait().await {
+                warn!("failed to reap unpublished daemon {id}: {wait_error}");
+            }
             let mut failed = daemon.clone();
-            let failure_status = DaemonStatus::Failed(error.to_string());
-            failed.status = failure_status.clone();
-            if exited {
-                failed.pid = None;
-                failed.title = None;
-                failed.start_time = None;
-                failed.boot_time = None;
-            }
+            failed.pid = None;
+            failed.title = None;
+            failed.start_time = None;
+            failed.boot_time = None;
+            failed.status = DaemonStatus::Failed(error.to_string());
             state_file.insert_daemon(id, failed);
             if let Err(write_error) = state_file.write() {
                 warn!("failed to persist unsuccessful start of {id}: {write_error}");
-            }
-            if !exited {
-                // Keep the surviving process visible and monitored. Release
-                // shared locks now; only its eventual exit clears its PID.
-                drop(state_file);
-                drop(registration_guard);
-                let id = id.clone();
-                tokio::spawn(async move {
-                    let _monitored_guard = monitored_guard;
-                    let _output_relay = output_relay;
-                    if let Err(wait_error) = child.wait().await {
-                        warn!("failed to reap unpublished daemon {id}: {wait_error}");
-                    }
-                    while PROCS.process_group_has_live_member(pid) {
-                        time::sleep(Duration::from_millis(100)).await;
-                    }
-                    SUPERVISOR
-                        .finalize_monitored_exit(&id, pid, monitor_token, failure_status, None)
-                        .await;
-                });
             }
             return Err(error);
         }
@@ -4538,27 +4492,5 @@ mod output_reader_eio_tests {
             lines.push(line.text);
         }
         assert_eq!(lines, ["first", "last without newline"]);
-    }
-}
-
-#[cfg(all(test, unix))]
-mod unpublished_exit_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn live_unpublished_child_has_a_bounded_wait_and_can_be_reaped_later() {
-        let mut child = tokio::process::Command::new("sleep")
-            .arg("30")
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let pid = child.id().unwrap();
-        assert!(!wait_for_unpublished_exit(&mut child, pid, Duration::from_millis(10)).await);
-        assert!(child.try_wait().unwrap().is_none());
-        child.start_kill().unwrap();
-        assert!(wait_for_unpublished_exit(&mut child, pid, Duration::from_secs(1)).await);
-        // A second wait, after the process has already been reaped, cannot
-        // skip failed-state cleanup or leave a phantom live PID.
-        assert!(wait_for_unpublished_exit(&mut child, pid, Duration::from_secs(1)).await);
     }
 }
