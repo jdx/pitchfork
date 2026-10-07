@@ -361,8 +361,8 @@
           {
             "name": "prune",
             "usage": "--prune",
-            "help": "Only clean registrations whose working directories no longer exist",
-            "help_first_line": "Only clean registrations whose working directories no longer exist",
+            "help": "Only clean registrations whose working directories no longer exist. Also prunes stale namespaces, slugs and config files from the global config",
+            "help_first_line": "Only clean registrations whose working directories no longer exist. Also prunes stale namespaces, slugs and config files from the global config",
             "short": [],
             "long": [
               "prune"
@@ -393,7 +393,7 @@
         "hide": false,
         "args_override_self": true,
         "help": "Removes stopped/failed daemons from `pitchfork list`",
-        "help_long": "Removes stopped/failed daemons from `pitchfork list`\n\nCleans up the daemon list by removing entries for daemons that are no\nlonger running. Does not affect running daemons or their configurations.\n\nUse this to clear out old entries after stopping daemons manually or\nafter daemons have failed.\n\nExamples:\n\n    pitchfork clean                 Remove all stopped/failed entries\n    pitchfork clean my-worktree     Remove entries in one namespace\n    pitchfork clean --daemon api    Remove the local namespace's api entry\n    pitchfork clean --prune         Remove entries whose directories disappeared\n    pitchfork c                     Alias for 'clean'",
+        "help_long": "Removes stopped/failed daemons from `pitchfork list`\n\nCleans up the daemon list by removing entries for daemons that are no\nlonger running. Does not affect running daemons or their configurations.\n\nUse this to clear out old entries after stopping daemons manually or\nafter daemons have failed.\n\nExamples:\n\n    pitchfork clean                 Remove all stopped/failed entries\n    pitchfork clean my-worktree     Remove entries in one namespace\n    pitchfork clean --daemon api    Remove the local namespace's api entry\n    pitchfork clean --prune         Also forget projects whose directories disappeared\n\nWith --prune, entries are removed when their working directory no longer\nexists: stopped daemon records, plus `[namespaces]` and `[slugs]` entries in\nthe global config and external config files (`pitchfork config add`) that\npoint at deleted paths. Namespaces with a running daemon are never touched.\n    pitchfork c                     Alias for 'clean'",
         "name": "clean",
         "aliases": [
           "c"

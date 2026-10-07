@@ -269,3 +269,72 @@ EOF
 
   pitchfork stop toggle_test
 }
+
+@test "clean --prune forgets namespaces, slugs and config files of deleted directories" {
+  local gone="$TEST_TEMP_DIR/scratch-gone" kept="$TEST_TEMP_DIR/scratch-kept" live="$TEST_TEMP_DIR/scratch-live"
+  mkdir -p "$gone" "$kept" "$live"
+  cat > "$live/pitchfork.toml" <<'EOF2'
+namespace = "liveproj"
+
+[daemons.web]
+run = "sleep 30"
+EOF2
+  cat > "$PITCHFORK_CONFIG_DIR/config.toml" <<EOF2
+[slugs.gone-host]
+namespace = "goneproj"
+daemon = "web"
+
+[slugs.live-host]
+namespace = "liveproj"
+daemon = "web"
+
+[namespaces.goneproj]
+dir = "$gone"
+
+[namespaces.keptproj]
+dir = "$kept"
+
+[namespaces.liveproj]
+dir = "$live"
+EOF2
+
+  cd "$live"
+  run pitchfork start web
+  assert_success
+  rm -rf "$gone"
+  # The running daemon's project disappears too: its registration must stay.
+  mv "$live" "$live-moved"
+  cd "$TEST_TEMP_DIR"
+
+  run pitchfork clean --prune
+  assert_success
+
+  run cat "$PITCHFORK_CONFIG_DIR/config.toml"
+  refute_output --partial "goneproj"
+  refute_output --partial "gone-host"
+  assert_output --partial "keptproj"
+  assert_output --partial "liveproj"
+  assert_output --partial "live-host"
+
+  mv "$live-moved" "$live"
+  cd "$live"
+  pitchfork stop web
+}
+
+@test "a stale namespace registration does not block registering the name elsewhere" {
+  local old="$TEST_TEMP_DIR/old-proj" new="$TEST_TEMP_DIR/new-proj"
+  mkdir -p "$old" "$new"
+  printf '[daemons.web]\nrun = "sleep 30"\n' > "$old/ext.toml"
+  cp "$old/ext.toml" "$new/ext.toml"
+  cd "$old"
+  run pitchfork config add ext.toml --namespace shop
+  assert_success
+  cd "$TEST_TEMP_DIR"
+  rm -rf "$old"
+  cd "$new"
+  run pitchfork config add ext.toml --namespace shop
+  assert_success
+  run pitchfork config list
+  assert_output --partial "new-proj"
+  refute_output --partial "old-proj"
+}
