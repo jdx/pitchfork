@@ -55,6 +55,7 @@ get_supervisor_pid() {
 # terminal hangs up (ssh logout, closed window). It must not share the
 # caller's session, or logging out would take down every daemon.
 @test "background supervisor runs in its own session, apart from the caller's terminal" {
+  skip_on_windows "inspects Unix process groups; the Windows supervisor is detached by DETACHED_PROCESS"
   run pitchfork supervisor start
   assert_success
 
