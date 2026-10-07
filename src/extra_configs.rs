@@ -89,6 +89,47 @@ pub fn namespace_has_running_daemon(namespace: &str) -> bool {
         .unwrap_or(true)
 }
 
+/// Registration observed before a start runs hooks or waits for ports.
+pub fn namespace_start_snapshot(namespace: &str) -> Result<Option<NamespaceEntry>> {
+    Ok(PitchforkToml::read(&*env::PITCHFORK_GLOBAL_CONFIG_USER)?
+        .namespaces
+        .get(namespace)
+        .cloned())
+}
+
+/// Serialize spawning and publishing its PID with registry mutations. Hooks
+/// run before this lock, so they can safely register or start other daemons.
+pub fn namespace_start_guard(
+    namespace: &str,
+    expected: Option<&NamespaceEntry>,
+) -> Result<Option<xx::fslock::LockFile>> {
+    namespace_start_guard_in(&env::PITCHFORK_GLOBAL_CONFIG_USER, namespace, expected)
+}
+
+fn namespace_start_guard_in(
+    path: &Path,
+    namespace: &str,
+    expected: Option<&NamespaceEntry>,
+) -> Result<Option<xx::fslock::LockFile>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).into_diagnostic()?;
+    }
+    let lock = xx::fslock::get(path, false).into_diagnostic()?;
+    let pt = match std::fs::read_to_string(path) {
+        Ok(raw) => PitchforkToml::parse_str(&raw, path)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            PitchforkToml::new(path.to_path_buf())
+        }
+        Err(err) => return Err(err).into_diagnostic(),
+    };
+    if pt.namespaces.get(namespace) != expected {
+        miette::bail!(
+            "namespace '{namespace}' changed while starting; retry with its current configuration"
+        );
+    }
+    Ok(lock)
+}
+
 pub fn resolve_path(dir: &Path, path: &str) -> PathBuf {
     let path = env::expand_tilde(path);
     normalize(&if path.is_absolute() {
@@ -419,6 +460,49 @@ pub fn remove(file: &Path) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namespace_start_holds_registry_writers_until_pid_publication() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        let guard = namespace_start_guard_in(&path, "app", None).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let _lock = xx::fslock::get(&path, false).unwrap();
+            locked_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(
+            locked_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err()
+        );
+        drop(guard);
+        locked_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn a_registration_changed_during_start_cannot_spawn_old_options() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(&path, "[namespaces.app]\ndir = '/new-project'\n").unwrap();
+        assert!(namespace_start_guard_in(&path, "app", None).is_err());
+        let current = PitchforkToml::read(&path).unwrap();
+        let old = NamespaceEntry {
+            dir: PathBuf::from("/old-project"),
+            config: vec![],
+            label: None,
+        };
+        assert!(namespace_start_guard_in(&path, "app", Some(&old)).is_err());
+        assert!(namespace_start_guard_in(&path, "app", current.namespaces.get("app")).is_ok());
+        std::fs::remove_file(&path).unwrap();
+        assert!(namespace_start_guard_in(&path, "app", current.namespaces.get("app")).is_err());
+    }
     #[test]
     fn registry_paths_are_relative_to_project_and_old_entries_are_compatible() {
         let tmp = tempfile::tempdir().unwrap();

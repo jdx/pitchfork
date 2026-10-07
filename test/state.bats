@@ -281,6 +281,11 @@ namespace = "liveproj"
 [daemons.web]
 run = "sleep 30"
 EOF2
+  local gone_native kept_native live_native partial_native
+  gone_native=$(normalize_path "$gone")
+  kept_native=$(normalize_path "$kept")
+  live_native=$(normalize_path "$live")
+  partial_native=$(normalize_path "$partial_dir")
   cat > "$PITCHFORK_CONFIG_DIR/config.toml" <<EOF2
 [slugs.gone-host]
 namespace = "goneproj"
@@ -288,27 +293,27 @@ daemon = "web"
 
 [slugs.live-host]
 namespace = "liveproj"
-dir = "$live"
+dir = "$live_native"
 daemon = "web"
 
 [namespaces.goneproj]
-dir = "$gone"
+dir = "$gone_native"
 
 [namespaces.keptproj]
-dir = "$kept"
+dir = "$kept_native"
 
 [namespaces.partial]
-dir = "$kept"
-config = ["$kept/missing.toml", "$kept/present.toml"]
+dir = "$kept_native"
+config = ["$kept_native/missing.toml", "$kept_native/present.toml"]
 label = "partial-label"
 
 [namespaces.lastone]
-dir = "$partial_dir"
-config = ["$partial_dir/missing.toml"]
+dir = "$partial_native"
+config = ["$partial_native/missing.toml"]
 label = "last-label"
 
 [namespaces.liveproj]
-dir = "$live"
+dir = "$live_native"
 EOF2
 
   cd "$live"
@@ -329,11 +334,11 @@ EOF2
   assert_output --partial "liveproj"
   assert_output --partial "live-host"
   # Only the missing attachment goes; the existing one and its label stay.
-  refute_output --partial "missing.toml\", \"$kept"
+  refute_output --partial "missing.toml\", \"$kept_native"
   assert_output --partial "present.toml"
   assert_output --partial "partial-label"
   # Removing the last attachment clears the label but keeps the namespace.
-  refute_output --partial "$partial_dir/missing.toml"
+  refute_output --partial "$partial_native/missing.toml"
   refute_output --partial "last-label"
   assert_output --partial "[namespaces.lastone]"
 

@@ -112,7 +112,7 @@ pub struct NamespaceEntryRaw {
 }
 
 /// Resolved namespace entry with PathBuf.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamespaceEntry {
     /// Project directory containing the pitchfork.toml
     pub dir: PathBuf,
@@ -2228,6 +2228,19 @@ impl PitchforkToml {
             source: e,
         })?;
         let mut pt = Self::parse_str(&raw, global_path)?;
+        // Starts publish their PID while holding this same registry lock.
+        // Refresh the caller's IPC snapshot only after taking it.
+        let mut keep = keep.clone();
+        match crate::state_file::StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+            Ok(state) => keep.extend(
+                state
+                    .daemons
+                    .iter()
+                    .filter(|(_, d)| d.pid.is_some())
+                    .map(|(id, _)| id.namespace().to_string()),
+            ),
+            Err(_) => keep.extend(pt.namespaces.keys().cloned()),
+        }
         let in_scope = |ns: &str| only.is_empty() || only.iter().any(|o| o == ns);
 
         for (name, entry) in pt.namespaces.iter_mut() {

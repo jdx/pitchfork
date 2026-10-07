@@ -1048,6 +1048,12 @@ impl Supervisor {
             });
         }
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
+        let namespace = id.namespace().to_string();
+        let namespace_registration = tokio::task::spawn_blocking(move || {
+            crate::extra_configs::namespace_start_snapshot(&namespace)
+        })
+        .await
+        .into_diagnostic()??;
 
         // Create channel for readiness notification if wait_ready is true
         let (ready_tx, ready_rx) = if opts.wait_ready {
@@ -1430,6 +1436,12 @@ impl Supervisor {
         // basis, and run_once runs once per retry attempt, so a daemon that
         // consistently fails to spawn would otherwise accumulate sinks.
         // A failed spawn returns here; the sink is terminated by PendingSink.
+        let namespace = id.namespace().to_string();
+        let registration_guard = tokio::task::spawn_blocking(move || {
+            crate::extra_configs::namespace_start_guard(&namespace, namespace_registration.as_ref())
+        })
+        .await
+        .into_diagnostic()??;
         let mut child = cmd.spawn().into_diagnostic()?;
         // In a job of its own, so its whole process tree can be stopped; see
         // `win_job`.
@@ -1530,6 +1542,21 @@ impl Supervisor {
                     .build(),
             )
             .await?;
+
+        // Registry writers read the persisted state, rather than the
+        // supervisor's in-memory state. Publish before releasing their lock.
+        let published = self.state_file.lock().await.write();
+        if let Err(error) = published {
+            // A PID that registry writers cannot see must not keep running.
+            if let Err(stop_error) = PROCS
+                .kill_process_group_async(pid, 15, Some(Duration::ZERO))
+                .await
+            {
+                warn!("failed to stop unpublished daemon {id}: {stop_error}");
+            }
+            return Err(error);
+        }
+        drop(registration_guard);
 
         // Running state and PID are now persisted: concurrent run/stop calls
         // observe a running daemon and behave correctly, so release the stop
