@@ -15,7 +15,7 @@ use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, RunCommand};
 use crate::procs::PROCS;
 use crate::settings::{resolve_shell, settings};
-use crate::shell::{HideConsoleWindow, Shell, ShellScript};
+use crate::shell::{HideConsoleWindow, Shell, ShellScript, powershell_script};
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -1207,7 +1207,15 @@ impl Supervisor {
                     "daemon {id}: wrapping command with mise ({})",
                     mise_bin.display()
                 );
-                words.extend(script);
+                if let Some(script) = script {
+                    let script = match words.split_first() {
+                        Some((program, options)) => {
+                            powershell_script(program, options, &script).into_owned()
+                        }
+                        None => script,
+                    };
+                    words.push(script);
+                }
                 None
             }
             None => script,
