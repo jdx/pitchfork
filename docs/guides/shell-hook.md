@@ -67,6 +67,31 @@ auto = ["stop"]  # Manually start, auto-stops when you leave
 You can manually start daemons with `pitchfork start` and they will still auto-stop when you leave if configured with `auto = ["stop"]`.
 :::
 
+## Keep a background process running without systemd or launchd {#without-a-service-manager}
+
+On a host with no service manager, such as a dev container, `pitchfork boot enable`
+has nothing to register with. The shell hook can do the job instead: it starts the
+supervisor on demand and starts any daemon with `auto = ["start"]` each time a
+shell starts or changes directory, and the daemon keeps running after the terminal
+or ssh session ends. Put the daemon in the user config so it applies in every
+directory:
+
+```toml
+# ~/.config/pitchfork/config.toml
+[daemons.history-watch]
+run = "exec ~/.local/bin/mise dot watch"
+auto = ["start"]     # no "stop": it must outlive the shell
+retry = true         # restart on a non-zero exit, checked every general.interval
+ready_delay = 0      # do not hold up shell startup for the default 3s delay
+```
+
+Re-running the hook is idempotent: a daemon that is already running is skipped, so
+opening more shells never starts duplicates. Use absolute paths for the program,
+since the supervisor inherits the environment of whichever shell first started it
+(or set `mise = true`, see [mise integration](/guides/mise-integration)). A process
+that exits with status 0 is not restarted by `retry`; the next shell start launches
+it again.
+
 ## Set the stop delay
 
 ```toml

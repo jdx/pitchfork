@@ -50,6 +50,23 @@ get_supervisor_pid() {
   assert_success
 }
 
+# The background supervisor treats SIGHUP as a request to stop every daemon, and
+# the kernel sends SIGHUP to a terminal's foreground process group when the
+# terminal hangs up (ssh logout, closed window). It must not share the
+# caller's session, or logging out would take down every daemon.
+@test "background supervisor runs in its own session, apart from the caller's terminal" {
+  run pitchfork supervisor start
+  assert_success
+
+  local pid
+  pid="$(get_supervisor_pid)"
+  [[ -n "$pid" ]]
+
+  # A session leader has pid == pgid == sid; the caller's shell does not.
+  [[ "$(ps -o pgid= -p "$pid" | tr -d ' ')" == "$pid" ]]
+  [[ "$(ps -o pgid= -p "$pid" | tr -d ' ')" != "$(ps -o pgid= -p $$ | tr -d ' ')" ]]
+}
+
 # A caller's non-CLOEXEC descriptors (bats' fd 3, pipes from a wrapping
 # script) must not leak into the long-lived background supervisor: it would
 # hold the pipe open forever and whoever waits for EOF on it (bats itself,

@@ -383,10 +383,18 @@ pub fn start_in_background() -> Result<()> {
             .stderr_file(stderr_file)
             .before_spawn(move |cmd| {
                 use std::os::unix::process::CommandExt;
-                // SAFETY: the hook only issues close_range/fcntl syscalls,
-                // which are async-signal-safe, and does not allocate.
+                // SAFETY: the hook only issues close_range/fcntl/setsid
+                // syscalls, which are async-signal-safe, and does not allocate.
                 unsafe {
                     cmd.pre_exec(move || {
+                        // Leave the caller's session and process group. Left in
+                        // them, the supervisor would receive the SIGHUP the
+                        // kernel sends the foreground process group when the
+                        // controlling terminal hangs up (an ssh logout, a closed
+                        // terminal), and SIGHUP makes it stop every daemon.
+                        // Failure (already a group leader) changes nothing that
+                        // matters, so it is ignored.
+                        libc::setsid();
                         cloexec_inherited_fds(max_fd);
                         Ok(())
                     });
