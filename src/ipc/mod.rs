@@ -178,6 +178,10 @@ pub enum IpcResponse {
         port: u16,
         process: String,
         pid: u32,
+        /// The local address whose bind found the port taken. Absent from a
+        /// supervisor that predates it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
     },
     /// No available ports found after exhausting auto-bump attempts
     NoAvailablePort {
@@ -358,6 +362,22 @@ fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn port_conflict_from_an_older_supervisor_has_no_address() {
+        let rsp: IpcResponse =
+            serde_json::from_str(r#"{"PortConflict":{"port":3000,"process":"node","pid":42}}"#)
+                .unwrap();
+        assert!(matches!(
+            rsp,
+            IpcResponse::PortConflict {
+                port: 3000,
+                pid: 42,
+                address: None,
+                ..
+            }
+        ));
+    }
+
     use super::*;
 
     #[cfg(unix)]

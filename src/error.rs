@@ -151,10 +151,27 @@ pub enum DependencyError {
     },
 }
 
+/// The message for a port found in use: on which local address, and by which
+/// process. `pid` 0 means no process holding the port could be found, which
+/// happens when it belongs to another user, whose sockets cannot be read, or
+/// when no process owns the socket any more, as with a connection that was
+/// never accepted or is still closing.
+pub fn port_in_use_message(port: u16, address: Option<&str>, process: &str, pid: u32) -> String {
+    let on = address.map(|a| format!(" on {a}")).unwrap_or_default();
+    if pid == 0 {
+        format!(
+            "port {port} is already in use{on}, but no process holding it could be found; \
+             it may belong to another user, or be a connection no process owns any more"
+        )
+    } else {
+        format!("port {port} is already in use{on} by process '{process}' (PID: {pid})")
+    }
+}
+
 /// Errors related to port binding and availability.
 #[derive(Debug, Error, Diagnostic)]
 pub enum PortError {
-    #[error("port {port} is already in use by process '{process}' (PID: {pid})")]
+    #[error("{}", port_in_use_message(*port, address.as_deref(), process, *pid))]
     #[diagnostic(
         code(pitchfork::port::in_use),
         url("https://pitchfork.jdx.dev/configuration#port"),
@@ -164,6 +181,8 @@ pub enum PortError {
     )]
     InUse {
         port: u16,
+        /// The local address whose bind found the port taken.
+        address: Option<String>,
         process: String,
         pid: u32,
     },
@@ -600,6 +619,23 @@ pub fn find_similar_daemon<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn port_in_use_message_names_the_address_and_the_holder() {
+        assert_eq!(
+            port_in_use_message(3000, Some("127.0.0.1"), "node", 42),
+            "port 3000 is already in use on 127.0.0.1 by process 'node' (PID: 42)"
+        );
+        // No listening process found: say so instead of naming "unknown".
+        let message = port_in_use_message(3000, Some("0.0.0.0"), "unknown", 0);
+        assert!(message.starts_with("port 3000 is already in use on 0.0.0.0, but no process"));
+        assert!(!message.contains("unknown"));
+        // A supervisor that does not report the address.
+        assert_eq!(
+            port_in_use_message(3000, None, "node", 42),
+            "port 3000 is already in use by process 'node' (PID: 42)"
+        );
+    }
+
     use super::*;
 
     #[test]

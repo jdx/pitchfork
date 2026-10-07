@@ -94,7 +94,8 @@ EOF
   run pitchfork start port_conflict 2>&1
   assert_failure
 
-  [[ "$output" == *"already in use"* ]] || [[ "$output" == *"Port"* ]]
+  # The error names the address whose bind found the port taken.
+  assert_output --partial "is already in use on "
 
   kill "$blocker_pid" 2>/dev/null || true
   wait "$blocker_pid" 2>/dev/null || true

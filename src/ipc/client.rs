@@ -473,15 +473,21 @@ impl IpcClient {
                 resolved_ports: Vec::new(),
                 error_message: Some(format!("Failed to start daemon {}: {}", opts.id, error)),
             }),
-            IpcResponse::PortConflict { port, process, pid } => Ok(RunResult {
+            IpcResponse::PortConflict {
+                port,
+                process,
+                pid,
+                address,
+            } => Ok(RunResult {
                 oneshot: opts.oneshot,
                 started: false,
                 exit_code: Some(1),
                 start_time,
                 resolved_ports: Vec::new(),
                 error_message: Some(format!(
-                    "Failed to start daemon {}: port {} is already in use by process '{}' (PID: {})",
-                    opts.id, port, process, pid
+                    "Failed to start daemon {}: {}",
+                    opts.id,
+                    crate::error::port_in_use_message(port, address.as_deref(), &process, pid)
                 )),
             }),
             IpcResponse::NoAvailablePort {
