@@ -2116,7 +2116,9 @@ impl PitchforkToml {
 
         let dir = env::expand_tilde(dir);
         if let Some(entry) = pt.namespaces.get_mut(name) {
-            if crate::extra_configs::path_is_gone(&entry.dir) {
+            if crate::extra_configs::path_is_gone(&entry.dir)
+                && !crate::extra_configs::namespace_has_running_daemon(name)
+            {
                 // The old project is gone: its attachments and label go with it.
                 entry.config.clear();
                 entry.label = None;
@@ -2246,6 +2248,11 @@ impl PitchforkToml {
 
         if only.is_empty() || !report.namespaces.is_empty() {
             for (slug, entry) in &pt.slugs {
+                // A slug of a namespace with a running daemon stays, even if
+                // its own directory moved.
+                if entry.namespace.as_ref().is_some_and(|ns| keep.contains(ns)) {
+                    continue;
+                }
                 let ns_pruned = entry
                     .namespace
                     .as_ref()

@@ -272,7 +272,9 @@ EOF
 
 @test "clean --prune forgets namespaces, slugs and config files of deleted directories" {
   local gone="$TEST_TEMP_DIR/scratch-gone" kept="$TEST_TEMP_DIR/scratch-kept" live="$TEST_TEMP_DIR/scratch-live"
-  mkdir -p "$gone" "$kept" "$live"
+  local partial_dir="$TEST_TEMP_DIR/scratch-partial"
+  mkdir -p "$gone" "$kept" "$live" "$partial_dir"
+  touch "$kept/present.toml"
   cat > "$live/pitchfork.toml" <<'EOF2'
 namespace = "liveproj"
 
@@ -286,6 +288,7 @@ daemon = "web"
 
 [slugs.live-host]
 namespace = "liveproj"
+dir = "$live"
 daemon = "web"
 
 [namespaces.goneproj]
@@ -293,6 +296,16 @@ dir = "$gone"
 
 [namespaces.keptproj]
 dir = "$kept"
+
+[namespaces.partial]
+dir = "$kept"
+config = ["$kept/missing.toml", "$kept/present.toml"]
+label = "partial-label"
+
+[namespaces.lastone]
+dir = "$partial_dir"
+config = ["$partial_dir/missing.toml"]
+label = "last-label"
 
 [namespaces.liveproj]
 dir = "$live"
@@ -315,6 +328,14 @@ EOF2
   assert_output --partial "keptproj"
   assert_output --partial "liveproj"
   assert_output --partial "live-host"
+  # Only the missing attachment goes; the existing one and its label stay.
+  refute_output --partial "missing.toml\", \"$kept"
+  assert_output --partial "present.toml"
+  assert_output --partial "partial-label"
+  # Removing the last attachment clears the label but keeps the namespace.
+  refute_output --partial "$partial_dir/missing.toml"
+  refute_output --partial "last-label"
+  assert_output --partial "[namespaces.lastone]"
 
   mv "$live-moved" "$live"
   cd "$live"
@@ -337,4 +358,23 @@ EOF2
   run pitchfork config list
   assert_output --partial "new-proj"
   refute_output --partial "old-proj"
+}
+
+@test "a namespace with a running daemon keeps its registration when its directory is gone" {
+  local old="$TEST_TEMP_DIR/old-live" new="$TEST_TEMP_DIR/new-live"
+  mkdir -p "$old" "$new"
+  printf 'namespace = "shop"\n\n[daemons.web]\nrun = "sleep 30"\n' > "$old/pitchfork.toml"
+  printf '[daemons.web]\nrun = "sleep 30"\n' > "$new/ext.toml"
+  cd "$TEST_TEMP_DIR"
+  cd "$old"
+  run pitchfork start web
+  assert_success
+  printf '[namespaces.shop]\ndir = "%s"\n' "$old" > "$PITCHFORK_CONFIG_DIR/config.toml"
+  mv "$old" "$old-moved"
+  cd "$new"
+  run pitchfork config add ext.toml --namespace shop
+  assert_failure
+  assert_output --partial "conflicts with namespace 'shop'"
+  cd "$old-moved"
+  pitchfork stop web
 }
