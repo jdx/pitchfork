@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.30.1](https://github.com/jdx/pitchfork/compare/v2.30.0...v2.30.1) - 2026-10-07
+
+### Fixed
+
+- *(clean)* prune stale namespaces, slugs and config files of deleted directories ([#1021](https://github.com/jdx/pitchfork/pull/1021))
+- *(supervisor)* detach the background supervisor from the caller's terminal session ([#1022](https://github.com/jdx/pitchfork/pull/1022))
+- *(supervisor)* name where a port is taken when a daemon cannot start on it ([#1017](https://github.com/jdx/pitchfork/pull/1017))
+
+### Other
+
+- *(deps)* update rust crate demand to v2.4.0 ([#1020](https://github.com/jdx/pitchfork/pull/1020))
+
 ## [2.30.0](https://github.com/jdx/pitchfork/compare/v2.29.0...v2.30.0) - 2026-10-07
 
 ### Added
