@@ -50,6 +50,31 @@ get_supervisor_pid() {
   assert_success
 }
 
+# The background supervisor treats SIGHUP as a request to stop every daemon, and
+# the kernel sends SIGHUP to a terminal's foreground process group when the
+# terminal hangs up (ssh logout, closed window). It must not share the
+# caller's session, or logging out would take down every daemon.
+@test "background supervisor runs in its own session, apart from the caller's terminal" {
+  skip_on_windows "inspects Unix process groups; the Windows supervisor is detached by DETACHED_PROCESS"
+  run pitchfork supervisor start
+  assert_success
+
+  local pid
+  pid="$(get_supervisor_pid)"
+  [[ -n "$pid" ]]
+
+  # A session leader has pid == pgid == sid; the caller's shell does not.
+  [[ "$(ps -o pgid= -p "$pid" | tr -d ' ')" == "$pid" ]]
+  [[ "$(ps -o pgid= -p "$pid" | tr -d ' ')" != "$(ps -o pgid= -p $$ | tr -d ' ')" ]]
+
+  # setpgid(0, 0) alone would pass the checks above; only setsid() also leaves
+  # the caller's session. macOS `ps` has no portable session id, so check on Linux.
+  if [[ "$(uname -s)" == Linux ]]; then
+    [[ "$(ps -o sid= -p "$pid" | tr -d ' ')" == "$pid" ]]
+    [[ "$(ps -o sid= -p "$pid" | tr -d ' ')" != "$(ps -o sid= -p $$ | tr -d ' ')" ]]
+  fi
+}
+
 # A caller's non-CLOEXEC descriptors (bats' fd 3, pipes from a wrapping
 # script) must not leak into the long-lived background supervisor: it would
 # hold the pipe open forever and whoever waits for EOF on it (bats itself,

@@ -383,10 +383,24 @@ pub fn start_in_background() -> Result<()> {
             .stderr_file(stderr_file)
             .before_spawn(move |cmd| {
                 use std::os::unix::process::CommandExt;
-                // SAFETY: the hook only issues close_range/fcntl syscalls,
-                // which are async-signal-safe, and does not allocate.
+                // SAFETY: the hook only issues close_range/fcntl/setsid
+                // syscalls, which are async-signal-safe, and does not allocate.
                 unsafe {
                     cmd.pre_exec(move || {
+                        // Leave the caller's session and process group. Left in
+                        // them, the supervisor would receive the SIGHUP the
+                        // kernel sends the foreground process group when the
+                        // controlling terminal hangs up (an ssh logout, a closed
+                        // terminal), and SIGHUP makes it stop every daemon.
+                        // The result is deliberately ignored. In a freshly forked
+                        // child setsid() fails only if a sandbox (seccomp, ...)
+                        // denies it, or the child is already a process group
+                        // leader, which duct never arranges. Failing the spawn
+                        // would stop pitchfork working at all there, which is
+                        // worse than a supervisor that is merely not detached:
+                        // that is how it behaved before. This hook cannot log
+                        // (async-signal-safe only), so it cannot warn either.
+                        let _ = libc::setsid();
                         cloexec_inherited_fds(max_fd);
                         Ok(())
                     });
