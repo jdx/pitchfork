@@ -2117,8 +2117,17 @@ impl PitchforkToml {
         let dir = env::expand_tilde(dir);
         if let Some(entry) = pt.namespaces.get_mut(name) {
             if crate::extra_configs::path_is_gone(&entry.dir)
-                && !crate::extra_configs::namespace_has_running_daemon(name)
+                && crate::extra_configs::normalize(&entry.dir)
+                    != crate::extra_configs::normalize(&dir)
             {
+                if crate::extra_configs::namespace_has_running_daemon(name) {
+                    // Retargeting would show the old project's running daemons
+                    // to the new one.
+                    miette::bail!(
+                        "namespace '{name}' has running daemons from {}, which no longer exists; stop them first",
+                        entry.dir.display()
+                    );
+                }
                 // The old project is gone: its attachments and label go with it.
                 entry.config.clear();
                 entry.label = None;
