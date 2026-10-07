@@ -3793,9 +3793,7 @@ mod tests {
 
     #[test]
     fn undo_reverses_each_platform_step() {
-        let resolver_dir = tempfile::tempdir().unwrap();
-        let mut mac = ctx(Platform::MacOs);
-        mac.resolver_dir = resolver_dir.path().to_path_buf();
+        let mac = ctx(Platform::MacOs);
         let resolver = mac.resolver_file().display().to_string();
         assert_eq!(
             plan_undo(&mac).describe(),
