@@ -1,4 +1,6 @@
 [workspace]
+# Label the release PR so it is easy to find and filter.
+pr_labels = ["release"]
 # Create git tags for releases
 git_tag_enable = true
 # Create GitHub releases
