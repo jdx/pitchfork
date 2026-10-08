@@ -1,0 +1,12 @@
+self-hosted-runner:
+  labels:
+    - jdx-perf-v1
+    - bamboo-perf
+
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      # Intentional in the bats sharding script: `ls` over a fixed glob of plain
+      # file names, and $tests is deliberately word-split into bats arguments
+      - 'shellcheck reported issue in this script: SC2012:.+'
+      - 'shellcheck reported issue in this script: SC2086:.+'

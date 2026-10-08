@@ -10,6 +10,12 @@ local linters = new Mapping<String, Step> {
         glob = "*.pkl"
         check = "pkl eval {{files}} >/dev/null"
     }
+    // lints GitHub Actions workflows (jdx/jactionlint, a maintained actionlint fork)
+    ["jactionlint"] {
+        glob = List(".github/workflows/*.yml", ".github/workflows/*.yaml")
+        batch = true
+        check = "jactionlint {{files}}"
+    }
 }
 
 hooks {
