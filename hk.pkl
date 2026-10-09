@@ -14,7 +14,14 @@ local linters = new Mapping<String, Step> {
     ["jactionlint"] {
         glob = List(".github/workflows/*.yml", ".github/workflows/*.yaml")
         batch = true
-        check = "jactionlint {{files}}"
+        check = new CommandSpec {
+            command = "jactionlint {{files}}"
+            effect = "read"
+        }
+        fix = new CommandSpec {
+            command = "jactionlint --fix {{files}}"
+            effect = "write"
+        }
     }
 }
 

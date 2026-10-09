@@ -18,6 +18,8 @@ env:
 
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     timeout-minutes: 20
     steps:
@@ -29,7 +31,7 @@ jobs:
         with:
           cache: false
       - run: rm -rf .cargo
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
       - name: Install Rust components
@@ -84,6 +86,8 @@ jobs:
   # `final` aggregator below can gate on it — a job's `needs:` cannot reference
   # jobs in another workflow file.
   rust-tests:
+    permissions:
+      contents: read
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -94,7 +98,7 @@ jobs:
       - uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           cache: false
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
       - name: Build UI assets

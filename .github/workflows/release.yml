@@ -1,7 +1,6 @@
 name: Release
 
-permissions:
-  contents: write
+permissions: {}
 
 on:
   workflow_call:
@@ -27,6 +26,9 @@ env:
 jobs:
   upload-assets:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -220,6 +222,7 @@ jobs:
     name: Publish the packslip
     needs: upload-assets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       id-token: write
