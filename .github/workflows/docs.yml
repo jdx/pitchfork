@@ -23,6 +23,7 @@ jobs:
   # Build job
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -57,6 +58,7 @@ jobs:
       id-token: write # to verify the deployment originates from an appropriate source
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     name: Deploy
     steps:
       - name: Deploy to GitHub Pages
