@@ -258,6 +258,62 @@ pub(crate) fn merge_env(
     }
 }
 
+/// The daemon's own env with its `env_file` variables underneath: inline `env`
+/// wins over the files, and later files win over earlier ones. Relative paths
+/// resolve from the project directory (the same base as `dir`), and
+/// missing files are skipped so a git-ignored `.env.local` stays optional.
+pub fn daemon_env_with_files(
+    daemon: &PitchforkTomlDaemon,
+) -> Result<Option<IndexMap<String, String>>, RenderError> {
+    if daemon.env_file.is_empty() {
+        return Ok(daemon.env.clone());
+    }
+    let base = daemon
+        .path
+        .as_deref()
+        .and_then(crate::pitchfork_toml::project_dir_for_config);
+    let inline = daemon.env.clone().unwrap_or_default();
+    // Same user as `dir`: the daemon's own, else `settings.supervisor.user`.
+    let user = daemon.effective_user();
+    let mut merged = IndexMap::new();
+    for file in &daemon.env_file {
+        let expanded = crate::env::expand_tilde_for_user(file, user.as_deref());
+        let path = match base.as_deref() {
+            Some(base) => base.join(expanded),
+            None => expanded,
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(RenderError::EnvFile {
+                    path,
+                    message: e.to_string(),
+                });
+            }
+        };
+        // `${VAR}` sees everything loaded from earlier files and the inline env, which wins.
+        // Inline goes last because the parser keeps the last value for a repeated key.
+        let outer = merged
+            .iter()
+            .chain(inline.iter())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Vec<_>>();
+        let vars = mise_dotenv::parse(
+            content.strip_prefix('\u{feff}').unwrap_or(&content),
+            true,
+            outer,
+        )
+        .map_err(|e| RenderError::EnvFile {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        merged.extend(vars);
+    }
+    merged.extend(inline);
+    Ok(Some(merged))
+}
+
 /// Merge top-level and per-daemon env, render template values, and return the
 /// rendered env. Used by hook rendering where the daemon config is not mutated.
 ///
@@ -325,7 +381,8 @@ fn render_daemon_templates_with(
     // render env values. `env` is NOT yet in the context, so env values cannot
     // reference {{ env.* }} (preventing cycles). render_env builds its own
     // short-lived renderer without env in scope.
-    let rendered_env = render_env(top_env, config.env.as_ref(), context)?;
+    let daemon_env = daemon_env_with_files(config)?;
+    let rendered_env = render_env(top_env, daemon_env.as_ref(), context)?;
     config.env = rendered_env;
     // Phase 2: expose the rendered env on the context as the authoritative
     // state, so to_tera_context() (used by TemplateRenderer::new) includes it.
@@ -583,6 +640,11 @@ pub enum RenderError {
     RenderFailed {
         template: String,
         source: tera::Error,
+    },
+    #[error("failed to load env_file {}: {message}", path.display())]
+    EnvFile {
+        path: std::path::PathBuf,
+        message: String,
     },
     #[error(
         "{field} template {template:?} rendered to {rendered:?}, expected a port number (1-65535)"
@@ -1236,5 +1298,72 @@ mod tests {
 
         // Non-hook template errors still propagate as Err
         assert!(render_daemon_templates(&mut config, &mut ctx, None).is_err());
+    }
+
+    #[test]
+    fn env_file_layers_under_inline_env_and_skips_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "A=file\nB=file\n").unwrap();
+        std::fs::write(
+            dir.path().join(".env.local"),
+            "B=local\nexport C=\"${B}-x\"\n",
+        )
+        .unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec![".env".into(), ".env.local".into(), "missing".into()],
+            env: Some(IndexMap::from([("A".to_string(), "inline".to_string())])),
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let env = daemon_env_with_files(&config).unwrap().unwrap();
+        assert_eq!(env["A"], "inline");
+        assert_eq!(env["B"], "local");
+        assert_eq!(env["C"], "local-x");
+    }
+
+    #[test]
+    fn env_file_later_files_interpolate_earlier_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.env"), "HOST=db\n").unwrap();
+        std::fs::write(dir.path().join("b.env"), "URL=pg://${HOST}/x\n").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec!["a.env".into(), "b.env".into()],
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let env = daemon_env_with_files(&config).unwrap().unwrap();
+        assert_eq!(env["URL"], "pg://db/x");
+    }
+
+    #[test]
+    fn env_file_substitution_prefers_inline_env() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.env"), "HOST=file\n").unwrap();
+        std::fs::write(dir.path().join("b.env"), "URL=pg://${HOST}\n").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec!["a.env".into(), "b.env".into()],
+            env: Some(IndexMap::from([("HOST".to_string(), "inline".to_string())])),
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let env = daemon_env_with_files(&config).unwrap().unwrap();
+        assert_eq!(env["URL"], "pg://inline");
+    }
+
+    #[test]
+    fn env_file_syntax_error_names_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "not valid = = =\n").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec![".env".into()],
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let err = daemon_env_with_files(&config).unwrap_err().to_string();
+        assert!(err.contains(".env"), "{err}");
     }
 }
