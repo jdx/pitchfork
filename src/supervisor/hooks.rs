@@ -363,13 +363,13 @@ async fn render_hook_template(
         if let Some(env) = started_env {
             ctx.set_env(env);
         } else {
-            let daemon_env = daemon_config
-                .map(template::daemon_env_with_files)
-                .transpose()?
-                .flatten();
-            if let Some(rendered_env) =
-                template::render_env(pt.env.as_ref(), daemon_env.as_ref(), &ctx)?
-            {
+            // `env_file` is left out: a daemon started without a recorded env never
+            // loaded those files, and the hook process would not receive them.
+            if let Some(rendered_env) = template::render_env(
+                pt.env.as_ref(),
+                daemon_config.and_then(|d| d.env.as_ref()),
+                &ctx,
+            )? {
                 ctx.set_env(rendered_env);
             }
         }
