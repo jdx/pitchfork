@@ -173,7 +173,7 @@ pub(crate) async fn fire_hook(
         let Some(cmd) = hook_cmd else { return };
 
         // Render Tera templates in hook command with context from state file
-        let cmd = match render_hook_template(&cmd, &daemon_id, &pt).await {
+        let cmd = match render_hook_template(&cmd, &daemon_id, &pt, daemon_env.as_ref()).await {
             Ok(cmd) => cmd,
             Err(e) => {
                 warn!("{hook_type} hook template error for daemon {daemon_id}: {e}");
@@ -258,7 +258,7 @@ pub(crate) async fn fire_output_hook(
         let pt = load_hook_config(dirs.config_root.clone())
             .await
             .unwrap_or_default();
-        let cmd = match render_hook_template(&cmd, &daemon_id, &pt).await {
+        let cmd = match render_hook_template(&cmd, &daemon_id, &pt, daemon_env.as_ref()).await {
             Ok(cmd) => cmd,
             Err(e) => {
                 warn!("on_output hook template error for daemon {daemon_id}: {e}");
@@ -320,6 +320,7 @@ async fn render_hook_template(
     template_str: &str,
     daemon_id: &DaemonId,
     pt: &PitchforkToml,
+    daemon_env: Option<&IndexMap<String, String>>,
 ) -> Result<String, template::RenderError> {
     // Collect resolved ports from all running daemons in the state file
     let resolved_daemons: HashMap<DaemonId, Vec<u16>> = {
@@ -343,6 +344,7 @@ async fn render_hook_template(
     let pt = pt.clone();
     let daemon_id = daemon_id.clone();
     let template_str = template_str.to_string();
+    let started_env = daemon_env.cloned();
     let template_for_error = template_str.clone();
     tokio::task::spawn_blocking(move || {
         let daemon_config = pt.daemons.get(&daemon_id);
@@ -355,10 +357,15 @@ async fn render_hook_template(
 
         // Merge top-level env with per-daemon env (per-daemon wins), render the
         // values, and expose them as `{{ env.X }}` for hook templates.
-        let daemon_env = daemon_config
-            .map(template::daemon_env_with_files)
-            .transpose()?
-            .flatten();
+        // Prefer the environment the daemon started with, so hooks see the same
+        // values as the process even if an `env_file` has changed since.
+        let daemon_env = match started_env {
+            Some(env) => Some(env),
+            None => daemon_config
+                .map(template::daemon_env_with_files)
+                .transpose()?
+                .flatten(),
+        };
         if let Some(rendered_env) =
             template::render_env(pt.env.as_ref(), daemon_env.as_ref(), &ctx)?
         {
