@@ -11,7 +11,7 @@ logging and dashboard ports, see [settings](/reference/settings).
 
 | Task | Fields |
 | --- | --- |
-| Run a command | [`run`](#run-required), [`dir`](#dir), [`env`](#env), [`mise`](#mise), [`user`](#user), [`pty`](#pty) |
+| Run a command | [`run`](#run-required), [`dir`](#dir), [`env`](#env), [`env_file`](#env-file), [`mise`](#mise), [`user`](#user), [`pty`](#pty) |
 | Order startup | [`depends`](#depends), [`oneshot`](#oneshot), [`ready_delay`](#ready-delay), [`ready_output`](#ready-output), [`ready_http`](#ready-http), [`ready_port`](#ready-port), [`ready_cmd`](#ready-cmd) |
 | Recover and monitor | [`retry`](#retry), [`health_cmd`](#health-cmd), [`health_http`](#health-http), [`health_port`](#health-port), [`memory_limit`](#memory-limit), [`cpu_limit`](#cpu-limit) |
 | Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal), [`proxy_idle_timeout`](#proxy-idle-timeout) |
@@ -228,6 +228,29 @@ run = "python worker.py"
 DATABASE_URL = "postgres://localhost/mydb"
 REDIS_URL = "redis://localhost:6379"
 LOG_LEVEL = "debug"
+```
+
+### `env_file`
+
+Dotenv files to load into the daemon's environment, so secrets can stay out of the committed
+`pitchfork.toml`. Relative paths resolve from the directory of the `pitchfork.toml` that declares the
+daemon. A file that does not exist is skipped, so a git-ignored `.env.local` is optional.
+
+```toml
+[daemons.api]
+run = "npm run server"
+env_file = [".env", ".env.local"]
+env = { NODE_ENV = "development" }
+```
+
+Later files override earlier ones, and the daemon's own `env` overrides every file. Values are parsed
+with the same dotenv parser as mise (quoting, `export` prefixes and `${VAR}` references work), and
+support the same [templates](/guides/configuration-templates) as `env`, so pitchfork-assigned ports
+can be used in a file:
+
+```bash
+# .env.local
+API_URL=http://localhost:{{ daemons.api.port }}
 ```
 
 ### `user`

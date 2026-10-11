@@ -355,11 +355,13 @@ async fn render_hook_template(
 
         // Merge top-level env with per-daemon env (per-daemon wins), render the
         // values, and expose them as `{{ env.X }}` for hook templates.
-        if let Some(rendered_env) = template::render_env(
-            pt.env.as_ref(),
-            daemon_config.and_then(|d| d.env.as_ref()),
-            &ctx,
-        )? {
+        let daemon_env = daemon_config
+            .map(template::daemon_env_with_files)
+            .transpose()?
+            .flatten();
+        if let Some(rendered_env) =
+            template::render_env(pt.env.as_ref(), daemon_env.as_ref(), &ctx)?
+        {
             ctx.set_env(rendered_env);
         }
 

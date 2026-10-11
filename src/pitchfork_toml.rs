@@ -244,6 +244,8 @@ struct PitchforkTomlDaemonRaw {
     pub dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub env_file: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub hooks: Option<PitchforkTomlHooks>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1580,6 +1582,7 @@ impl PitchforkToml {
                 watch_mode: raw_daemon.watch_mode.unwrap_or_default(),
                 dir: raw_daemon.dir,
                 env: raw_daemon.env,
+                env_file: raw_daemon.env_file,
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
                 deferred_template_context: None,
@@ -1784,6 +1787,7 @@ impl PitchforkToml {
                     },
                     dir: daemon.dir.clone(),
                     env: daemon.env.clone(),
+                    env_file: daemon.env_file.clone(),
                     hooks: daemon.hooks.clone(),
                     mise: daemon.mise,
                     user: daemon.user.clone(),
@@ -2394,6 +2398,12 @@ pub struct PitchforkTomlDaemon {
     pub dir: Option<String>,
     /// Environment variables to set for the daemon process
     pub env: Option<IndexMap<String, String>>,
+    /// Dotenv files (e.g. `.env.local`) whose variables are added to the daemon's
+    /// environment. Relative paths resolve from the pitchfork.toml location; missing
+    /// files are skipped. Values from `env` win over the files, and later files win
+    /// over earlier ones. Values support Tera templates.
+    #[serde(default)]
+    pub env_file: Vec<String>,
     /// Lifecycle hooks (on_ready, on_fail, on_retry)
     pub hooks: Option<PitchforkTomlHooks>,
     /// Wrap this daemon's command with `mise x --` for tool/env setup.

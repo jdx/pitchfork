@@ -466,6 +466,14 @@
             "type": "string"
           }
         },
+        "env_file": {
+          "description": "Dotenv files (e.g. `.env.local`) whose variables are added to the daemon's\nenvironment. Relative paths resolve from the pitchfork.toml location; missing\nfiles are skipped. Values from `env` win over the files, and later files win\nover earlier ones. Values support Tera templates.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "health_cmd": {
           "description": "Shell command to poll for health (exit code 0 = healthy)",
           "anyOf": [

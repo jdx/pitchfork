@@ -258,6 +258,50 @@ pub(crate) fn merge_env(
     }
 }
 
+/// The daemon's own env with its `env_file` variables underneath: inline `env`
+/// wins over the files, and later files win over earlier ones. Relative paths
+/// resolve from the directory of the config that declares the daemon, and
+/// missing files are skipped so a git-ignored `.env.local` stays optional.
+pub fn daemon_env_with_files(
+    daemon: &PitchforkTomlDaemon,
+) -> Result<Option<IndexMap<String, String>>, RenderError> {
+    if daemon.env_file.is_empty() {
+        return Ok(daemon.env.clone());
+    }
+    let base = daemon.path.as_deref().and_then(std::path::Path::parent);
+    let inline = daemon.env.clone().unwrap_or_default();
+    let mut merged = IndexMap::new();
+    for file in &daemon.env_file {
+        let expanded = crate::env::expand_tilde(file);
+        let path = match base {
+            Some(base) => base.join(expanded),
+            None => expanded,
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(RenderError::EnvFile {
+                    path,
+                    message: e.to_string(),
+                });
+            }
+        };
+        let vars = mise_dotenv::parse(
+            content.strip_prefix('\u{feff}').unwrap_or(&content),
+            true,
+            inline.iter().map(|(k, v)| (k.clone(), v.clone())),
+        )
+        .map_err(|e| RenderError::EnvFile {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        merged.extend(vars);
+    }
+    merged.extend(inline);
+    Ok(Some(merged))
+}
+
 /// Merge top-level and per-daemon env, render template values, and return the
 /// rendered env. Used by hook rendering where the daemon config is not mutated.
 ///
@@ -325,7 +369,8 @@ fn render_daemon_templates_with(
     // render env values. `env` is NOT yet in the context, so env values cannot
     // reference {{ env.* }} (preventing cycles). render_env builds its own
     // short-lived renderer without env in scope.
-    let rendered_env = render_env(top_env, config.env.as_ref(), context)?;
+    let daemon_env = daemon_env_with_files(config)?;
+    let rendered_env = render_env(top_env, daemon_env.as_ref(), context)?;
     config.env = rendered_env;
     // Phase 2: expose the rendered env on the context as the authoritative
     // state, so to_tera_context() (used by TemplateRenderer::new) includes it.
@@ -583,6 +628,11 @@ pub enum RenderError {
     RenderFailed {
         template: String,
         source: tera::Error,
+    },
+    #[error("failed to load env_file {}: {message}", path.display())]
+    EnvFile {
+        path: std::path::PathBuf,
+        message: String,
     },
     #[error(
         "{field} template {template:?} rendered to {rendered:?}, expected a port number (1-65535)"
@@ -1236,5 +1286,41 @@ mod tests {
 
         // Non-hook template errors still propagate as Err
         assert!(render_daemon_templates(&mut config, &mut ctx, None).is_err());
+    }
+
+    #[test]
+    fn env_file_layers_under_inline_env_and_skips_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "A=file\nB=file\n").unwrap();
+        std::fs::write(
+            dir.path().join(".env.local"),
+            "B=local\nexport C=\"${B}-x\"\n",
+        )
+        .unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec![".env".into(), ".env.local".into(), "missing".into()],
+            env: Some(IndexMap::from([("A".to_string(), "inline".to_string())])),
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let env = daemon_env_with_files(&config).unwrap().unwrap();
+        assert_eq!(env["A"], "inline");
+        assert_eq!(env["B"], "local");
+        assert_eq!(env["C"], "local-x");
+    }
+
+    #[test]
+    fn env_file_syntax_error_names_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "not valid = = =\n").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec![".env".into()],
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let err = daemon_env_with_files(&config).unwrap_err().to_string();
+        assert!(err.contains(".env"), "{err}");
     }
 }
