@@ -467,7 +467,7 @@
           }
         },
         "env_file": {
-          "description": "Dotenv files (e.g. `.env.local`) whose variables are added to the daemon's\nenvironment. Relative paths resolve from the pitchfork.toml location; missing\nfiles are skipped. Values from `env` win over the files, and later files win\nover earlier ones. Values support Tera templates.",
+          "description": "Dotenv files (e.g. `.env.local`) whose variables are added to the daemon's\nenvironment. Relative paths resolve from the project directory (the same base as\n`dir`); missing files are skipped. Values from `env` win over the files, and later files win\nover earlier ones. Values support Tera templates.",
           "type": "array",
           "default": [],
           "items": {

@@ -260,7 +260,7 @@ pub(crate) fn merge_env(
 
 /// The daemon's own env with its `env_file` variables underneath: inline `env`
 /// wins over the files, and later files win over earlier ones. Relative paths
-/// resolve from the directory of the config that declares the daemon, and
+/// resolve from the project directory (the same base as `dir`), and
 /// missing files are skipped so a git-ignored `.env.local` stays optional.
 pub fn daemon_env_with_files(
     daemon: &PitchforkTomlDaemon,
@@ -268,12 +268,15 @@ pub fn daemon_env_with_files(
     if daemon.env_file.is_empty() {
         return Ok(daemon.env.clone());
     }
-    let base = daemon.path.as_deref().and_then(std::path::Path::parent);
+    let base = daemon
+        .path
+        .as_deref()
+        .and_then(crate::pitchfork_toml::project_dir_for_config);
     let inline = daemon.env.clone().unwrap_or_default();
     let mut merged = IndexMap::new();
     for file in &daemon.env_file {
         let expanded = crate::env::expand_tilde(file);
-        let path = match base {
+        let path = match base.as_deref() {
             Some(base) => base.join(expanded),
             None => expanded,
         };
@@ -287,10 +290,16 @@ pub fn daemon_env_with_files(
                 });
             }
         };
+        // `${VAR}` sees the inline env and everything loaded from earlier files.
+        let outer = inline
+            .iter()
+            .chain(merged.iter())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Vec<_>>();
         let vars = mise_dotenv::parse(
             content.strip_prefix('\u{feff}').unwrap_or(&content),
             true,
-            inline.iter().map(|(k, v)| (k.clone(), v.clone())),
+            outer,
         )
         .map_err(|e| RenderError::EnvFile {
             path: path.clone(),
@@ -1308,6 +1317,21 @@ mod tests {
         assert_eq!(env["A"], "inline");
         assert_eq!(env["B"], "local");
         assert_eq!(env["C"], "local-x");
+    }
+
+    #[test]
+    fn env_file_later_files_interpolate_earlier_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.env"), "HOST=db\n").unwrap();
+        std::fs::write(dir.path().join("b.env"), "URL=pg://${HOST}/x\n").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec!["a.env".into(), "b.env".into()],
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let env = daemon_env_with_files(&config).unwrap().unwrap();
+        assert_eq!(env["URL"], "pg://db/x");
     }
 
     #[test]

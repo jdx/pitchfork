@@ -233,8 +233,8 @@ LOG_LEVEL = "debug"
 ### `env_file`
 
 Dotenv files to load into the daemon's environment, so secrets can stay out of the committed
-`pitchfork.toml`. Relative paths resolve from the directory of the `pitchfork.toml` that declares the
-daemon. A file that does not exist is skipped, so a git-ignored `.env.local` is optional.
+`pitchfork.toml`. Relative paths resolve from the project directory, the same base as [`dir`](#dir).
+A file that does not exist is skipped, so a git-ignored `.env.local` is optional.
 
 ```toml
 [daemons.api]
@@ -243,15 +243,27 @@ env_file = [".env", ".env.local"]
 env = { NODE_ENV = "development" }
 ```
 
-Later files override earlier ones, and the daemon's own `env` overrides every file. Values are parsed
-with the same dotenv parser as mise (quoting, `export` prefixes and `${VAR}` references work), and
-support the same [templates](/guides/configuration-templates) as `env`, so pitchfork-assigned ports
-can be used in a file:
+Later files override earlier ones, and the daemon's own `env` overrides every file. Files are parsed
+with the same dotenv parser as mise (quoting, `export` prefixes and `${VAR}` references work, and a
+later file can reference variables from earlier ones).
+
+Values support the same [templates](/guides/configuration-templates) as `env`. As with `env`, a
+daemon can reference the ports of daemons it `depends` on, which start first:
+
+```toml
+[daemons.api]
+run = "npm run server"
+depends = ["db"]
+env_file = [".env.local"]
+```
 
 ```bash
 # .env.local
-API_URL=http://localhost:{{ daemons.api.port }}
+DATABASE_URL=postgres://localhost:{{ daemons.db.port }}/app
 ```
+
+Files are read when pitchfork starts the daemon. Restarts triggered by [`watch`](#watch) and automatic
+retries reuse the environment recorded for that daemon, so run `pitchfork restart` to pick up edits.
 
 ### `user`
 

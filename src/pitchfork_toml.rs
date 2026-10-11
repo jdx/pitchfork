@@ -2399,8 +2399,8 @@ pub struct PitchforkTomlDaemon {
     /// Environment variables to set for the daemon process
     pub env: Option<IndexMap<String, String>>,
     /// Dotenv files (e.g. `.env.local`) whose variables are added to the daemon's
-    /// environment. Relative paths resolve from the pitchfork.toml location; missing
-    /// files are skipped. Values from `env` win over the files, and later files win
+    /// environment. Relative paths resolve from the project directory (the same base as
+    /// `dir`); missing files are skipped. Values from `env` win over the files, and later files win
     /// over earlier ones. Values support Tera templates.
     #[serde(default)]
     pub env_file: Vec<String>,
