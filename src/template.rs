@@ -275,7 +275,7 @@ pub fn daemon_env_with_files(
     let inline = daemon.env.clone().unwrap_or_default();
     let mut merged = IndexMap::new();
     for file in &daemon.env_file {
-        let expanded = crate::env::expand_tilde(file);
+        let expanded = crate::env::expand_tilde_for_user(file, daemon.user.as_deref());
         let path = match base.as_deref() {
             Some(base) => base.join(expanded),
             None => expanded,
@@ -290,10 +290,11 @@ pub fn daemon_env_with_files(
                 });
             }
         };
-        // `${VAR}` sees the inline env and everything loaded from earlier files.
-        let outer = inline
+        // `${VAR}` sees everything loaded from earlier files and the inline env, which wins.
+        // Inline goes last because the parser keeps the last value for a repeated key.
+        let outer = merged
             .iter()
-            .chain(merged.iter())
+            .chain(inline.iter())
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<Vec<_>>();
         let vars = mise_dotenv::parse(
@@ -1332,6 +1333,22 @@ mod tests {
         };
         let env = daemon_env_with_files(&config).unwrap().unwrap();
         assert_eq!(env["URL"], "pg://db/x");
+    }
+
+    #[test]
+    fn env_file_substitution_prefers_inline_env() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.env"), "HOST=file\n").unwrap();
+        std::fs::write(dir.path().join("b.env"), "URL=pg://${HOST}\n").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            env_file: vec!["a.env".into(), "b.env".into()],
+            env: Some(IndexMap::from([("HOST".to_string(), "inline".to_string())])),
+            path: Some(dir.path().join("pitchfork.toml")),
+            ..Default::default()
+        };
+        let env = daemon_env_with_files(&config).unwrap().unwrap();
+        assert_eq!(env["URL"], "pg://inline");
     }
 
     #[test]
