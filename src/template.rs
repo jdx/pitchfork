@@ -273,9 +273,11 @@ pub fn daemon_env_with_files(
         .as_deref()
         .and_then(crate::pitchfork_toml::project_dir_for_config);
     let inline = daemon.env.clone().unwrap_or_default();
+    // Same user as `dir`: the daemon's own, else `settings.supervisor.user`.
+    let user = daemon.effective_user();
     let mut merged = IndexMap::new();
     for file in &daemon.env_file {
-        let expanded = crate::env::expand_tilde_for_user(file, daemon.user.as_deref());
+        let expanded = crate::env::expand_tilde_for_user(file, user.as_deref());
         let path = match base.as_deref() {
             Some(base) => base.join(expanded),
             None => expanded,
