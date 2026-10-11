@@ -355,21 +355,23 @@ async fn render_hook_template(
             &pt.daemons,
         );
 
-        // Merge top-level env with per-daemon env (per-daemon wins), render the
-        // values, and expose them as `{{ env.X }}` for hook templates.
-        // Prefer the environment the daemon started with, so hooks see the same
-        // values as the process even if an `env_file` has changed since.
-        let daemon_env = match started_env {
-            Some(env) => Some(env),
-            None => daemon_config
+        // The env the daemon started with is already rendered, so it goes onto
+        // the context as is: rendering it again would fail on values that hold
+        // a literal `{{ ... }}`. Without one, merge top-level env with the
+        // per-daemon env (per-daemon wins), render the values, and expose them
+        // as `{{ env.X }}` for hook templates.
+        if let Some(env) = started_env {
+            ctx.set_env(env);
+        } else {
+            let daemon_env = daemon_config
                 .map(template::daemon_env_with_files)
                 .transpose()?
-                .flatten(),
-        };
-        if let Some(rendered_env) =
-            template::render_env(pt.env.as_ref(), daemon_env.as_ref(), &ctx)?
-        {
-            ctx.set_env(rendered_env);
+                .flatten();
+            if let Some(rendered_env) =
+                template::render_env(pt.env.as_ref(), daemon_env.as_ref(), &ctx)?
+            {
+                ctx.set_env(rendered_env);
+            }
         }
 
         template::render_template(&template_str, &ctx)
