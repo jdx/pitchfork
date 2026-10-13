@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use miette::Context;
 use once_cell::sync::Lazy;
 use schemars::JsonSchema;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
 use std::time::SystemTime;
@@ -79,17 +79,82 @@ impl SlugEntry {
 /// ```toml
 /// [groups.backend]
 /// daemons = ["api", "worker"]
+///
+/// [groups.all]
+/// groups = ["backend"]
+/// daemons = ["postgres"]
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct GroupEntryRaw {
+    /// Daemons in this group: short names or fully qualified IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(with = "Vec<DaemonId>")]
     pub daemons: Vec<String>,
+    /// Names of other groups whose daemons this group also contains.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
 }
 
 /// Resolved group entry with qualified DaemonIds.
-#[derive(Debug, Clone)]
+///
+/// `groups` stays unexpanded: it names groups that may be defined in a
+/// different config file, so it is resolved by [`expand_group`] once the
+/// configs are merged.
+#[derive(Debug, Clone, Default)]
 pub struct GroupEntry {
     pub daemons: Vec<DaemonId>,
+    pub groups: Vec<String>,
+}
+
+/// Expand a group into its deduplicated daemons, following `groups` includes.
+///
+/// Daemons of included groups come first, in the order the groups are listed,
+/// followed by the group's own `daemons`. A daemon reachable more than once is
+/// kept at its first position. Including an undefined group, or a group that
+/// includes itself directly or through other groups, is an error.
+pub fn expand_group(groups: &IndexMap<String, GroupEntry>, name: &str) -> Result<Vec<DaemonId>> {
+    fn visit(
+        groups: &IndexMap<String, GroupEntry>,
+        name: &str,
+        path: &mut Vec<String>,
+        seen: &mut HashSet<DaemonId>,
+        out: &mut Vec<DaemonId>,
+    ) -> Result<()> {
+        let Some(group) = groups.get(name) else {
+            let suggestion = find_similar_daemon(name, groups.keys().map(|s| s.as_str()));
+            return Err(match path.last() {
+                Some(parent) => miette::miette!(
+                    "group '{parent}' includes undefined group '{name}'{}",
+                    suggestion.map(|s| format!(", {s}")).unwrap_or_default()
+                ),
+                None => miette::miette!(
+                    "group '{name}' not found in configuration{}",
+                    suggestion.map(|s| format!(", {s}")).unwrap_or_default()
+                ),
+            });
+        };
+        if path.iter().any(|p| p == name) {
+            return Err(miette::miette!(
+                "group include cycle: {} -> {name}",
+                path.join(" -> ")
+            ));
+        }
+        path.push(name.to_string());
+        for included in &group.groups {
+            visit(groups, included, path, seen, out)?;
+        }
+        path.pop();
+        for id in &group.daemons {
+            if seen.insert(id.clone()) {
+                out.push(id.clone());
+            }
+        }
+        Ok(())
+    }
+
+    let mut out = Vec::new();
+    visit(groups, name, &mut Vec::new(), &mut HashSet::new(), &mut out)?;
+    Ok(out)
 }
 
 /// Raw namespace entry as read from TOML.
@@ -1024,36 +1089,23 @@ impl PitchforkToml {
         }
 
         if let Some(name) = group_name {
-            match config.groups.get(name) {
-                Some(group) => {
-                    let missing: Vec<String> = group
-                        .daemons
-                        .iter()
-                        .filter(|id| !config.daemons.contains_key(*id))
-                        .map(|id| id.qualified())
-                        .collect();
-                    if !missing.is_empty() {
-                        return Err(miette::miette!(
-                            "group '{}' references undefined daemon{}: {}",
-                            name,
-                            if missing.len() > 1 { "s" } else { "" },
-                            missing.join(", ")
-                        ));
-                    }
-                    for daemon_id in &group.daemons {
-                        if seen.insert(daemon_id.clone()) {
-                            ids.push(daemon_id.clone());
-                        }
-                    }
-                }
-                None => {
-                    let suggestion =
-                        find_similar_daemon(name, config.groups.keys().map(|s| s.as_str()));
-                    return Err(miette::miette!(
-                        "group '{}' not found in configuration{}",
-                        name,
-                        suggestion.map(|s| format!(", {s}")).unwrap_or_default()
-                    ));
+            let members = expand_group(&config.groups, name)?;
+            let missing: Vec<String> = members
+                .iter()
+                .filter(|id| !config.daemons.contains_key(*id))
+                .map(|id| id.qualified())
+                .collect();
+            if !missing.is_empty() {
+                return Err(miette::miette!(
+                    "group '{}' references undefined daemon{}: {}",
+                    name,
+                    if missing.len() > 1 { "s" } else { "" },
+                    missing.join(", ")
+                ));
+            }
+            for daemon_id in members {
+                if seen.insert(daemon_id.clone()) {
+                    ids.push(daemon_id);
                 }
             }
         }
@@ -1670,7 +1722,13 @@ impl PitchforkToml {
                 };
                 daemons.push(id);
             }
-            pt.groups.insert(group_name, GroupEntry { daemons });
+            pt.groups.insert(
+                group_name,
+                GroupEntry {
+                    daemons,
+                    groups: raw_group.groups,
+                },
+            );
         }
 
         Ok(pt)
@@ -1828,6 +1886,7 @@ impl PitchforkToml {
                     name.clone(),
                     GroupEntryRaw {
                         daemons: raw_daemons,
+                        groups: group.groups.clone(),
                     },
                 );
             }
@@ -2679,6 +2738,96 @@ impl RunCommand {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn parse_groups(toml: &str) -> IndexMap<String, GroupEntry> {
+        PitchforkToml::parse_str(toml, Path::new("/tmp/my-project/pitchfork.toml"))
+            .unwrap()
+            .groups
+    }
+
+    fn names(ids: &[DaemonId]) -> Vec<&str> {
+        ids.iter().map(|id| id.name()).collect()
+    }
+
+    #[test]
+    fn test_group_includes_expand_before_own_daemons_and_dedupe() {
+        let groups = parse_groups(
+            r#"
+[groups.core]
+daemons = ["db", "cache"]
+
+[groups.extras]
+daemons = ["mailer", "cache"]
+
+[groups.all]
+groups = ["core", "extras"]
+daemons = ["api", "db"]
+"#,
+        );
+        let all = expand_group(&groups, "all").unwrap();
+        assert_eq!(names(&all), ["db", "cache", "mailer", "api"]);
+    }
+
+    #[test]
+    fn test_group_includes_nest_and_allow_diamonds() {
+        let groups = parse_groups(
+            r#"
+[groups.base]
+daemons = ["db"]
+
+[groups.left]
+groups = ["base"]
+daemons = ["l"]
+
+[groups.right]
+groups = ["base"]
+daemons = ["r"]
+
+[groups.top]
+groups = ["left", "right"]
+"#,
+        );
+        let top = expand_group(&groups, "top").unwrap();
+        assert_eq!(names(&top), ["db", "l", "r"]);
+    }
+
+    #[test]
+    fn test_group_include_cycle_is_an_error() {
+        let groups = parse_groups(
+            r#"
+[groups.a]
+groups = ["b"]
+
+[groups.b]
+groups = ["c"]
+
+[groups.c]
+groups = ["a"]
+"#,
+        );
+        let err = expand_group(&groups, "a").unwrap_err().to_string();
+        assert!(err.contains("a -> b -> c -> a"), "{err}");
+        let err = expand_group(&parse_groups("[groups.x]\ngroups = [\"x\"]\n"), "x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("x -> x"), "{err}");
+    }
+
+    #[test]
+    fn test_group_include_of_undefined_group_is_an_error() {
+        let groups = parse_groups("[groups.all]\ngroups = [\"cor\"]\n\n[groups.core]\n");
+        let err = expand_group(&groups, "all").unwrap_err().to_string();
+        assert!(
+            err.contains("group 'all' includes undefined group 'cor'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_group_without_daemons_key_parses() {
+        let groups = parse_groups("[groups.empty]\n");
+        assert!(expand_group(&groups, "empty").unwrap().is_empty());
+    }
 
     #[test]
     fn test_daemon_user_parses_and_flows_to_run_options() {

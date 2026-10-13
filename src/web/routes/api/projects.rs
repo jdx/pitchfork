@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use super::daemons::{ApiDaemonEntry, build_api_daemons, config_daemon_entry, config_proxy_hosts};
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::PitchforkToml;
+use crate::pitchfork_toml::{GroupEntry, PitchforkToml, expand_group};
 use crate::proxy::worktree::{WorktreeEntry, discover_worktrees};
 
 /// Name used for the single synthetic worktree of a project directory that is
@@ -553,7 +553,7 @@ fn groups_cache() -> &'static Mutex<HashMap<PathBuf, (SourceSnapshot, GroupsResu
 /// Merge the groups declared by these config files, skipping the user and
 /// system ones.
 fn read_groups(paths: &[PathBuf]) -> GroupsResult {
-    let mut groups: IndexMap<String, Vec<DaemonId>> = IndexMap::new();
+    let mut declared: IndexMap<String, GroupEntry> = IndexMap::new();
 
     for path in paths {
         if *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
@@ -565,9 +565,7 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
         match PitchforkToml::read(path) {
             // Later files override earlier ones, as in the normal merge.
             Ok(config) => {
-                for (name, group) in config.groups {
-                    groups.insert(name, group.daemons);
-                }
+                declared.extend(config.groups);
             }
             Err(e) => {
                 // Stop at the first unreadable file rather than serve what the
@@ -575,6 +573,21 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
                 // those groups, and acting on a superseded `default` group
                 // would stop or start daemons the worktree no longer means.
                 log::warn!("Failed to load config {}: {e}", path.display());
+                return (IndexMap::new(), Some(e.to_string()));
+            }
+        }
+    }
+
+    // Includes are expanded after the merge, as a later file may redefine a
+    // group an earlier one includes.
+    let mut groups = IndexMap::new();
+    for name in declared.keys() {
+        match expand_group(&declared, name) {
+            Ok(members) => {
+                groups.insert(name.clone(), members);
+            }
+            Err(e) => {
+                log::warn!("Failed to resolve group '{name}': {e}");
                 return (IndexMap::new(), Some(e.to_string()));
             }
         }

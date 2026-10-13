@@ -995,9 +995,30 @@ daemons = ["postgres", "redis", "api", "worker"]
 ```
 
 - `daemons` is a list of short names or fully qualified IDs (`"global/postgres"`)
+- `groups` lists other groups to include, so a group can be built from smaller ones (see [Composing groups](#composing-groups))
 - Malformed daemon name strings (e.g. an unparseable qualified ID) fail config parsing; references to non-existent daemons are reported when the group is used (e.g. `pitchfork start --group backend`)
 - Groups merge like other config values: later definitions override earlier ones
 - `pitchfork start --group backend` resolves dependencies and starts daemons in parallel as usual
+
+### Composing groups
+
+A group can include other groups with `groups`, so shared daemons are listed once:
+
+```toml
+[groups.core]
+daemons = ["postgres", "redis"]
+
+[groups.all]
+groups = ["core"]
+daemons = ["api", "worker"]
+```
+
+`pitchfork start --group all` starts `postgres`, `redis`, `api`, and `worker`. `stop`, `restart`, and `wait` accept `--group all` the same way.
+
+- A group's members are the daemons of its included groups, in the order the groups are listed, followed by its own `daemons`. A daemon that appears more than once is kept at its first position
+- Includes can be nested. A group that includes itself, directly or through other groups, is an error, as is including a group that is not defined. Both are reported when the group is used
+- Included groups are looked up after configs are merged, so a group can include one defined in another config file, and a later definition of the included group replaces an earlier one
+- `daemons` is optional, so a group can consist only of includes
 
 The [web UI stack page](/guides/web-ui#run-a-stack) provides start, stop, and
 restart controls for groups in a worktree's project configuration. A group
