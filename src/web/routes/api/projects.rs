@@ -550,22 +550,34 @@ fn groups_cache() -> &'static Mutex<HashMap<PathBuf, (SourceSnapshot, GroupsResu
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Merge the groups declared by these config files, skipping the user and
-/// system ones.
+/// Merge the groups declared by these config files.
+///
+/// Only groups a project file declares are returned. The user and system
+/// configs are read too, but just so a project group can include one of theirs,
+/// as `pitchfork start --group` allows.
 fn read_groups(paths: &[PathBuf]) -> GroupsResult {
     let mut declared: IndexMap<String, GroupEntry> = IndexMap::new();
+    let mut exposed: HashSet<String> = HashSet::new();
 
     for path in paths {
-        if *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
-            || *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
-            || !path.exists()
-        {
+        if !path.exists() {
             continue;
         }
+        let inherited = *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
+            || *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM;
         match PitchforkToml::read(path) {
             // Later files override earlier ones, as in the normal merge.
             Ok(config) => {
+                if !inherited {
+                    exposed.extend(config.groups.keys().cloned());
+                }
                 declared.extend(config.groups);
+            }
+            // Project files cannot override these, so an unreadable one only
+            // leaves its groups unavailable to includes, which is reported
+            // for the groups that need them.
+            Err(e) if inherited => {
+                log::warn!("Failed to load config {}: {e}", path.display());
             }
             Err(e) => {
                 // Stop at the first unreadable file rather than serve what the
@@ -578,22 +590,33 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
         }
     }
 
-    // Includes are expanded after the merge, as a later file may redefine a
-    // group an earlier one includes.
+    resolve_groups(&declared, &exposed)
+}
+
+/// Expand the includes of the `exposed` groups.
+///
+/// Includes are expanded after the merge, as a later file may redefine a group
+/// an earlier one includes. A group whose includes cannot be resolved is left
+/// out and reported, like the CLI does when that group is used, so it does not
+/// take the other groups with it.
+fn resolve_groups(
+    declared: &IndexMap<String, GroupEntry>,
+    exposed: &HashSet<String>,
+) -> GroupsResult {
     let mut groups = IndexMap::new();
-    for name in declared.keys() {
-        match expand_group(&declared, name) {
+    let mut errors = Vec::new();
+    for name in declared.keys().filter(|name| exposed.contains(*name)) {
+        match expand_group(declared, name) {
             Ok(members) => {
                 groups.insert(name.clone(), members);
             }
             Err(e) => {
                 log::warn!("Failed to resolve group '{name}': {e}");
-                return (IndexMap::new(), Some(e.to_string()));
+                errors.push(e.to_string());
             }
         }
     }
-
-    (groups, None)
+    (groups, (!errors.is_empty()).then(|| errors.join("; ")))
 }
 
 /// A URL name for a worktree that no other worktree of this project uses.
@@ -1680,6 +1703,50 @@ mod tests {
         let (groups, error) = groups_for_dir(&project);
         assert!(error.is_none(), "{error:?}");
         assert!(groups.contains_key("web"));
+    }
+
+    fn declared(toml: &str) -> IndexMap<String, GroupEntry> {
+        PitchforkToml::parse_str(toml, &PathBuf::from("/tmp/shop/pitchfork.toml"))
+            .unwrap()
+            .groups
+    }
+
+    fn all_of(declared: &IndexMap<String, GroupEntry>) -> HashSet<String> {
+        declared.keys().cloned().collect()
+    }
+
+    /// A typo in one group's includes must not remove `default` and the rest
+    /// of the stack controls: the CLI only fails for the group that is used.
+    #[test]
+    fn a_bad_include_drops_only_its_own_group() {
+        let declared = declared(
+            "[groups.default]\ndaemons = [\"api\"]\n\n\
+             [groups.extra]\ngroups = [\"cor\"]\n",
+        );
+        let (groups, error) = resolve_groups(&declared, &all_of(&declared));
+        assert!(groups.contains_key("default"));
+        assert!(!groups.contains_key("extra"));
+        assert!(
+            error
+                .unwrap()
+                .contains("group 'extra' includes undefined group 'cor'")
+        );
+    }
+
+    /// Groups of the user and system configs are not shown on the stack page,
+    /// but a project group may include them.
+    #[test]
+    fn a_project_group_can_include_an_inherited_one() {
+        let declared = declared(
+            "[groups.shared]\ndaemons = [\"db\"]\n\n\
+             [groups.default]\ngroups = [\"shared\"]\ndaemons = [\"api\"]\n",
+        );
+        let exposed = HashSet::from(["default".to_string()]);
+        let (groups, error) = resolve_groups(&declared, &exposed);
+        assert_eq!(error, None);
+        assert_eq!(groups.keys().collect::<Vec<_>>(), ["default"]);
+        let members: Vec<_> = groups["default"].iter().map(|id| id.name()).collect();
+        assert_eq!(members, ["db", "api"]);
     }
 
     /// A config file that cannot be read must not leave the groups the files
