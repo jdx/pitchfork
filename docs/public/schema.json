@@ -106,19 +106,24 @@
       "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$"
     },
     "GroupEntryRaw": {
-      "description": "Raw group entry as read from TOML.\n```toml\n[groups.backend]\ndaemons = [\"api\", \"worker\"]\n```",
+      "description": "Raw group entry as read from TOML.\n```toml\n[groups.backend]\ndaemons = [\"api\", \"worker\"]\n\n[groups.all]\ngroups = [\"backend\"]\ndaemons = [\"postgres\"]\n```",
       "type": "object",
       "properties": {
         "daemons": {
+          "description": "Daemons in this group: short names or fully qualified IDs.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/DaemonId"
           }
+        },
+        "groups": {
+          "description": "Names of other groups whose daemons this group also contains.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
-      },
-      "required": [
-        "daemons"
-      ]
+      }
     },
     "HealthCmd": {
       "description": "Command health check: a shell command string, a program and its arguments to run without a shell, or { run, interval, timeout, retries } object with periodic probing",

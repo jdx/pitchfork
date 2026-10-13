@@ -335,7 +335,7 @@ curl http://127.0.0.1:3120/api/projects/shop/main
 | `can_start` | Whether the directory exists and `unresolvable_daemons` is empty. This does not guarantee that every declared member exists or that a start will succeed. |
 | `unresolvable_daemons` | Known daemons shown in the stack whose configuration the supervisor cannot resolve, including members from other namespaces. |
 | `namespace`, `namespace_error` | The worktree's namespace, or `null` with an explanation in `namespace_error` if one cannot be derived. |
-| `config_error` | Present when the worktree's configuration could not be read; its groups are unavailable. |
+| `config_error` | Present when the worktree's configuration could not be read, or a group's `groups` includes could not be resolved. The groups affected are unavailable; with an unreadable file that means all of them. |
 
 The supervisor resolves configurations from its own project and the namespace
 registry. Register or restore the relevant directory before starting or

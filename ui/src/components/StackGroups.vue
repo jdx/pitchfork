@@ -115,7 +115,7 @@ async function onRestart(groupName: string) {
     </p>
 
     <p v-else-if="stack.config_error" class="notice">
-      This worktree's config could not be read, so its groups are missing:
+      This worktree's config has a problem, so some of its groups are missing:
       <code>{{ stack.config_error }}</code>
     </p>
 
