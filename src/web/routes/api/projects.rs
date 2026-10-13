@@ -558,6 +558,7 @@ fn groups_cache() -> &'static Mutex<HashMap<PathBuf, (SourceSnapshot, GroupsResu
 fn read_groups(paths: &[PathBuf]) -> GroupsResult {
     let mut declared: IndexMap<String, GroupEntry> = IndexMap::new();
     let mut exposed: HashSet<String> = HashSet::new();
+    let mut unreadable_inherited: Option<String> = None;
 
     for path in paths {
         if !path.exists() {
@@ -573,11 +574,12 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
                 }
                 declared.extend(config.groups);
             }
-            // Project files cannot override these, so an unreadable one only
-            // leaves its groups unavailable to includes, which is reported
-            // for the groups that need them.
+            // Project files override these, so an unreadable one leaves the
+            // project's own groups intact. It may override a group a project
+            // group includes, though, so those groups are not expanded.
             Err(e) if inherited => {
                 log::warn!("Failed to load config {}: {e}", path.display());
+                unreadable_inherited.get_or_insert_with(|| e.to_string());
             }
             Err(e) => {
                 // Stop at the first unreadable file rather than serve what the
@@ -590,7 +592,7 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
         }
     }
 
-    resolve_groups(&declared, &exposed)
+    resolve_groups(&declared, &exposed, unreadable_inherited.as_deref())
 }
 
 /// Expand the includes of the `exposed` groups.
@@ -599,13 +601,26 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
 /// an earlier one includes. A group whose includes cannot be resolved is left
 /// out and reported, like the CLI does when that group is used, so it does not
 /// take the other groups with it.
+///
+/// `unreadable_inherited` is the read error of a user or system config. It may
+/// override any group those configs define, so a group that includes one of
+/// them is left out and reported instead of expanded from what is known.
 fn resolve_groups(
     declared: &IndexMap<String, GroupEntry>,
     exposed: &HashSet<String>,
+    unreadable_inherited: Option<&str>,
 ) -> GroupsResult {
     let mut groups = IndexMap::new();
     let mut errors = Vec::new();
     for name in declared.keys().filter(|name| exposed.contains(*name)) {
+        if let Some(error) = unreadable_inherited
+            && includes_inherited(declared, exposed, name)
+        {
+            errors.push(format!(
+                "group '{name}' includes groups from a config that could not be read: {error}"
+            ));
+            continue;
+        }
         match expand_group(declared, name) {
             Ok(members) => {
                 groups.insert(name.clone(), members);
@@ -617,6 +632,29 @@ fn resolve_groups(
         }
     }
     (groups, (!errors.is_empty()).then(|| errors.join("; ")))
+}
+
+/// Whether `name` includes, directly or through other groups, a group that no
+/// project file declares.
+fn includes_inherited(
+    declared: &IndexMap<String, GroupEntry>,
+    exposed: &HashSet<String>,
+    name: &str,
+) -> bool {
+    let mut visited = HashSet::new();
+    let mut pending = vec![name];
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        if !exposed.contains(current) {
+            return true;
+        }
+        if let Some(group) = declared.get(current) {
+            pending.extend(group.groups.iter().map(String::as_str));
+        }
+    }
+    false
 }
 
 /// A URL name for a worktree that no other worktree of this project uses.
@@ -1723,7 +1761,7 @@ mod tests {
             "[groups.default]\ndaemons = [\"api\"]\n\n\
              [groups.extra]\ngroups = [\"cor\"]\n",
         );
-        let (groups, error) = resolve_groups(&declared, &all_of(&declared));
+        let (groups, error) = resolve_groups(&declared, &all_of(&declared), None);
         assert!(groups.contains_key("default"));
         assert!(!groups.contains_key("extra"));
         assert!(
@@ -1742,11 +1780,27 @@ mod tests {
              [groups.default]\ngroups = [\"shared\"]\ndaemons = [\"api\"]\n",
         );
         let exposed = HashSet::from(["default".to_string()]);
-        let (groups, error) = resolve_groups(&declared, &exposed);
+        let (groups, error) = resolve_groups(&declared, &exposed, None);
         assert_eq!(error, None);
         assert_eq!(groups.keys().collect::<Vec<_>>(), ["default"]);
         let members: Vec<_> = groups["default"].iter().map(|id| id.name()).collect();
         assert_eq!(members, ["db", "api"]);
+    }
+
+    /// An unreadable user or system config may override a group a project
+    /// group includes, so only the groups that include one are held back.
+    #[test]
+    fn an_unreadable_inherited_config_holds_back_only_groups_including_it() {
+        let declared = declared(
+            "[groups.shared]\ndaemons = [\"db\"]\n\n\
+             [groups.default]\ngroups = [\"shared\"]\n\n\
+             [groups.web]\ndaemons = [\"api\"]\n",
+        );
+        let exposed = HashSet::from(["default".to_string(), "web".to_string()]);
+        let (groups, error) = resolve_groups(&declared, &exposed, Some("permission denied"));
+        assert_eq!(groups.keys().collect::<Vec<_>>(), ["web"]);
+        let error = error.unwrap();
+        assert!(error.contains("group 'default'") && error.contains("permission denied"));
     }
 
     /// A config file that cannot be read must not leave the groups the files
