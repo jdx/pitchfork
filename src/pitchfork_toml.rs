@@ -117,9 +117,15 @@ pub fn expand_group(groups: &IndexMap<String, GroupEntry>, name: &str) -> Result
         groups: &IndexMap<String, GroupEntry>,
         name: &str,
         path: &mut Vec<String>,
+        done: &mut HashSet<String>,
         seen: &mut HashSet<DaemonId>,
         out: &mut Vec<DaemonId>,
     ) -> Result<()> {
+        // Everything a finished group contributes is already in `out`, so
+        // revisiting it through another include only repeats work.
+        if done.contains(name) {
+            return Ok(());
+        }
         let Some(group) = groups.get(name) else {
             let suggestion = find_similar_daemon(name, groups.keys().map(|s| s.as_str()));
             return Err(match path.last() {
@@ -141,7 +147,7 @@ pub fn expand_group(groups: &IndexMap<String, GroupEntry>, name: &str) -> Result
         }
         path.push(name.to_string());
         for included in &group.groups {
-            visit(groups, included, path, seen, out)?;
+            visit(groups, included, path, done, seen, out)?;
         }
         path.pop();
         for id in &group.daemons {
@@ -149,11 +155,19 @@ pub fn expand_group(groups: &IndexMap<String, GroupEntry>, name: &str) -> Result
                 out.push(id.clone());
             }
         }
+        done.insert(name.to_string());
         Ok(())
     }
 
     let mut out = Vec::new();
-    visit(groups, name, &mut Vec::new(), &mut HashSet::new(), &mut out)?;
+    visit(
+        groups,
+        name,
+        &mut Vec::new(),
+        &mut HashSet::new(),
+        &mut HashSet::new(),
+        &mut out,
+    )?;
     Ok(out)
 }
 
@@ -2789,6 +2803,22 @@ groups = ["left", "right"]
         );
         let top = expand_group(&groups, "top").unwrap();
         assert_eq!(names(&top), ["db", "l", "r"]);
+    }
+
+    #[test]
+    fn test_group_includes_shared_by_many_paths_are_expanded_once() {
+        // Each level includes the next twice, so walking every path would
+        // take 2^60 steps.
+        let mut toml = String::from("[groups.g0]\ngroups = [\"g1\", \"g1\"]\n");
+        for i in 1..60 {
+            toml.push_str(&format!(
+                "\n[groups.g{i}]\ngroups = [\"g{n}\", \"g{n}\"]\n",
+                n = i + 1
+            ));
+        }
+        toml.push_str("\n[groups.g60]\ndaemons = [\"db\"]\n");
+        let groups = parse_groups(&toml);
+        assert_eq!(names(&expand_group(&groups, "g0").unwrap()), ["db"]);
     }
 
     #[test]
