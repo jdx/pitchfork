@@ -360,7 +360,42 @@ def claim(port):
         return False
 
 
-bases = list(range(20000, 32768 - count + 1))
+def ephemeral_range():
+    # Linux only; elsewhere the documented defaults all sit above 32767.
+    try:
+        with open("/proc/sys/net/ipv4/ip_local_port_range") as f:
+            low, high = map(int, f.read().split())
+        return low, high
+    except (OSError, ValueError):
+        return None
+
+
+# A port inside the OS ephemeral range can be taken by any outgoing
+# connection (or left in TIME_WAIT by one) between this call and the daemon
+# binding it, which fails the daemon with "port is already in use, but no
+# process holding it could be found". Stay out of the range when it has been
+# widened into the pool. Pools are tried in order; if the ephemeral range
+# covers every one of them, fall back to 20000-32767 as before.
+eph = ephemeral_range()
+
+
+def pool_bases(low, high):
+    return [
+        b
+        for b in range(low, high + 1 - count + 1)
+        if eph is None or b + count - 1 < eph[0] or b > eph[1]
+    ]
+
+
+bases = []
+# 10000-17999 stays clear of the fixed ports some tests use (18080-19197,
+# 2048-8443), which they do not claim through this helper.
+for low, high in ((20000, 32767), (10000, 17999)):
+    bases = pool_bases(low, high)
+    if bases:
+        break
+if not bases:
+    bases = list(range(20000, 32768 - count + 1))
 random.shuffle(bases)
 for base in bases:
     run = range(base, base + count)
@@ -385,7 +420,7 @@ for base in bases:
     for port in run:
         if port not in unbindable:
             os.remove(os.path.join(claims, str(port)))
-sys.exit(f"no {count} {kind} port(s) free in 20000-32767 that this run has not already used")
+sys.exit(f"no {count} {kind} port(s) free that this run has not already used")
 PY
 }
 
