@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.31.0](https://github.com/jdx/pitchfork/compare/v2.30.1...v2.31.0) - 2026-10-14
+
+### Added
+
+- *(config)* let groups include other groups ([#1037](https://github.com/jdx/pitchfork/pull/1037))
+- *(config)* add env_file to load daemon env from dotenv files ([#1031](https://github.com/jdx/pitchfork/pull/1031))
+
+### Fixed
+
+- *(deps)* update rust crate usage-rs to v7 ([#1026](https://github.com/jdx/pitchfork/pull/1026))
+
+### Other
+
+- *(deps)* update rust crate usage_rs to v7.0.1 ([#1041](https://github.com/jdx/pitchfork/pull/1041))
+- *(deps)* lock file maintenance ([#1032](https://github.com/jdx/pitchfork/pull/1032))
+
 ## [2.30.1](https://github.com/jdx/pitchfork/compare/v2.30.0...v2.30.1) - 2026-10-07
 
 ### Fixed
