@@ -360,7 +360,27 @@ def claim(port):
         return False
 
 
-bases = list(range(20000, 32768 - count + 1))
+def ephemeral_range():
+    # Linux only; elsewhere the documented defaults all sit above 32767.
+    try:
+        with open("/proc/sys/net/ipv4/ip_local_port_range") as f:
+            low, high = map(int, f.read().split())
+        return low, high
+    except (OSError, ValueError):
+        return None
+
+
+# A port inside the OS ephemeral range can be taken by any outgoing
+# connection (or left in TIME_WAIT by one) between this call and the daemon
+# binding it, which fails the daemon with "port is already in use, but no
+# process holding it could be found". Stay out of the range when it has been
+# widened into 20000-32767.
+eph = ephemeral_range()
+bases = [
+    b
+    for b in range(20000, 32768 - count + 1)
+    if eph is None or b + count - 1 < eph[0] or b > eph[1]
+]
 random.shuffle(bases)
 for base in bases:
     run = range(base, base + count)
