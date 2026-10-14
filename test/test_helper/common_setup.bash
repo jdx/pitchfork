@@ -388,7 +388,9 @@ def pool_bases(low, high):
 
 
 bases = []
-for low, high in ((20000, 32767), (10000, 19999), (2000, 9999)):
+# 10000-17999 stays clear of the fixed ports some tests use (18080-19197,
+# 2048-8443), which they do not claim through this helper.
+for low, high in ((20000, 32767), (10000, 17999)):
     bases = pool_bases(low, high)
     if bases:
         break
