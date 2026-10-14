@@ -85,7 +85,7 @@ run = "exec node server.js --port {{ daemons.redis.port }} --title {{ vars.title
 mise = true
 ```
 
-Pitchfork gives `mise x` its template variables, so `{{ daemons.redis.port }}` above
+Pitchfork gives `mise x` its template variables, so <code v-pre>{{ daemons.redis.port }}</code> above
 still resolves. It passes them in the `PITCHFORK_TEMPLATE_CONTEXT` environment variable
 as JSON, which mise reads and removes before running the command.
 
