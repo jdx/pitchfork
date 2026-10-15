@@ -18,8 +18,8 @@ use std::time::SystemTime;
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, HealthCmd, HealthHttp, HealthPort, MemoryLimit, OnOutputHook,
     PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlHooks, PortBump, PortConfig, ProxyConfig,
-    ProxyIdleTimeout, ProxyTlsMode, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig,
-    StopSignal, WatchMode,
+    ProxyIdleTimeout, ProxyProtocol, ProxyTlsMode, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort,
+    Retry, StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -301,6 +301,9 @@ struct PitchforkTomlDaemonRaw {
     /// TLS handling for this daemon's proxy hostname: `terminate` or `passthrough`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy_tls: Option<ProxyTlsMode>,
+    /// HTTP version the proxy speaks to this daemon: `http1` or `h2c`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy_protocol: Option<ProxyProtocol>,
     /// Which of the daemon's ports the proxy hostname maps to.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy_tls_port: Option<u16>,
@@ -1639,6 +1642,7 @@ impl PitchforkToml {
                 port,
                 proxy: raw_daemon.proxy,
                 proxy_tls: raw_daemon.proxy_tls,
+                proxy_protocol: raw_daemon.proxy_protocol,
                 proxy_tls_port: raw_daemon.proxy_tls_port,
                 proxy_port: raw_daemon.proxy_port,
                 proxy_idle_timeout: raw_daemon.proxy_idle_timeout,
@@ -1829,6 +1833,7 @@ impl PitchforkToml {
                     port: port.cloned(),
                     proxy: daemon.proxy.clone(),
                     proxy_tls: daemon.proxy_tls,
+                    proxy_protocol: daemon.proxy_protocol,
                     proxy_tls_port: daemon.proxy_tls_port,
                     proxy_port: daemon.proxy_port,
                     proxy_idle_timeout: daemon.proxy_idle_timeout,
@@ -2428,6 +2433,14 @@ pub struct PitchforkTomlDaemon {
     ///   presents its own certificate and can require client certificates.
     ///   Requires `port`.
     pub proxy_tls: Option<ProxyTlsMode>,
+    /// HTTP version the proxy speaks to this daemon.
+    ///
+    /// - `http1` (default): requests are forwarded as HTTP/1.1.
+    /// - `h2c`: requests are forwarded as cleartext HTTP/2 with prior
+    ///   knowledge, which gRPC servers require. Clients can still reach the
+    ///   proxy over HTTP/1.1 or HTTP/2; this only changes the hop to the
+    ///   daemon. WebSocket upgrades are not available on an `h2c` daemon.
+    pub proxy_protocol: Option<ProxyProtocol>,
     /// Which of the daemon's ports the proxy hostname maps to.
     ///
     /// Must name one of the ports in `port`. Defaults to the daemon's first

@@ -2209,6 +2209,44 @@ impl std::fmt::Display for ProxyTlsMode {
 }
 
 // ---------------------------------------------------------------------------
+// ProxyProtocol
+// ---------------------------------------------------------------------------
+
+/// The HTTP version the reverse proxy speaks to a daemon.
+#[derive(
+    Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProtocol {
+    /// Plain HTTP/1.1 (the historical behavior).
+    #[default]
+    Http1,
+    /// Cleartext HTTP/2 with prior knowledge, as gRPC servers expect.
+    H2c,
+}
+
+impl ProxyProtocol {
+    /// Whether requests are forwarded as cleartext HTTP/2.
+    pub fn is_h2c(self) -> bool {
+        matches!(self, Self::H2c)
+    }
+
+    /// The protocol name as it is written in `pitchfork.toml`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Http1 => "http1",
+            Self::H2c => "h2c",
+        }
+    }
+}
+
+impl std::fmt::Display for ProxyProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
