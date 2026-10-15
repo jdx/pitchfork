@@ -29,7 +29,7 @@
 - [`pitchfork enable <ID>`](/cli/enable.md)
 - [`pitchfork list [FLAGS]`](/cli/list.md)
 - [`pitchfork logs [FLAGS] [ID]…`](/cli/logs.md)
-- [`pitchfork mcp`](/cli/mcp.md)
+- [`pitchfork mcp [-l --local]`](/cli/mcp.md)
 - [`pitchfork proxy <SUBCOMMAND>`](/cli/proxy.md)
 - [`pitchfork proxy setup [FLAGS]`](/cli/proxy/setup.md)
 - [`pitchfork proxy doctor`](/cli/proxy/doctor.md)

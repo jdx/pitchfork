@@ -629,6 +629,9 @@ to AI assistants (Claude, Cursor, etc.) over stdin/stdout using JSON-RPC.
 
 Typically used as a subprocess by an MCP-aware AI agent.
 
+By default every daemon across all projects is exposed. Pass --local to
+expose only the daemons of the project in the current directory.
+
 Examples:
 
     # In claude_desktop_config.json or similar:
@@ -641,6 +644,16 @@ Examples:
         }
     }
 
+    # Expose only the current project's daemons (e.g. per worktree):
+    {
+        "mcpServers": {
+            "pitchfork": {
+                "command": "pitchfork",
+                "args": ["mcp", "--local"]
+            }
+        }
+    }
+
 Tools provided:
 
     pitchfork_status    List all daemons and their state
@@ -649,6 +662,13 @@ Tools provided:
     pitchfork_restart   Restart a named daemon
     pitchfork_logs      Return recent log output for a daemon
 """#
+    flag "-l --local --project" help="Only expose daemons from the current project" {
+        long_help #"""
+Only expose daemons from the current project
+
+The project is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found. Tools refuse daemons outside it.
+"""#
+    }
     flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd proxy help="Manage the pitchfork reverse proxy" effect=read subcommand_required=#true {
