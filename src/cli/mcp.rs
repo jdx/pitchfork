@@ -166,17 +166,24 @@ fn out_of_scope(filter: &NamespaceFilter, ids: &[DaemonId]) -> Option<CallToolRe
 /// dependencies, which may live in another project.
 async fn start_out_of_scope(
     filter: &NamespaceFilter,
+    ipc: &IpcClient,
     ids: &[DaemonId],
 ) -> std::result::Result<Option<CallToolResult>, ErrorData> {
     if filter.is_empty() {
         return Ok(None);
     }
+    // `start_daemons` skips disabled daemons before resolving dependencies, so
+    // only the ones that can actually start are checked.
+    let disabled = ipc
+        .get_disabled_daemons()
+        .await
+        .map_err(|e| internal_err(format!("Failed to query disabled daemons: {e}")))?;
     let pt = PitchforkToml::all_merged_all_namespaces()
         .await
         .map_err(|e| internal_err(format!("Failed to load config: {e}")))?;
     let configured: Vec<DaemonId> = ids
         .iter()
-        .filter(|id| pt.daemons.contains_key(*id))
+        .filter(|id| pt.daemons.contains_key(*id) && !disabled.contains(id))
         .cloned()
         .collect();
     // Fail closed: if the graph cannot be resolved, the start would fail
@@ -270,7 +277,7 @@ impl PitchforkServer {
         if let Some(err) = out_of_scope(&self.filter, &ids) {
             return Ok(err);
         }
-        if let Some(err) = start_out_of_scope(&self.filter, &ids).await? {
+        if let Some(err) = start_out_of_scope(&self.filter, &ipc, &ids).await? {
             return Ok(err);
         }
 
@@ -403,7 +410,7 @@ impl PitchforkServer {
         if let Some(err) = out_of_scope(&self.filter, &ids) {
             return Ok(err);
         }
-        if let Some(err) = start_out_of_scope(&self.filter, &ids).await? {
+        if let Some(err) = start_out_of_scope(&self.filter, &ipc, &ids).await? {
             return Ok(err);
         }
 
