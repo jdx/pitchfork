@@ -248,6 +248,33 @@ pub(crate) fn powershell_script<'a>(
     }
 }
 
+/// Carry a shell script through mise without letting it re-quote cmd's script.
+/// Deferred cmd templates must keep cmd as mise's program so its `quote`
+/// filter uses cmd syntax. They require mise's native cmd forwarding support.
+pub(crate) fn mise_shell_words(
+    mut words: Vec<String>,
+    script: String,
+    deferred: bool,
+) -> Vec<String> {
+    let (program, options) = words.split_first().expect("resolved shell has a program");
+    #[cfg(not(windows))]
+    let _ = deferred;
+    #[cfg(windows)]
+    if !deferred && cmd_raw_script(program, options, &script).is_some() {
+        let mut bridged = vec![
+            crate::env::PITCHFORK_BIN.to_string_lossy().into_owned(),
+            "shell-exec".to_string(),
+            "--".to_string(),
+        ];
+        bridged.extend(words);
+        bridged.push(script);
+        return bridged;
+    }
+    let script = powershell_script(program, options, &script).into_owned();
+    words.push(script);
+    words
+}
+
 /// The file name of `program` without its extension: `cmd` for
 /// `C:\Windows\System32\cmd.exe`.
 ///
@@ -439,6 +466,46 @@ mod tests {
 
     fn strings(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn mise_deferred_scripts_keep_their_shell_and_script() {
+        let script = "{{ vars.program | quote }} {{ vars.argument | quote }}";
+        for shell in [
+            strings(&["cmd", "/C"]),
+            strings(&[r"C:\Windows\System32\CMD.EXE", "/d", "/s", "/c"]),
+            strings(&["sh", "-c"]),
+        ] {
+            let mut expected = shell.clone();
+            expected.push(script.to_string());
+            assert_eq!(mise_shell_words(shell, script.to_string(), true), expected);
+        }
+        assert_eq!(
+            mise_shell_words(
+                strings(&["pwsh", "-NoProfile", "-Command"]),
+                "'C:\\Program Files\\app.exe' {{ vars.argument | quote }}".to_string(),
+                true,
+            ),
+            strings(&[
+                "pwsh",
+                "-NoProfile",
+                "-Command",
+                "& 'C:\\Program Files\\app.exe' {{ vars.argument | quote }}",
+            ])
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mise_ordinary_cmd_scripts_keep_the_compatibility_bridge() {
+        let script = r#""C:\Program Files\app.exe" "a b""#;
+        for shell in [strings(&["cmd", "/C"]), strings(&["CMD.EXE", "/d", "/c"])] {
+            let bridged = mise_shell_words(shell.clone(), script.to_string(), false);
+            assert_eq!(bridged[0], crate::env::PITCHFORK_BIN.to_string_lossy());
+            assert_eq!(&bridged[1..3], &["shell-exec", "--"]);
+            assert_eq!(&bridged[3..bridged.len() - 1], shell);
+            assert_eq!(bridged.last().unwrap(), script);
+        }
     }
 
     #[test]

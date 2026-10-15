@@ -7,7 +7,7 @@
 Disable boot start for pitchfork supervisor
 
 Removes the boot start registration. Pitchfork will no longer start
-automatically on system boot.
+automatically at system boot or Windows login.
 
 ## Flags
 - **`-h --help`** — Print help

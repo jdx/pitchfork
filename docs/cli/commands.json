@@ -146,7 +146,7 @@
             "hide": false,
             "args_override_self": true,
             "help": "Enable boot start for pitchfork supervisor",
-            "help_long": "Enable boot start for pitchfork supervisor\n\nRegisters pitchfork to start automatically when the system boots.\n\nWhen run as root (or via sudo): creates a system-level entry\n\n    macOS: /Library/LaunchDaemons/pitchfork.plist\n    Linux: /etc/systemd/system/pitchfork.service\n\nWhen run as a normal user: creates a user-level entry\n\n    macOS: ~/Library/LaunchAgents/pitchfork.plist\n    Linux: ~/.config/systemd/user/pitchfork.service\n\nThrough sudo, the system-level entry records the invoking user so the root\nsupervisor uses that user's configuration, state directory, and identity at\nboot, as `sudo pitchfork supervisor start` would. Set `settings.supervisor.user`\nto choose a different user for state and daemons.\n\nIf an entry already exists at this level, it is rewritten with the current\nbinary path and invoking user.",
+            "help_long": "Enable boot start for pitchfork supervisor\n\nRegisters pitchfork to start automatically at system boot on macOS and Linux\nor at login on Windows.\n\nOn macOS and Linux, running as root (or via sudo) creates a system-level entry:\n\n    macOS: /Library/LaunchDaemons/pitchfork.plist\n    Linux: /etc/systemd/system/pitchfork.service\n\nOn macOS and Linux, running as a normal user creates a user-level entry:\n\n    macOS: ~/Library/LaunchAgents/pitchfork.plist\n    Linux: ~/.config/systemd/user/pitchfork.service\n\nThrough sudo, the system-level entry records the invoking user so the root\nsupervisor uses that user's configuration, state directory, and identity at\nboot, as `sudo pitchfork supervisor start` would. Set `settings.supervisor.user`\nto choose a different user for state and daemons.\n\nIf an entry already exists at this level, it is rewritten with the current\nbinary path and invoking user when needed.\n\nOn Windows, new entries use HKLM when permitted and otherwise HKCU. Updates\npreserve an existing entry's registry root. Paths with spaces and Unicode are\nsupported. An existing HKLM entry may require an elevated terminal to update.\nThis command can re-enable an entry disabled in Task Manager; automatic path\nrepair preserves its approval instead.",
             "name": "enable",
             "aliases": [],
             "hidden_aliases": [],
@@ -185,7 +185,7 @@
             "hide": false,
             "args_override_self": true,
             "help": "Disable boot start for pitchfork supervisor",
-            "help_long": "Disable boot start for pitchfork supervisor\n\nRemoves the boot start registration. Pitchfork will no longer start\nautomatically on system boot.",
+            "help_long": "Disable boot start for pitchfork supervisor\n\nRemoves the boot start registration. Pitchfork will no longer start\nautomatically at system boot or Windows login.",
             "name": "disable",
             "aliases": [],
             "hidden_aliases": [],
@@ -224,7 +224,7 @@
             "hide": false,
             "args_override_self": true,
             "help": "Check boot start status",
-            "help_long": "Check boot start status\n\nReports whether pitchfork is configured to start on system boot.",
+            "help_long": "Check boot start status\n\nReports whether pitchfork is configured to start at system boot or Windows\nlogin. On Windows, startup is enabled when either registry root has an entry\nenabled in Task Manager.",
             "name": "status",
             "aliases": [],
             "hidden_aliases": [],
@@ -258,7 +258,7 @@
         "subcommand_required": true,
         "args_override_self": true,
         "help": "Enable or disable boot start",
-        "help_long": "Enable or disable boot start\n\nManages whether pitchfork supervisor starts automatically when the system\nboots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).\n\nWhen run as root (or via sudo), registers a system-level entry that starts\npitchfork for all users:\n\n    macOS: /Library/LaunchDaemons/pitchfork.plist\n    Linux: /etc/systemd/system/pitchfork.service\n\nWhen run as a normal user, registers a user-level entry:\n\n    macOS: ~/Library/LaunchAgents/pitchfork.plist\n    Linux: ~/.config/systemd/user/pitchfork.service\n\nA system-level entry registered through sudo records the invoking user\n(`supervisor run --boot --invoking-user <user>`). At boot, the root supervisor\nbehaves as if that user had started it with sudo: it reads their\n~/.config/pitchfork/config.toml, keeps state files and IPC sockets in their\nhome directory, and runs daemons as that user unless `settings.supervisor.user`\nor a daemon's `user` says otherwise. A system-level entry registered from a\nroot login shell records no user and runs entirely as root.\n\nRunning `enable` again rewrites an existing entry, for example to record the\ninvoking user in an entry created by an older version.\n\nSubcommands:\n\n    enable    Register pitchfork to start on boot\n    disable   Remove pitchfork from boot startup\n    status    Check if boot start is currently enabled\n\nExamples:\n\n    pitchfork boot enable           Start pitchfork on system boot (user-level)\n    sudo pitchfork boot enable      Start pitchfork on system boot (system-level)\n    pitchfork boot disable          Don't start pitchfork on boot\n    pitchfork boot status           Check boot start status",
+        "help_long": "Enable or disable boot start\n\nManages whether pitchfork supervisor starts automatically at system boot on\nmacOS and Linux or at login on Windows. Uses launchd on macOS, systemd on\nLinux, and a registry startup entry on Windows.\n\nOn macOS and Linux, running as root (or via sudo) registers a system-level\nentry that starts pitchfork for all users:\n\n    macOS: /Library/LaunchDaemons/pitchfork.plist\n    Linux: /etc/systemd/system/pitchfork.service\n\nOn macOS and Linux, running as a normal user registers a user-level entry:\n\n    macOS: ~/Library/LaunchAgents/pitchfork.plist\n    Linux: ~/.config/systemd/user/pitchfork.service\n\nA system-level entry registered through sudo records the invoking user\n(`supervisor run --boot --invoking-user <user>`). At boot, the root supervisor\nbehaves as if that user had started it with sudo: it reads their\n~/.config/pitchfork/config.toml, keeps state files and IPC sockets in their\nhome directory, and runs daemons as that user unless `settings.supervisor.user`\nor a daemon's `user` says otherwise. A system-level entry registered from a\nroot login shell records no user and runs entirely as root.\n\nRunning `enable` again rewrites an existing entry, for example to record the\ninvoking user in an entry created by an older version.\n\nOn Windows, new entries use HKLM when permitted and otherwise HKCU. Updates\nkeep an existing entry in its original registry root, including executable\npaths with spaces and Unicode. Automatic path repair preserves Task Manager\napproval; explicitly enable boot start to re-enable a disabled entry.\n\nSubcommands:\n\n    enable    Register pitchfork to start on boot\n    disable   Remove pitchfork from boot startup\n    status    Check if boot start is currently enabled\n\nExamples:\n\n    pitchfork boot enable           Start pitchfork on system boot (user-level)\n    sudo pitchfork boot enable      Start pitchfork on system boot (system-level)\n    pitchfork boot disable          Don't start pitchfork on boot\n    pitchfork boot status           Check boot start status",
         "name": "boot",
         "aliases": [],
         "hidden_aliases": [],
@@ -3710,6 +3710,54 @@
         "examples": [],
         "headings": []
       },
+      "shell-exec": {
+        "full_cmd": [
+          "shell-exec"
+        ],
+        "usage": "shell-exec [-- COMMAND]…",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "COMMAND",
+            "usage": "[-- COMMAND]…",
+            "help": "Shell, shell options, and the script as the last argument",
+            "help_first_line": "Shell, shell options, and the script as the last argument",
+            "required": false,
+            "double_dash": "Required",
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "help",
+            "usage": "-h --help",
+            "help": "Print help",
+            "help_first_line": "Print help",
+            "short": [
+              "h"
+            ],
+            "long": [
+              "help"
+            ],
+            "hide": false,
+            "global": false,
+            "action": "help",
+            "builtin": true
+          }
+        ],
+        "mounts": [],
+        "unknown_flags": null,
+        "hide": true,
+        "args_override_self": true,
+        "help": "Execute a shell script after mise has activated the daemon environment.",
+        "help_long": "Execute a shell script after mise has activated the daemon environment.\n\nThis bridge preserves cmd.exe's raw command line on mise versions without native cmd forwarding. It inherits the daemon's console and stdio, and returns the shell's exit code.",
+        "name": "shell-exec",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": [],
+        "headings": []
+      },
       "settings": {
         "full_cmd": [
           "settings"
@@ -5728,7 +5776,7 @@
         "cli": [],
         "bindings": {},
         "help": "Shell command used to execute daemon run scripts on Windows",
-        "long_help": "Shell command used to execute daemon run scripts on Windows\n\nUsed in place of `general.shell` on Windows, unless `general.shell` is set explicitly. Split and used the same way: the program and arguments come from this value, and the `run` string is appended as the final argument, e.g. `cmd /C \"<run>\"`.\n\nThe default is `cmd /C`, which is always available, so `run` strings are read by cmd.exe: use `%VAR%` rather than `$VAR`, and double quotes rather than single quotes.\n\nThe split follows POSIX rules, so a path with spaces or backslashes has to be quoted: `\"'C:\\Program Files\\Git\\bin\\sh.exe' -c\"`.\n\nWhen the shell is cmd.exe with `/C` last, the `run` string is handed to it as `/S /C \"<run>\"`, so double quotes in it reach cmd as written, e.g. `run = '\"C:\\Program Files\\app\\app.exe\" --name \"a b\"'`. A daemon with `mise = true` is the exception: mise starts cmd itself and quotes the string again, so a `run` containing `\"` may not reach cmd intact there.\n\nWhen the shell is PowerShell (`powershell` or `pwsh`) with `-Command` last, a `run` string that starts with a quote is run with the call operator, as `& <run>`, so a quoted program path works there too, e.g. `run = '\"C:\\Program Files\\app\\app.exe\" --port 8080'`.\n\n**Common configurations:** - `\"cmd /C\"` — Default - `\"powershell -Command\"` / `\"pwsh -Command\"` — PowerShell - `\"sh -c\"` — Git for Windows' sh, when `Git\\bin` is on `PATH`",
+        "long_help": "Shell command used to execute daemon run scripts on Windows\n\nUsed in place of `general.shell` on Windows, unless `general.shell` is set explicitly. Split and used the same way: the program and arguments come from this value, and the `run` string is appended as the final argument, e.g. `cmd /C \"<run>\"`.\n\nThe default is `cmd /C`, which is always available, so `run` strings are read by cmd.exe: use `%VAR%` rather than `$VAR`, and double quotes rather than single quotes.\n\nThe split follows POSIX rules, so a path with spaces or backslashes has to be quoted: `\"'C:\\Program Files\\Git\\bin\\sh.exe' -c\"`.\n\nWhen the shell is cmd.exe with `/C` last, the `run` string is handed to it as `/S /C \"<run>\"`, so double quotes in it reach cmd as written, e.g. `run = '\"C:\\Program Files\\app\\app.exe\" --name \"a b\"'`. With `mise = true`, a pitchfork helper preserves ordinary scripts on older mise versions. Deferred templates use mise's native cmd forwarding and quoting support (mise 2026.10.10 or later).\n\nWhen the shell is PowerShell (`powershell` or `pwsh`) with `-Command` last, a `run` string that starts with a quote is run with the call operator, as `& <run>`, so a quoted program path works there too, e.g. `run = '\"C:\\Program Files\\app\\app.exe\" --port 8080'`.\n\n**Common configurations:** - `\"cmd /C\"` — Default - `\"powershell -Command\"` / `\"pwsh -Command\"` — PowerShell - `\"sh -c\"` — Git for Windows' sh, when `Git\\bin` is on `PATH`",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
@@ -7366,7 +7414,7 @@
         "cli": [],
         "bindings": {},
         "help": "Default user to run daemon processes as",
-        "long_help": "Default user to run daemon processes as\n\nDefault Unix user for daemon processes spawned by the supervisor.\n\nWhen set, all daemons run as this user unless an individual daemon sets `user = \"...\"`. The value may be a username (for example `\"postgres\"`) or a numeric UID (for example `\"501\"`).\n\nIf unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root. A system boot service registered with `sudo pitchfork boot enable` records that user as `--invoking-user` and defaults to them in the same way.",
+        "long_help": "Default user to run daemon processes as\n\nDefault Unix user for daemon processes spawned by the supervisor.\n\nWhen set, all daemons run as this user unless an individual daemon sets `user = \"...\"`. The value may be a username (for example `\"postgres\"`) or a numeric UID (for example `\"501\"`).\n\nIf unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root. A system boot service registered with `sudo pitchfork boot enable` records that user as `--invoking-user` and defaults to them in the same way. On Windows, a nonempty value prevents daemon startup with an error; user switching is only supported on Unix.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",

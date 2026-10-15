@@ -7,16 +7,17 @@ use crate::boot_manager::BootManager;
     long_about = "\
 Enable or disable boot start
 
-Manages whether pitchfork supervisor starts automatically when the system
-boots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).
+Manages whether pitchfork supervisor starts automatically at system boot on
+macOS and Linux or at login on Windows. Uses launchd on macOS, systemd on
+Linux, and a registry startup entry on Windows.
 
-When run as root (or via sudo), registers a system-level entry that starts
-pitchfork for all users:
+On macOS and Linux, running as root (or via sudo) registers a system-level
+entry that starts pitchfork for all users:
 
     macOS: /Library/LaunchDaemons/pitchfork.plist
     Linux: /etc/systemd/system/pitchfork.service
 
-When run as a normal user, registers a user-level entry:
+On macOS and Linux, running as a normal user registers a user-level entry:
 
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
@@ -31,6 +32,11 @@ root login shell records no user and runs entirely as root.
 
 Running `enable` again rewrites an existing entry, for example to record the
 invoking user in an entry created by an older version.
+
+On Windows, new entries use HKLM when permitted and otherwise HKCU. Updates
+keep an existing entry in its original registry root, including executable
+paths with spaces and Unicode. Automatic path repair preserves Task Manager
+approval; explicitly enable boot start to re-enable a disabled entry.
 
 Subcommands:
 
@@ -56,14 +62,15 @@ enum BootCommands {
     #[usage(long_help = "\
 Enable boot start for pitchfork supervisor
 
-Registers pitchfork to start automatically when the system boots.
+Registers pitchfork to start automatically at system boot on macOS and Linux
+or at login on Windows.
 
-When run as root (or via sudo): creates a system-level entry
+On macOS and Linux, running as root (or via sudo) creates a system-level entry:
 
     macOS: /Library/LaunchDaemons/pitchfork.plist
     Linux: /etc/systemd/system/pitchfork.service
 
-When run as a normal user: creates a user-level entry
+On macOS and Linux, running as a normal user creates a user-level entry:
 
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
@@ -74,20 +81,28 @@ boot, as `sudo pitchfork supervisor start` would. Set `settings.supervisor.user`
 to choose a different user for state and daemons.
 
 If an entry already exists at this level, it is rewritten with the current
-binary path and invoking user.")]
+binary path and invoking user when needed.
+
+On Windows, new entries use HKLM when permitted and otherwise HKCU. Updates
+preserve an existing entry's registry root. Paths with spaces and Unicode are
+supported. An existing HKLM entry may require an elevated terminal to update.
+This command can re-enable an entry disabled in Task Manager; automatic path
+repair preserves its approval instead.")]
     Enable(BootEnable),
     /// Disable boot start for pitchfork supervisor
     #[usage(long_help = "\
 Disable boot start for pitchfork supervisor
 
 Removes the boot start registration. Pitchfork will no longer start
-automatically on system boot.")]
+automatically at system boot or Windows login.")]
     Disable(BootDisable),
     /// Check boot start status
     #[usage(long_help = "\
 Check boot start status
 
-Reports whether pitchfork is configured to start on system boot.")]
+Reports whether pitchfork is configured to start at system boot or Windows
+login. On Windows, startup is enabled when either registry root has an entry
+enabled in Task Manager.")]
     Status(BootStatus),
 }
 

@@ -6,14 +6,15 @@
 
 Enable boot start for pitchfork supervisor
 
-Registers pitchfork to start automatically when the system boots.
+Registers pitchfork to start automatically at system boot on macOS and Linux
+or at login on Windows.
 
-When run as root (or via sudo): creates a system-level entry
+On macOS and Linux, running as root (or via sudo) creates a system-level entry:
 
     macOS: /Library/LaunchDaemons/pitchfork.plist
     Linux: /etc/systemd/system/pitchfork.service
 
-When run as a normal user: creates a user-level entry
+On macOS and Linux, running as a normal user creates a user-level entry:
 
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
@@ -24,7 +25,13 @@ boot, as `sudo pitchfork supervisor start` would. Set `settings.supervisor.user`
 to choose a different user for state and daemons.
 
 If an entry already exists at this level, it is rewritten with the current
-binary path and invoking user.
+binary path and invoking user when needed.
+
+On Windows, new entries use HKLM when permitted and otherwise HKCU. Updates
+preserve an existing entry's registry root. Paths with spaces and Unicode are
+supported. An existing HKLM entry may require an elevated terminal to update.
+This command can re-enable an entry disabled in Task Manager; automatic path
+repair preserves its approval instead.
 
 ## Flags
 - **`-h --help`** — Print help

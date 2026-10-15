@@ -39,6 +39,12 @@ _common_setup() {
   export PITCHFORK_CONFIG_DIR="$TEST_TEMP_DIR/.config/pitchfork"
   mkdir -p "$PITCHFORK_STATE_DIR" "$PITCHFORK_LOGS_DIR" "$PITCHFORK_CONFIG_DIR"
 
+  # HOME does not isolate Windows startup registrations. An invalid explicit
+  # boot path prevents the supervisor from repairing the real registry entry.
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    export PITCHFORK_BOOT_EXECUTABLE="$TEST_TEMP_DIR/no-boot-registration.exe"
+  fi
+
   # Ensure pitchfork binary is on PATH
   export PATH="$PROJECT_ROOT/target/debug:$PATH"
 

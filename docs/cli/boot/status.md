@@ -6,7 +6,9 @@
 
 Check boot start status
 
-Reports whether pitchfork is configured to start on system boot.
+Reports whether pitchfork is configured to start at system boot or Windows
+login. On Windows, startup is enabled when either registry root has an entry
+enabled in Task Manager.
 
 ## Flags
 - **`-h --help`** — Print help
