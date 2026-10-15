@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
-use crate::daemon_list::get_all_daemons;
+use crate::daemon_list::{NamespaceFilter, get_all_daemons};
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::log_store::sqlite::LOG_STORE;
@@ -43,6 +43,9 @@ to AI assistants (Claude, Cursor, etc.) over stdin/stdout using JSON-RPC.
 
 Typically used as a subprocess by an MCP-aware AI agent.
 
+By default every daemon across all projects is exposed. Pass --local to
+expose only the daemons of the project in the current directory.
+
 Examples:
 
     # In claude_desktop_config.json or similar:
@@ -55,6 +58,16 @@ Examples:
         }
     }
 
+    # Expose only the current project's daemons (e.g. per worktree):
+    {
+        \"mcpServers\": {
+            \"pitchfork\": {
+                \"command\": \"pitchfork\",
+                \"args\": [\"mcp\", \"--local\"]
+            }
+        }
+    }
+
 Tools provided:
 
     pitchfork_status    List all daemons and their state
@@ -63,11 +76,20 @@ Tools provided:
     pitchfork_restart   Restart a named daemon
     pitchfork_logs      Return recent log output for a daemon"
 )]
-pub struct Mcp {}
+pub struct Mcp {
+    /// Only expose daemons from the current project
+    ///
+    /// The project is resolved from the current directory the same way short
+    /// daemon IDs are: the nearest config file's namespace, falling back to
+    /// 'global' when no config file is found. Tools refuse daemons outside it.
+    #[usage(long, short = 'l', visible_alias = "project")]
+    local: bool,
+}
 
 #[derive(Clone)]
 struct PitchforkServer {
     tool_router: ToolRouter<Self>,
+    filter: NamespaceFilter,
 }
 
 // ── Tool parameter types ────────────────────────────────────────────
@@ -121,6 +143,74 @@ fn with_failure_reasons(summary: String, failed: &[(DaemonId, String)]) -> Strin
     })
 }
 
+/// An error result naming the daemons that fall outside the server's scope,
+/// or `None` when every ID is in scope.
+fn out_of_scope(filter: &NamespaceFilter, ids: &[DaemonId]) -> Option<CallToolResult> {
+    let outside: Vec<String> = ids
+        .iter()
+        .filter(|id| !filter.matches(id))
+        .map(|id| id.qualified())
+        .collect();
+    if outside.is_empty() {
+        return None;
+    }
+    let scope = filter.single().unwrap_or("the current project");
+    Some(CallToolResult::error(vec![ContentBlock::text(format!(
+        "Daemons outside this server's scope ({scope}): {}",
+        outside.join(", ")
+    ))]))
+}
+
+/// The IDs a start may act on, or an error result when starting them would
+/// reach outside the server's scope.
+///
+/// The scope is checked over the requested daemons plus everything they
+/// transitively depend on, since starting a daemon also starts its
+/// dependencies, which may live in another project. Daemons disabled right now
+/// are dropped first, as `start_daemons` would skip them, and the caller must
+/// start only the returned IDs so a daemon enabled in between is never
+/// started unchecked.
+async fn scoped_start_ids(
+    filter: &NamespaceFilter,
+    ipc: &IpcClient,
+    ids: Vec<DaemonId>,
+) -> std::result::Result<std::result::Result<Vec<DaemonId>, CallToolResult>, ErrorData> {
+    if filter.is_empty() {
+        return Ok(Ok(ids));
+    }
+    let disabled = ipc
+        .get_disabled_daemons()
+        .await
+        .map_err(|e| internal_err(format!("Failed to query disabled daemons: {e}")))?;
+    let ids: Vec<DaemonId> = ids
+        .into_iter()
+        .filter(|id| !disabled.contains(id))
+        .collect();
+    let pt = PitchforkToml::all_merged_all_namespaces()
+        .await
+        .map_err(|e| internal_err(format!("Failed to load config: {e}")))?;
+    let configured: Vec<DaemonId> = ids
+        .iter()
+        .filter(|id| pt.daemons.contains_key(*id))
+        .cloned()
+        .collect();
+    // Fail closed: if the graph cannot be resolved, the start would fail
+    // anyway, and the full dependency set is unknown so it cannot be scoped.
+    let order = match crate::deps::resolve_dependencies(&configured, &pt.daemons) {
+        Ok(order) => order,
+        Err(e) => {
+            return Ok(Err(CallToolResult::error(vec![ContentBlock::text(
+                format!("Cannot resolve dependencies to check scope: {e}"),
+            )])));
+        }
+    };
+    let expanded: Vec<DaemonId> = order.levels.into_iter().flatten().collect();
+    Ok(match out_of_scope(filter, &expanded) {
+        Some(err) => Err(err),
+        None => Ok(ids),
+    })
+}
+
 fn internal_err(msg: String) -> ErrorData {
     ErrorData::new(ErrorCode::INTERNAL_ERROR, msg, None::<serde_json::Value>)
 }
@@ -129,9 +219,10 @@ fn internal_err(msg: String) -> ErrorData {
 
 #[tool_router]
 impl PitchforkServer {
-    fn new() -> Self {
+    fn new(filter: NamespaceFilter) -> Self {
         Self {
             tool_router: Self::tool_router(),
+            filter,
         }
     }
 
@@ -144,7 +235,7 @@ impl PitchforkServer {
             .await
             .map_err(|e| internal_err(format!("Failed to connect to supervisor: {e}")))?;
 
-        let entries = get_all_daemons(&client, &crate::daemon_list::NamespaceFilter::default())
+        let entries = get_all_daemons(&client, &self.filter)
             .await
             .map_err(|e| internal_err(format!("Failed to list daemons: {e}")))?;
 
@@ -194,6 +285,18 @@ impl PitchforkServer {
 
         let ids = PitchforkToml::resolve_ids(&params.id)
             .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?;
+        if let Some(err) = out_of_scope(&self.filter, &ids) {
+            return Ok(err);
+        }
+        let ids = match scoped_start_ids(&self.filter, &ipc, ids).await? {
+            Ok(ids) => ids,
+            Err(err) => return Ok(err),
+        };
+        if ids.is_empty() {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                "No daemons needed starting (already running or disabled)",
+            )]));
+        }
 
         let opts = StartOptions {
             force: params.force,
@@ -255,6 +358,9 @@ impl PitchforkServer {
 
         let ids = PitchforkToml::resolve_ids(&params.id)
             .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?;
+        if let Some(err) = out_of_scope(&self.filter, &ids) {
+            return Ok(err);
+        }
 
         // Snapshot running daemons before stop to determine what was actually stopped
         let running_before: std::collections::HashSet<_> = ipc
@@ -318,6 +424,18 @@ impl PitchforkServer {
 
         let ids = PitchforkToml::resolve_ids(&params.id)
             .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?;
+        if let Some(err) = out_of_scope(&self.filter, &ids) {
+            return Ok(err);
+        }
+        let ids = match scoped_start_ids(&self.filter, &ipc, ids).await? {
+            Ok(ids) => ids,
+            Err(err) => return Ok(err),
+        };
+        if ids.is_empty() {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                "No daemons were restarted",
+            )]));
+        }
 
         let opts = StartOptions {
             force: true,
@@ -376,10 +494,15 @@ impl PitchforkServer {
                 .map_err(|e| internal_err(format!("Failed to list daemon IDs: {e}")))?;
             ids.into_iter()
                 .filter_map(|id| DaemonId::parse(&id).ok())
+                .filter(|id| self.filter.matches(id))
                 .collect()
         } else {
-            PitchforkToml::resolve_ids(&params.id)
-                .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?
+            let ids = PitchforkToml::resolve_ids(&params.id)
+                .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?;
+            if let Some(err) = out_of_scope(&self.filter, &ids) {
+                return Ok(err);
+            }
+            ids
         };
 
         if daemon_ids.is_empty() {
@@ -478,7 +601,8 @@ impl Mcp {
     pub async fn run(&self) -> Result<()> {
         eprintln!("Starting pitchfork MCP server...");
 
-        let server = PitchforkServer::new();
+        let filter = NamespaceFilter::from_flags(&[], self.local)?;
+        let server = PitchforkServer::new(filter);
 
         let service = server
             .serve(rmcp::transport::stdio())
@@ -514,5 +638,27 @@ mod tests {
             text,
             "All daemons failed to start\n- proj/typo: Daemon proj/typo not found in config or state"
         );
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn out_of_scope_names_daemons_outside_the_filter() {
+        let filter = NamespaceFilter::new(vec!["proj".to_string()]);
+        let inside = DaemonId::new("proj", "api");
+        let outside = DaemonId::new("other", "web");
+
+        assert!(out_of_scope(&filter, std::slice::from_ref(&inside)).is_none());
+        assert!(
+            out_of_scope(
+                &NamespaceFilter::default(),
+                &[inside.clone(), outside.clone()]
+            )
+            .is_none()
+        );
+        assert!(out_of_scope(&filter, &[inside, outside]).is_some());
     }
 }

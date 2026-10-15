@@ -2296,10 +2296,26 @@
         "full_cmd": [
           "mcp"
         ],
-        "usage": "mcp",
+        "usage": "mcp [-l --local]",
         "subcommands": {},
         "args": [],
         "flags": [
+          {
+            "name": "local",
+            "usage": "-l --local",
+            "help": "Only expose daemons from the current project",
+            "help_long": "Only expose daemons from the current project\n\nThe project is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found. Tools refuse daemons outside it.",
+            "help_first_line": "Only expose daemons from the current project",
+            "short": [
+              "l"
+            ],
+            "long": [
+              "local",
+              "project"
+            ],
+            "hide": false,
+            "global": false
+          },
           {
             "name": "help",
             "usage": "-h --help",
@@ -2322,7 +2338,7 @@
         "hide": false,
         "args_override_self": true,
         "help": "Runs a Model Context Protocol (MCP) server over stdin/stdout",
-        "help_long": "Runs a Model Context Protocol (MCP) server over stdin/stdout\n\nThis command starts an MCP server that exposes pitchfork daemon management\nto AI assistants (Claude, Cursor, etc.) over stdin/stdout using JSON-RPC.\n\nTypically used as a subprocess by an MCP-aware AI agent.\n\nExamples:\n\n    # In claude_desktop_config.json or similar:\n    {\n        \"mcpServers\": {\n            \"pitchfork\": {\n                \"command\": \"pitchfork\",\n                \"args\": [\"mcp\"]\n            }\n        }\n    }\n\nTools provided:\n\n    pitchfork_status    List all daemons and their state\n    pitchfork_start     Start a named daemon\n    pitchfork_stop      Stop a named daemon\n    pitchfork_restart   Restart a named daemon\n    pitchfork_logs      Return recent log output for a daemon",
+        "help_long": "Runs a Model Context Protocol (MCP) server over stdin/stdout\n\nThis command starts an MCP server that exposes pitchfork daemon management\nto AI assistants (Claude, Cursor, etc.) over stdin/stdout using JSON-RPC.\n\nTypically used as a subprocess by an MCP-aware AI agent.\n\nBy default every daemon across all projects is exposed. Pass --local to\nexpose only the daemons of the project in the current directory.\n\nExamples:\n\n    # In claude_desktop_config.json or similar:\n    {\n        \"mcpServers\": {\n            \"pitchfork\": {\n                \"command\": \"pitchfork\",\n                \"args\": [\"mcp\"]\n            }\n        }\n    }\n\n    # Expose only the current project's daemons (e.g. per worktree):\n    {\n        \"mcpServers\": {\n            \"pitchfork\": {\n                \"command\": \"pitchfork\",\n                \"args\": [\"mcp\", \"--local\"]\n            }\n        }\n    }\n\nTools provided:\n\n    pitchfork_status    List all daemons and their state\n    pitchfork_start     Start a named daemon\n    pitchfork_stop      Stop a named daemon\n    pitchfork_restart   Restart a named daemon\n    pitchfork_logs      Return recent log output for a daemon",
         "name": "mcp",
         "aliases": [],
         "hidden_aliases": [],
