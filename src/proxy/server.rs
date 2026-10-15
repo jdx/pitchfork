@@ -3113,6 +3113,31 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         }
     };
 
+    let h2c = protocol.is_h2c();
+    if h2c {
+        // HTTP/2 forbids connection-specific headers, so drop them along with
+        // every header `Connection` nominates, before the proxy adds its own.
+        // `TE: trailers` is the one exception, and gRPC requires it.
+        let nominated: Vec<axum::http::HeaderName> = req
+            .headers()
+            .get_all(axum::http::header::CONNECTION)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .filter_map(|t| axum::http::HeaderName::from_bytes(t.trim().as_bytes()).ok())
+            .collect();
+        for name in nominated {
+            if name != axum::http::header::TE {
+                req.headers_mut().remove(&name);
+            }
+        }
+        for h in HOP_BY_HOP_HEADERS {
+            if let Ok(name) = axum::http::HeaderName::from_bytes(h.as_bytes()) {
+                req.headers_mut().remove(&name);
+            }
+        }
+    }
+
     // Update the request URI and Host header
     *req.uri_mut() = forward_uri;
     req.headers_mut().insert(
@@ -3145,20 +3170,6 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     }
 
     join_cookie_fields(req.headers_mut());
-
-    let h2c = protocol.is_h2c();
-    if h2c {
-        // HTTP/2 forbids connection-specific headers. `TE: trailers` is the
-        // one exception, and gRPC requires it, so it is left alone.
-        for h in HOP_BY_HOP_HEADERS {
-            if *h == "te" {
-                continue;
-            }
-            if let Ok(name) = axum::http::HeaderName::from_bytes(h.as_bytes()) {
-                req.headers_mut().remove(&name);
-            }
-        }
-    }
 
     // Downgrade the forwarded request to HTTP/1.1. TLS connections negotiate
     // HTTP/2 inbound via ALPN, but the upstream forward client speaks HTTP/1 to
