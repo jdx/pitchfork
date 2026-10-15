@@ -128,6 +128,11 @@ impl DaemonJob {
         ok
     }
 
+    /// The job's process count, including its console host, or None if unreadable.
+    pub(crate) fn active_processes(&self) -> Option<u32> {
+        active_processes(&self.0)
+    }
+
     /// Wait up to `timeout` for the job to hold no running process, true once
     /// it does. Terminating a job does not wait for its processes to finish
     /// exiting, and one still exiting can hold the port a restart is about to
@@ -135,7 +140,7 @@ impl DaemonJob {
     pub(crate) fn wait_until_empty(&self, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            match active_processes(&self.0) {
+            match self.active_processes() {
                 Some(0) => return true,
                 // Unreadable: it cannot be shown to have emptied.
                 None => return false,

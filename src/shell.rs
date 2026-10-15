@@ -248,6 +248,27 @@ pub(crate) fn powershell_script<'a>(
     }
 }
 
+/// Carry a shell script through mise without letting it re-quote cmd's script.
+/// The bridge runs inside mise's environment, so mise's templates and tool
+/// activation still apply to the original arguments.
+pub(crate) fn mise_shell_words(mut words: Vec<String>, script: String) -> Vec<String> {
+    let (program, options) = words.split_first().expect("resolved shell has a program");
+    #[cfg(windows)]
+    if cmd_raw_script(program, options, &script).is_some() {
+        let mut bridged = vec![
+            crate::env::PITCHFORK_BIN.to_string_lossy().into_owned(),
+            "shell-exec".to_string(),
+            "--".to_string(),
+        ];
+        bridged.extend(words);
+        bridged.push(script);
+        return bridged;
+    }
+    let script = powershell_script(program, options, &script).into_owned();
+    words.push(script);
+    words
+}
+
 /// The file name of `program` without its extension: `cmd` for
 /// `C:\Windows\System32\cmd.exe`.
 ///

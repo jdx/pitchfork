@@ -2921,6 +2921,7 @@ dependencies = [
  "usage-rs",
  "uuid",
  "vte 0.15.0",
+ "windows-registry",
  "windows-sys 0.61.2",
  "x509-parser",
  "xx",
