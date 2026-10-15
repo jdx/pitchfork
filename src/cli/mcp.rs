@@ -161,6 +161,33 @@ fn out_of_scope(filter: &NamespaceFilter, ids: &[DaemonId]) -> Option<CallToolRe
     ))]))
 }
 
+/// Like [`out_of_scope`], but over the requested daemons plus everything they
+/// transitively depend on, since starting a daemon also starts its
+/// dependencies, which may live in another project.
+async fn start_out_of_scope(
+    filter: &NamespaceFilter,
+    ids: &[DaemonId],
+) -> std::result::Result<Option<CallToolResult>, ErrorData> {
+    if filter.is_empty() {
+        return Ok(None);
+    }
+    let pt = PitchforkToml::all_merged_all_namespaces()
+        .await
+        .map_err(|e| internal_err(format!("Failed to load config: {e}")))?;
+    let configured: Vec<DaemonId> = ids
+        .iter()
+        .filter(|id| pt.daemons.contains_key(*id))
+        .cloned()
+        .collect();
+    // Unresolvable graphs are reported by the start itself.
+    let expanded: Vec<DaemonId> = match crate::deps::resolve_dependencies(&configured, &pt.daemons)
+    {
+        Ok(order) => order.levels.into_iter().flatten().collect(),
+        Err(_) => configured,
+    };
+    Ok(out_of_scope(filter, &expanded))
+}
+
 fn internal_err(msg: String) -> ErrorData {
     ErrorData::new(ErrorCode::INTERNAL_ERROR, msg, None::<serde_json::Value>)
 }
@@ -236,6 +263,9 @@ impl PitchforkServer {
         let ids = PitchforkToml::resolve_ids(&params.id)
             .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?;
         if let Some(err) = out_of_scope(&self.filter, &ids) {
+            return Ok(err);
+        }
+        if let Some(err) = start_out_of_scope(&self.filter, &ids).await? {
             return Ok(err);
         }
 
@@ -366,6 +396,9 @@ impl PitchforkServer {
         let ids = PitchforkToml::resolve_ids(&params.id)
             .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?;
         if let Some(err) = out_of_scope(&self.filter, &ids) {
+            return Ok(err);
+        }
+        if let Some(err) = start_out_of_scope(&self.filter, &ids).await? {
             return Ok(err);
         }
 
