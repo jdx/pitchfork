@@ -179,12 +179,17 @@ async fn start_out_of_scope(
         .filter(|id| pt.daemons.contains_key(*id))
         .cloned()
         .collect();
-    // Unresolvable graphs are reported by the start itself.
-    let expanded: Vec<DaemonId> = match crate::deps::resolve_dependencies(&configured, &pt.daemons)
-    {
-        Ok(order) => order.levels.into_iter().flatten().collect(),
-        Err(_) => configured,
+    // Fail closed: if the graph cannot be resolved, the start would fail
+    // anyway, and the full dependency set is unknown so it cannot be scoped.
+    let order = match crate::deps::resolve_dependencies(&configured, &pt.daemons) {
+        Ok(order) => order,
+        Err(e) => {
+            return Ok(Some(CallToolResult::error(vec![ContentBlock::text(
+                format!("Cannot resolve dependencies to check scope: {e}"),
+            )])));
+        }
     };
+    let expanded: Vec<DaemonId> = order.levels.into_iter().flatten().collect();
     Ok(out_of_scope(filter, &expanded))
 }
 
