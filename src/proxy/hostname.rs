@@ -448,6 +448,8 @@ pub struct DaemonHost {
     pub name: String,
     /// `proxy_tls` as the checkout's config had it, `None` when unset.
     pub proxy_tls: Option<crate::config_types::ProxyTlsMode>,
+    /// `proxy_protocol` as the checkout's config had it, `None` when unset.
+    pub proxy_protocol: Option<crate::config_types::ProxyProtocol>,
     /// `proxy_tls_port`, or its shorter `proxy_port` spelling.
     pub proxy_tls_port: Option<u16>,
 }
@@ -489,6 +491,7 @@ impl CheckoutHosts {
                         DaemonHost {
                             name: id.name().to_string(),
                             proxy_tls: config.proxy_tls,
+                            proxy_protocol: config.proxy_protocol,
                             proxy_tls_port: config.effective_proxy_tls_port(),
                         },
                     );
@@ -560,6 +563,8 @@ pub enum HostTarget {
         /// `proxy_tls` as the checkout's config had it when the registry was
         /// built, so routing and the hostname come from one read.
         proxy_tls: Option<crate::config_types::ProxyTlsMode>,
+        /// `proxy_protocol`, from the same read.
+        proxy_protocol: Option<crate::config_types::ProxyProtocol>,
         /// `proxy_tls_port`, from the same read.
         proxy_tls_port: Option<u16>,
     },
@@ -995,6 +1000,7 @@ impl HostRegistry {
                 namespace: checkout.namespace.clone(),
                 daemon: daemon.name.clone(),
                 proxy_tls: daemon.proxy_tls,
+                proxy_protocol: daemon.proxy_protocol,
                 proxy_tls_port: daemon.proxy_tls_port,
             },
             None => HostTarget::UnknownDaemon {
@@ -1028,6 +1034,7 @@ mod tests {
                         DaemonHost {
                             name: n.to_string(),
                             proxy_tls: None,
+                            proxy_protocol: None,
                             proxy_tls_port: None,
                         },
                     )
@@ -1314,6 +1321,7 @@ mod tests {
                 namespace: "myproj".into(),
                 daemon: "api".into(),
                 proxy_tls: None,
+                proxy_protocol: None,
                 proxy_tls_port: None,
             }
         );
@@ -1331,6 +1339,7 @@ mod tests {
                 namespace: "fix-1".into(),
                 daemon: "web".into(),
                 proxy_tls: None,
+                proxy_protocol: None,
                 proxy_tls_port: None,
             }
         );

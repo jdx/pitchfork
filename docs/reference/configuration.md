@@ -705,6 +705,29 @@ Accepts `true` (the default), `false`, or a string label. Automatic hostnames
 require a `port`. Existing slug mappings are independent of this setting. See
 [hostnames](/guides/port-management#hostnames).
 
+### `proxy_protocol`
+
+The HTTP version the proxy speaks to this daemon. Defaults to `"http1"`.
+
+| Value | Behavior |
+|-------|----------|
+| `"http1"` | Requests are forwarded as HTTP/1.1. |
+| `"h2c"` | Requests are forwarded as cleartext HTTP/2 with prior knowledge, which gRPC servers require. |
+
+```toml
+[daemons.api]
+run = "./my-grpc-server --port 50051"
+port = 50051
+proxy_protocol = "h2c"
+```
+
+With `settings.proxy.https = true` the proxy terminates TLS with its own
+certificate and forwards to the daemon over `h2c`, so the daemon needs no
+certificate of its own. Streaming bodies and trailers pass through unchanged.
+HTTP/2 has no `Upgrade`, so WebSocket upgrades do not work on an `h2c` daemon.
+The setting is opt-in because plain TCP has no ALPN to detect an HTTP/2 daemon.
+It has no effect with `proxy_tls = "passthrough"`.
+
 ### `proxy_tls`
 
 How the reverse proxy handles TLS for this daemon. Defaults to `"terminate"`.

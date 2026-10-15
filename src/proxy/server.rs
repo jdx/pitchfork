@@ -107,7 +107,7 @@ use hyper_util::rt::TokioExecutor;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::ProxyTlsMode;
+use crate::pitchfork_toml::{ProxyProtocol, ProxyTlsMode};
 use crate::proxy::activity::{ACTIVITY, ActivityGuard, GuardedBody};
 use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
@@ -135,6 +135,8 @@ const SLUG_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 pub struct ProxyTlsRoute {
     /// `terminate` (default) or `passthrough`.
     pub mode: ProxyTlsMode,
+    /// The HTTP version spoken to the daemon.
+    pub protocol: ProxyProtocol,
     /// The daemon port this hostname maps to. `None` means the first port,
     /// which is what a single-port daemon always wants.
     pub port: Option<u16>,
@@ -334,6 +336,7 @@ pub(crate) fn read_proxy_tls_route(
     let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(dir)?;
     Ok(pt.daemons.get(&id).map(|cfg| ProxyTlsRoute {
         mode: cfg.proxy_tls.unwrap_or_default(),
+        protocol: cfg.proxy_protocol.unwrap_or_default(),
         port: cfg.effective_proxy_tls_port(),
     }))
 }
@@ -668,6 +671,7 @@ fn worktree_route(cached: &CachedSlugEntry, sanitized_branch: &str) -> ProxyTlsR
         .copied()
         .unwrap_or(ProxyTlsRoute {
             mode: cached.tls.mode,
+            protocol: cached.tls.protocol,
             port: None,
         })
 }
@@ -720,7 +724,7 @@ enum ResolveResult {
     ///
     /// The guard records the forwarded work as the daemon's activity, and has
     /// to be held for as long as that work lasts.
-    Ready(u16, Option<ActivityGuard>),
+    Ready(u16, Option<ActivityGuard>, ProxyProtocol),
     /// Daemon is currently starting (auto-start in progress or just triggered).
     Starting { slug: String },
     /// No matching slug or daemon found.
@@ -750,6 +754,9 @@ type OnErrorFn = Arc<dyn Fn(&str) + Send + Sync>;
 struct ProxyState {
     /// HTTP client used to forward requests to daemon backends.
     client: Arc<Client<HttpConnector, Body>>,
+    /// Client for daemons with `proxy_protocol = "h2c"`: cleartext HTTP/2 with
+    /// prior knowledge, since there is no ALPN to negotiate it over plain TCP.
+    h2c_client: Arc<Client<HttpConnector, Body>>,
     /// The configured TLD (e.g. "localhost").
     tld: String,
     /// Whether the proxy is serving HTTPS.
@@ -809,6 +816,11 @@ pub async fn serve(
         // Reclaim idle keep-alive connections after 30 s so that file descriptors
         // are not held open forever when a backend goes quiet.
         .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .build(connector.clone());
+
+    let h2c_client = Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .http2_only(true)
         .build(connector);
 
     // Resolve bind address from settings.
@@ -839,6 +851,7 @@ pub async fn serve(
 
     let state = ProxyState {
         client: Arc::new(client),
+        h2c_client: Arc::new(h2c_client),
         tld: effective_tld.clone(),
         is_tls: s.proxy.https,
         // CONNECT tunnels loop back into this same listener, so the TLS
@@ -1551,7 +1564,7 @@ async fn resolve_passthrough_port_inner(
 ) -> std::result::Result<(u16, Option<ActivityGuard>), String> {
     loop {
         match resolve_target(host, tld).await {
-            ResolveResult::Ready(port, activity) => return Ok((port, activity)),
+            ResolveResult::Ready(port, activity, _) => return Ok((port, activity)),
             // Another connection is already auto-starting this daemon, or it
             // is being stopped for inactivity; wait for that to finish rather
             // than starting a second copy. The caller's timeout ends this
@@ -2988,8 +3001,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         None
     };
 
-    let (target_port, activity) = if let Some(port) = target_port {
-        (port, None)
+    let (target_port, activity, protocol) = if let Some(port) = target_port {
+        (port, None, ProxyProtocol::Http1)
     } else {
         // A passthrough hostname must never be forwarded as plain HTTP: the
         // daemon expects a TLS handshake on that port, so the request would
@@ -3001,7 +3014,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
             );
         }
         match resolve_target(&host, &state.tld).await {
-            ResolveResult::Ready(port, activity) => (port, activity),
+            ResolveResult::Ready(port, activity, protocol) => (port, activity, protocol),
             ResolveResult::Starting { slug } => {
                 return starting_html_response(&slug, &raw_host);
             }
@@ -3100,6 +3113,40 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         }
     };
 
+    let h2c = protocol.is_h2c();
+    if h2c && req.headers().contains_key(axum::http::header::UPGRADE) {
+        return error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            &format!(
+                "'{host}' uses proxy_protocol = \"h2c\", which cannot carry protocol upgrades \
+                 such as WebSocket. Remove proxy_protocol, or connect without an Upgrade header."
+            ),
+        );
+    }
+    if h2c {
+        // HTTP/2 forbids connection-specific headers, so drop them along with
+        // every header `Connection` nominates, before the proxy adds its own.
+        // `TE: trailers` is the one exception, and gRPC requires it.
+        let nominated: Vec<axum::http::HeaderName> = req
+            .headers()
+            .get_all(axum::http::header::CONNECTION)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .filter_map(|t| axum::http::HeaderName::from_bytes(t.trim().as_bytes()).ok())
+            .collect();
+        for name in nominated {
+            if name != axum::http::header::TE {
+                req.headers_mut().remove(&name);
+            }
+        }
+        for h in HOP_BY_HOP_HEADERS {
+            if let Ok(name) = axum::http::HeaderName::from_bytes(h.as_bytes()) {
+                req.headers_mut().remove(&name);
+            }
+        }
+    }
+
     // Update the request URI and Host header
     *req.uri_mut() = forward_uri;
     req.headers_mut().insert(
@@ -3137,7 +3184,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     // HTTP/2 inbound via ALPN, but the upstream forward client speaks HTTP/1 to
     // the daemon. Without this, the still-h2-tagged request is rejected by the
     // client with `UserUnsupportedVersion`, surfacing as a 502 to the browser.
-    *req.version_mut() = axum::http::Version::HTTP_11;
+    *req.version_mut() = if h2c {
+        axum::http::Version::HTTP_2
+    } else {
+        axum::http::Version::HTTP_11
+    };
 
     // Extract the client-side OnUpgrade handle *before* consuming req
     let client_upgrade = hyper::upgrade::on(&mut req);
@@ -3149,10 +3200,13 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     // 120 s is intentionally generous for a local dev proxy — it covers slow
     // test suites, large file uploads, and SSE streams while still bounding
     // the worst-case resource leak.
-    let result = match tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        state.client.request(req),
-    )
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        if h2c {
+            state.h2c_client.request(req).await
+        } else {
+            state.client.request(req).await
+        }
+    })
     .await
     {
         Ok(r) => r,
@@ -3351,7 +3405,9 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
         // namespace to narrow by, the first match is used — as before.
         [(id, d), ..] => match select_daemon_port(&ctx.route, d) {
             Some(port) => match begin_running(id, deadline).await {
-                Running::Yes(activity) => ResolveResult::Ready(port, Some(activity)),
+                Running::Yes(activity) => {
+                    ResolveResult::Ready(port, Some(activity), ctx.route.protocol)
+                }
                 Running::Stopping => ResolveResult::Starting {
                     slug: ctx.cached.slug.clone(),
                 },
@@ -3975,7 +4031,7 @@ async fn wait_for_active_port(
                     return match ACTIVITY.begin(daemon_id) {
                         Some(activity) => {
                             log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
-                            ResolveResult::Ready(port, Some(activity))
+                            ResolveResult::Ready(port, Some(activity), route.protocol)
                         }
                         None => ResolveResult::Starting {
                             slug: slug.to_string(),
@@ -4069,6 +4125,7 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
             ref namespace,
             ref daemon,
             proxy_tls,
+            proxy_protocol,
             proxy_tls_port,
             ..
         } => {
@@ -4078,6 +4135,7 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
             // one.
             let route = ProxyTlsRoute {
                 mode: proxy_tls.unwrap_or_default(),
+                protocol: proxy_protocol.unwrap_or_default(),
                 port: proxy_tls_port,
             };
             // When several checkouts share this daemon's namespace — in this
@@ -4179,7 +4237,9 @@ async fn resolve_registry_daemon(
             return ResolveResult::NotFound;
         };
         match begin_running(&d.id, deadline).await {
-            Running::Yes(activity) => return ResolveResult::Ready(port, Some(activity)),
+            Running::Yes(activity) => {
+                return ResolveResult::Ready(port, Some(activity), route.protocol);
+            }
             Running::Stopping => {
                 return ResolveResult::Starting {
                     slug: host.to_string(),
@@ -5282,7 +5342,11 @@ mod tests {
     #[test]
     fn test_select_daemon_port_skips_port_zero() {
         for mode in [ProxyTlsMode::Passthrough, ProxyTlsMode::Terminate] {
-            let route = ProxyTlsRoute { mode, port: None };
+            let route = ProxyTlsRoute {
+                mode,
+                protocol: Default::default(),
+                port: None,
+            };
 
             // A later real port is used in place of the placeholder.
             let mixed = make_daemon(&[0, 8443], &[0, 8443], None);
@@ -5309,6 +5373,7 @@ mod tests {
     #[test]
     fn test_select_daemon_port_passthrough_prefers_declared_first_port() {
         let route = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: None,
         };
@@ -5338,6 +5403,7 @@ mod tests {
     #[test]
     fn test_select_daemon_port_honors_configured_port() {
         let route = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(9443),
         };
@@ -5351,6 +5417,7 @@ mod tests {
     #[test]
     fn test_select_daemon_port_follows_auto_bump() {
         let route = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(9443),
         };
@@ -5364,6 +5431,7 @@ mod tests {
     #[test]
     fn test_select_daemon_port_skips_a_configured_port_resolved_to_zero() {
         let route = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(9443),
         };
@@ -5384,6 +5452,7 @@ mod tests {
     #[test]
     fn test_select_daemon_port_refuses_a_port_the_daemon_never_bound() {
         let route = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(9443),
         };
@@ -5401,6 +5470,7 @@ mod tests {
     #[test]
     fn test_select_daemon_port_honors_configured_port_when_terminating() {
         let route = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Terminate,
             port: Some(9080),
         };
@@ -5410,6 +5480,61 @@ mod tests {
         // Following auto-bump by position, as in passthrough mode.
         let bumped = make_daemon(&[8080, 9080], &[8081, 9081], Some(8081));
         assert_eq!(select_daemon_port(&route, &bumped), Some(9081));
+    }
+
+    /// `proxy_protocol` is read with the route, defaulting to HTTP/1.1.
+    #[test]
+    fn test_read_proxy_tls_route_reads_protocol() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pitchfork.toml"),
+            "[daemons.grpc]\nrun = \"serve\"\nport = 50051\nproxy_protocol = \"h2c\"\n\n\
+             [daemons.web]\nrun = \"serve\"\nport = 3000\n",
+        )
+        .unwrap();
+        let ns = crate::pitchfork_toml::PitchforkToml::namespace_for_dir(dir.path()).unwrap();
+        let grpc = read_proxy_tls_route(dir.path(), Some(&ns), "grpc")
+            .unwrap()
+            .unwrap();
+        assert_eq!(grpc.protocol, ProxyProtocol::H2c);
+        let web = read_proxy_tls_route(dir.path(), Some(&ns), "web")
+            .unwrap()
+            .unwrap();
+        assert_eq!(web.protocol, ProxyProtocol::Http1);
+    }
+
+    /// The h2c client reaches a daemon that only speaks HTTP/2, given a request
+    /// the forwarder has tagged HTTP/2, over HTTP/2.
+    #[tokio::test]
+    async fn test_h2c_client_reaches_http2_only_daemon() {
+        use http_body_util::BodyExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let svc = hyper::service::service_fn(
+                |req: axum::http::Request<hyper::body::Incoming>| async move {
+                    assert_eq!(req.version(), axum::http::Version::HTTP_2);
+                    let body = http_body_util::Full::new(axum::body::Bytes::from_static(b"ok"));
+                    Ok::<_, std::convert::Infallible>(axum::http::Response::new(body))
+                },
+            );
+            let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                .serve_connection(hyper_util::rt::TokioIo::new(stream), svc)
+                .await;
+        });
+        let client: Client<HttpConnector, Body> = Client::builder(TokioExecutor::new())
+            .http2_only(true)
+            .build(HttpConnector::new());
+        let mut req = axum::http::Request::new(Body::empty());
+        *req.uri_mut() = format!("http://127.0.0.1:{port}/svc/Method")
+            .parse()
+            .unwrap();
+        *req.version_mut() = axum::http::Version::HTTP_2;
+        let resp = client.request(req).await.unwrap();
+        assert_eq!(resp.version(), axum::http::Version::HTTP_2);
+        let collected = resp.into_body().collect().await.unwrap();
+        assert_eq!(collected.to_bytes(), "ok");
     }
 
     /// A directory that says nothing about the daemon reads as no route at
@@ -5460,6 +5585,7 @@ mod tests {
         );
 
         let known = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(8443),
         };
@@ -5480,6 +5606,7 @@ mod tests {
     #[test]
     fn test_known_route_requires_the_same_target() {
         let known = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(8443),
         };
@@ -5515,6 +5642,7 @@ mod tests {
     fn test_worktree_route_inherits_when_unknown() {
         let mut entry = make_entry("spliced");
         entry.tls = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(8443),
         };
@@ -5526,6 +5654,7 @@ mod tests {
         entry.worktree_tls.insert(
             "feature-known".to_string(),
             ProxyTlsRoute {
+                protocol: Default::default(),
                 mode: ProxyTlsMode::Terminate,
                 port: None,
             },
@@ -5553,6 +5682,7 @@ mod tests {
         assert_eq!(
             worktree_route(cached, "feature-unknown"),
             ProxyTlsRoute {
+                protocol: Default::default(),
                 mode: ProxyTlsMode::Passthrough,
                 port: None,
             }
@@ -5561,6 +5691,7 @@ mod tests {
         assert_eq!(
             worktree_route(cached, "feature-known"),
             ProxyTlsRoute {
+                protocol: Default::default(),
                 mode: ProxyTlsMode::Terminate,
                 port: None,
             }
@@ -5573,6 +5704,7 @@ mod tests {
     fn test_worktree_route_lookup() {
         let mut entry = make_entry("myapp");
         entry.tls = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Terminate,
             port: None,
         };
@@ -5583,6 +5715,7 @@ mod tests {
         entry.worktree_tls.insert(
             "feature-b".to_string(),
             ProxyTlsRoute {
+                protocol: Default::default(),
                 mode: ProxyTlsMode::Passthrough,
                 port: Some(9443),
             },
@@ -5844,6 +5977,7 @@ mod tests {
 
         let mut spliced = make_entry("spliced");
         spliced.tls = ProxyTlsRoute {
+            protocol: Default::default(),
             mode: ProxyTlsMode::Passthrough,
             port: Some(8443),
         };
@@ -5854,6 +5988,7 @@ mod tests {
         spliced.worktree_tls.insert(
             "feature-b".to_string(),
             ProxyTlsRoute {
+                protocol: Default::default(),
                 mode: ProxyTlsMode::Terminate,
                 port: None,
             },

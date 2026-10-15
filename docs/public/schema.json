@@ -610,6 +610,17 @@
           "maximum": 65535,
           "minimum": 1
         },
+        "proxy_protocol": {
+          "description": "HTTP version the proxy speaks to this daemon.\n\n- `http1` (default): requests are forwarded as HTTP/1.1.\n- `h2c`: requests are forwarded as cleartext HTTP/2 with prior\n  knowledge, which gRPC servers require. Clients can still reach the\n  proxy over HTTP/1.1 or HTTP/2; this only changes the hop to the\n  daemon. WebSocket upgrades are not available on an `h2c` daemon.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProxyProtocol"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proxy_tls": {
           "description": "TLS handling for this daemon's proxy hostname.\n\n- `terminate` (default): the proxy terminates TLS with its own\n  certificate and forwards plain HTTP to the daemon.\n- `passthrough`: the proxy reads the SNI hostname from the TLS\n  ClientHello and splices the raw TCP stream to the daemon, which\n  presents its own certificate and can require client certificates.\n  Requires `port`.",
           "anyOf": [
@@ -901,6 +912,21 @@
         },
         {
           "type": "string"
+        }
+      ]
+    },
+    "ProxyProtocol": {
+      "description": "The HTTP version the reverse proxy speaks to a daemon.",
+      "oneOf": [
+        {
+          "description": "Plain HTTP/1.1 (the historical behavior).",
+          "type": "string",
+          "const": "http1"
+        },
+        {
+          "description": "Cleartext HTTP/2 with prior knowledge, as gRPC servers expect.",
+          "type": "string",
+          "const": "h2c"
         }
       ]
     },
