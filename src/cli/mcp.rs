@@ -161,29 +161,37 @@ fn out_of_scope(filter: &NamespaceFilter, ids: &[DaemonId]) -> Option<CallToolRe
     ))]))
 }
 
-/// Like [`out_of_scope`], but over the requested daemons plus everything they
+/// The IDs a start may act on, or an error result when starting them would
+/// reach outside the server's scope.
+///
+/// The scope is checked over the requested daemons plus everything they
 /// transitively depend on, since starting a daemon also starts its
-/// dependencies, which may live in another project.
-async fn start_out_of_scope(
+/// dependencies, which may live in another project. Daemons disabled right now
+/// are dropped first, as `start_daemons` would skip them, and the caller must
+/// start only the returned IDs so a daemon enabled in between is never
+/// started unchecked.
+async fn scoped_start_ids(
     filter: &NamespaceFilter,
     ipc: &IpcClient,
-    ids: &[DaemonId],
-) -> std::result::Result<Option<CallToolResult>, ErrorData> {
+    ids: Vec<DaemonId>,
+) -> std::result::Result<std::result::Result<Vec<DaemonId>, CallToolResult>, ErrorData> {
     if filter.is_empty() {
-        return Ok(None);
+        return Ok(Ok(ids));
     }
-    // `start_daemons` skips disabled daemons before resolving dependencies, so
-    // only the ones that can actually start are checked.
     let disabled = ipc
         .get_disabled_daemons()
         .await
         .map_err(|e| internal_err(format!("Failed to query disabled daemons: {e}")))?;
+    let ids: Vec<DaemonId> = ids
+        .into_iter()
+        .filter(|id| !disabled.contains(id))
+        .collect();
     let pt = PitchforkToml::all_merged_all_namespaces()
         .await
         .map_err(|e| internal_err(format!("Failed to load config: {e}")))?;
     let configured: Vec<DaemonId> = ids
         .iter()
-        .filter(|id| pt.daemons.contains_key(*id) && !disabled.contains(id))
+        .filter(|id| pt.daemons.contains_key(*id))
         .cloned()
         .collect();
     // Fail closed: if the graph cannot be resolved, the start would fail
@@ -191,13 +199,16 @@ async fn start_out_of_scope(
     let order = match crate::deps::resolve_dependencies(&configured, &pt.daemons) {
         Ok(order) => order,
         Err(e) => {
-            return Ok(Some(CallToolResult::error(vec![ContentBlock::text(
+            return Ok(Err(CallToolResult::error(vec![ContentBlock::text(
                 format!("Cannot resolve dependencies to check scope: {e}"),
             )])));
         }
     };
     let expanded: Vec<DaemonId> = order.levels.into_iter().flatten().collect();
-    Ok(out_of_scope(filter, &expanded))
+    Ok(match out_of_scope(filter, &expanded) {
+        Some(err) => Err(err),
+        None => Ok(ids),
+    })
 }
 
 fn internal_err(msg: String) -> ErrorData {
@@ -277,8 +288,14 @@ impl PitchforkServer {
         if let Some(err) = out_of_scope(&self.filter, &ids) {
             return Ok(err);
         }
-        if let Some(err) = start_out_of_scope(&self.filter, &ipc, &ids).await? {
-            return Ok(err);
+        let ids = match scoped_start_ids(&self.filter, &ipc, ids).await? {
+            Ok(ids) => ids,
+            Err(err) => return Ok(err),
+        };
+        if ids.is_empty() {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                "No daemons needed starting (already running or disabled)",
+            )]));
         }
 
         let opts = StartOptions {
@@ -410,8 +427,14 @@ impl PitchforkServer {
         if let Some(err) = out_of_scope(&self.filter, &ids) {
             return Ok(err);
         }
-        if let Some(err) = start_out_of_scope(&self.filter, &ipc, &ids).await? {
-            return Ok(err);
+        let ids = match scoped_start_ids(&self.filter, &ipc, ids).await? {
+            Ok(ids) => ids,
+            Err(err) => return Ok(err),
+        };
+        if ids.is_empty() {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                "No daemons were restarted",
+            )]));
         }
 
         let opts = StartOptions {
