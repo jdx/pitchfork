@@ -3114,6 +3114,15 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     };
 
     let h2c = protocol.is_h2c();
+    if h2c && req.headers().contains_key(axum::http::header::UPGRADE) {
+        return error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            &format!(
+                "'{host}' uses proxy_protocol = \"h2c\", which cannot carry protocol upgrades \
+                 such as WebSocket. Remove proxy_protocol, or connect without an Upgrade header."
+            ),
+        );
+    }
     if h2c {
         // HTTP/2 forbids connection-specific headers, so drop them along with
         // every header `Connection` nominates, before the proxy adds its own.
