@@ -6,9 +6,9 @@ description: Start the supervisor at login or boot, select its user configuratio
 
 <span id="how-it-works"></span>
 
-Register Pitchfork with launchd on macOS or systemd on Linux so the supervisor
-starts without an interactive shell. Then choose which daemons it starts with
-`boot_start = true`.
+Register Pitchfork with launchd on macOS, systemd on Linux, or a login startup
+entry on Windows so the supervisor starts without an interactive shell. Then
+choose which daemons it starts with `boot_start = true`.
 
 <span id="typical-setup"></span>
 
@@ -49,10 +49,10 @@ also keeps this executable choice.
 The path must be absolute, exist, and be executable. Pitchfork does not expand
 `~`, search `PATH`, or execute a shell command here. Invalid explicit paths fail
 registration; automatic repair logs the error and leaves the old entry intact.
-Status and disable still work. Control characters are rejected. Linux and
-Windows currently do not support whitespace in executable paths; Linux also
-rejects quotes, backslashes, `%`, and `$` because of the systemd registration
-format.
+Status and disable still work. Control characters are rejected. Windows
+registrations quote the executable path, so spaces and Unicode paths work.
+Linux rejects whitespace, quotes, backslashes, `%`, and `$` because of the
+systemd registration format.
 
 `PITCHFORK_BOOT_EXECUTABLE` overrides the setting for a process. Prefer persistent
 user or system configuration: a terminal-only variable might not be visible to
@@ -173,16 +173,23 @@ service.
 pitchfork boot status
 ```
 
-Status reports the registered privilege level and, for a system service, the
-recorded account or root configuration. It describes the registration; use
-`pitchfork supervisor status` to check the running process.
+On macOS and Linux, status reports the registered privilege level and, for a
+system service, the recorded account or root configuration. On Windows, it
+reports whether either root has a startup entry enabled in Task Manager, without identifying the registry root. An approval record in one root does not affect an entry in the other.
+It describes the registration; use `pitchfork supervisor status` to check the
+running process.
 
-### Registration files {#user-level-vs-system-level}
+### Registrations {#user-level-vs-system-level}
 
-| Platform | User service | System service |
+| Platform | User registration | System registration |
 | --- | --- | --- |
 | macOS | `~/Library/LaunchAgents/pitchfork.plist` | `/Library/LaunchDaemons/pitchfork.plist` |
 | Linux | `~/.config/systemd/user/pitchfork.service` | `/etc/systemd/system/pitchfork.service` |
+| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\pitchfork` | `HKLM\Software\Microsoft\Windows\CurrentVersion\Run\pitchfork` |
+
+Windows entries start the supervisor at login. New registrations use HKLM when permitted and fall back to HKCU. Updates keep an existing registration in its original root. If both roots contain an entry, Pitchfork selects HKLM for updates, but Windows can start both entries at login. If an HKLM update requires administrator permissions, run `pitchfork boot enable` from an elevated terminal; Pitchfork leaves the entry intact instead of creating a second entry in HKCU.
+
+Automatic path repair preserves Task Manager approval, including disabled startup entries. Run `pitchfork boot enable` explicitly to re-enable a registration disabled in Task Manager.
 
 ## Disable registration {#disable-boot-start}
 
@@ -190,9 +197,11 @@ recorded account or root configuration. It describes the registration; use
 pitchfork boot disable
 ```
 
-Use `sudo pitchfork boot disable` for system registrations. Disable removes
+On macOS and Linux, use `sudo pitchfork boot disable` for system registrations. Disable removes
 registrations at both privilege levels where permissions allow it, including
 legacy macOS registrations. Check `pitchfork boot status` afterward.
+
+If a Windows registration is malformed, run `pitchfork boot disable` followed by `pitchfork boot enable` to replace it. If the existing entry requires administrator permissions, use an elevated terminal for both commands. Automatic repair leaves malformed entries intact and reports the error.
 
 ## Keep one supervisor owner {#prevent-fallback-supervisor-starts}
 

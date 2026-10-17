@@ -269,6 +269,8 @@ retries reuse the environment recorded for that daemon, so run `pitchfork restar
 
 Unix user to run the daemon process as. This overrides `[settings.supervisor] user` for this daemon. Values may be usernames or numeric UIDs.
 
+On Windows, a nonempty daemon `user` or `settings.supervisor.user` prevents the daemon from starting with an error. Earlier versions accepted these settings without switching users. Remove both settings or set them to empty strings to inherit the supervisor's Windows account.
+
 ```toml
 [settings.supervisor]
 user = "app"
@@ -914,7 +916,7 @@ mise = true
 
 This is especially useful for daemons running via `pitchfork boot` (login daemon mode) where interactive shell hooks haven't set up tool paths. When not set, falls back to the global `general.mise` setting. See [mise Integration guide](/guides/mise-integration) for details.
 
-On Windows with the default `cmd /C` shell, mise starts cmd itself, so a `run` string containing double quotes may not reach cmd intact under `mise = true`. Without mise, pitchfork passes the string to cmd so that its quotes are kept.
+On Windows with the default `cmd /C` shell, pitchfork starts cmd through a helper inside mise's environment. Quoted paths, shell expansion, compound commands, and exit codes behave the same way with and without `mise = true`.
 
 ### `memory_limit`
 
@@ -1003,6 +1005,8 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 ### `pty`
 
 Allocate a pseudo-terminal on Unix. Default: `false`.
+
+On Windows, `pty = true` prevents daemon startup with an error. Earlier versions accepted it but captured output through ordinary pipes. Remove the setting or set it to `false` to use pipes.
 
 ```toml
 [daemons.worker]

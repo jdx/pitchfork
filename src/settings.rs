@@ -261,9 +261,9 @@ pub struct SettingsGeneral {
     ///
     /// When the shell is cmd.exe with `/C` last, the `run` string is handed to
     /// it as `/S /C "<run>"`, so double quotes in it reach cmd as written, e.g.
-    /// `run = '"C:\Program Files\app\app.exe" --name "a b"'`. A daemon with
-    /// `mise = true` is the exception: mise starts cmd itself and quotes the
-    /// string again, so a `run` containing `"` may not reach cmd intact there.
+    /// `run = '"C:\Program Files\app\app.exe" --name "a b"'`. With
+    /// `mise = true`, a pitchfork helper starts cmd inside mise's environment
+    /// to preserve the same script text and exit code.
     ///
     /// When the shell is PowerShell (`powershell` or `pwsh`) with `-Command`
     /// last, a `run` string that starts with a quote is run with the call
@@ -1017,6 +1017,8 @@ pub struct SettingsSupervisor {
     /// the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root.
     /// A system boot service registered with `sudo pitchfork boot enable` records
     /// that user as `--invoking-user` and defaults to them in the same way.
+    /// On Windows, a nonempty value prevents daemon startup with an error;
+    /// user switching is only supported on Unix.
     #[usage(env = "PITCHFORK_USER", default = "")]
     pub user: String,
 

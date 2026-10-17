@@ -766,6 +766,7 @@ impl Procs {
             // sysinfo's process.kill() only kills the main process, leaving
             // child processes (e.g. python3 spawned by sh -c) orphaned and
             // still holding ports. The /T flag kills all descendant processes.
+            debug!("forcing process tree termination for pid {pid}");
             let output = std::process::Command::new("taskkill")
                 .args(["/F", "/T", "/PID"])
                 .arg(pid.to_string())
@@ -1232,6 +1233,10 @@ fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
 fn job_outlives_termination(job: &crate::win_job::DaemonJob) -> bool {
     // A failed termination proves nothing either way: the job may already be
     // empty, or still hold processes, so its count decides.
+    debug!(
+        "terminating daemon job; active_processes={:?}",
+        job.active_processes()
+    );
     let terminated = job.terminate();
     let emptied = job.wait_until_empty(JOB_EXIT_WAIT);
     debug!("terminated a daemon's job: {terminated}; emptied: {emptied}");
@@ -1246,8 +1251,11 @@ fn job_outlives_termination(job: &crate::win_job::DaemonJob) -> bool {
 #[cfg(windows)]
 fn interrupt_and_wait(pid: u32, timeout: Duration) -> bool {
     use crate::console_ctrl::EXIT_SHARED_CONSOLE;
-    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{PROCESS_SYNCHRONIZE, WaitForSingleObject};
+
+    let started = Instant::now();
+    debug!("stopping process {pid} with Ctrl+C; timeout={timeout:?}");
 
     // Opened before the interrupt, so the wait below is for this process
     // even if it exits before the wait starts.
@@ -1291,15 +1299,35 @@ fn interrupt_and_wait(pid: u32, timeout: Duration) -> bool {
             return false;
         }
     };
+    debug!(
+        "spawned interrupt helper {} for pid {pid} after {:?}",
+        helper.id(),
+        started.elapsed()
+    );
     let helper_handle = std::os::windows::io::AsRawHandle::as_raw_handle(&helper);
-    if unsafe { WaitForSingleObject(helper_handle as HANDLE, millis_left()) } != WAIT_OBJECT_0 {
-        debug!("pitchfork interrupt for pid {pid} did not finish within {timeout:?}");
+    let wait = unsafe { WaitForSingleObject(helper_handle as HANDLE, millis_left()) };
+    if wait != WAIT_OBJECT_0 {
+        if wait == WAIT_FAILED {
+            debug!(
+                "interrupt helper wait for pid {pid} failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        debug!(
+            "pitchfork interrupt for pid {pid} did not finish after {:?}; wait={wait:#x}",
+            started.elapsed()
+        );
         let _ = helper.kill();
         let _ = helper.wait();
         return false;
     }
     match helper.wait_with_output() {
-        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.success() => {
+            debug!(
+                "sent Ctrl+C to process {pid}; interrupt helper finished after {:?}",
+                started.elapsed()
+            );
+        }
         Ok(o) if o.status.code() == Some(EXIT_SHARED_CONSOLE) => {
             debug!("process {pid} shares the supervisor's console; not sending Ctrl+C");
             return false;
@@ -1318,8 +1346,18 @@ fn interrupt_and_wait(pid: u32, timeout: Duration) -> bool {
         }
     }
 
-    debug!("sent Ctrl+C to process {pid}, waiting up to {timeout:?} in all");
-    unsafe { WaitForSingleObject(handle.0, millis_left()) == WAIT_OBJECT_0 }
+    let wait = unsafe { WaitForSingleObject(handle.0, millis_left()) };
+    if wait == WAIT_FAILED {
+        debug!(
+            "process wait for pid {pid} failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    debug!(
+        "process {pid} wait after Ctrl+C ended after {:?}; wait={wait:#x}",
+        started.elapsed()
+    );
+    wait == WAIT_OBJECT_0
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

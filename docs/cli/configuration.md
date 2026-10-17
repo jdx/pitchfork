@@ -214,7 +214,7 @@ The default is `cmd /C`, which is always available, so `run` strings are read by
 
 The split follows POSIX rules, so a path with spaces or backslashes has to be quoted: `"'C:\Program Files\Git\bin\sh.exe' -c"`.
 
-When the shell is cmd.exe with `/C` last, the `run` string is handed to it as `/S /C "<run>"`, so double quotes in it reach cmd as written, e.g. `run = '"C:\Program Files\app\app.exe" --name "a b"'`. A daemon with `mise = true` is the exception: mise starts cmd itself and quotes the string again, so a `run` containing `"` may not reach cmd intact there.
+When the shell is cmd.exe with `/C` last, the `run` string is handed to it as `/S /C "<run>"`, so double quotes in it reach cmd as written, e.g. `run = '"C:\Program Files\app\app.exe" --name "a b"'`. With `mise = true`, a pitchfork helper starts cmd inside mise's environment to preserve the same script text and exit code.
 
 When the shell is PowerShell (`powershell` or `pwsh`) with `-Command` last, a `run` string that starts with a quote is run with the call operator, as `& <run>`, so a quoted program path works there too, e.g. `run = '"C:\Program Files\app\app.exe" --port 8080'`.
 
@@ -893,7 +893,7 @@ Default Unix user for daemon processes spawned by the supervisor.
 
 When set, all daemons run as this user unless an individual daemon sets `user = "..."`. The value may be a username (for example `"postgres"`) or a numeric UID (for example `"501"`).
 
-If unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root. A system boot service registered with `sudo pitchfork boot enable` records that user as `--invoking-user` and defaults to them in the same way.
+If unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root. A system boot service registered with `sudo pitchfork boot enable` records that user as `--invoking-user` and defaults to them in the same way. On Windows, a nonempty value prevents daemon startup with an error; user switching is only supported on Unix.
 
 ## `supervisor.watch_interval`
 

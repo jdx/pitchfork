@@ -1,12 +1,18 @@
+#[cfg(windows)]
+mod windows;
+
 // ─── Supported platforms (macOS, Linux, Windows) ──────────────────────────
 
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 mod imp {
+    #[cfg(windows)]
+    use super::windows::WindowsLauncher as AutoLaunch;
     use crate::{Result, env};
     #[cfg(target_os = "linux")]
     use auto_launcher::LinuxLaunchMode;
     #[cfg(target_os = "macos")]
     use auto_launcher::MacOSLaunchMode;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use auto_launcher::{AutoLaunch, AutoLaunchBuilder};
     use miette::IntoDiagnostic;
 
@@ -14,7 +20,6 @@ mod imp {
     ///
     /// A system registration made through sudo records the invoking user, since
     /// launchd and systemd start the service without the sudo environment.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn service_args(invoking_user: Option<&str>) -> Vec<String> {
         let mut args: Vec<String> = ["supervisor", "run", "--boot"]
             .into_iter()
@@ -55,9 +60,10 @@ mod imp {
         explicit_executable: bool,
         /// User recorded in the system registration, if any.
         invoking_user: Option<String>,
-        /// The launcher matching the current privilege level (used for enable).
+        /// The launcher selected for writing registrations.
         current: AutoLaunch,
         /// The other level's launcher (used to detect cross-level registrations).
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         other: AutoLaunch,
         /// Legacy macOS LaunchAgentSystem entry (pre-1.0.3 used /Library/LaunchAgents/
         /// instead of /Library/LaunchDaemons/ for root). Kept only for migration/cleanup.
@@ -206,23 +212,9 @@ mod imp {
                 )
             };
 
-            // On Windows there is no root/user distinction; build two identical
-            // launchers (AutoLaunch does not implement Clone).
+            // Windows uses one launcher, which handles both registry roots.
             #[cfg(windows)]
-            let (current, other) = (
-                AutoLaunchBuilder::new()
-                    .set_app_name("pitchfork")
-                    .set_app_path(&app_path)
-                    .set_args(&["supervisor", "run", "--boot"])
-                    .build()
-                    .into_diagnostic()?,
-                AutoLaunchBuilder::new()
-                    .set_app_name("pitchfork")
-                    .set_app_path(&app_path)
-                    .set_args(&["supervisor", "run", "--boot"])
-                    .build()
-                    .into_diagnostic()?,
-            );
+            let current = AutoLaunch::new(&app_path, &service_args(None));
 
             #[cfg(target_os = "macos")]
             return Ok(Self {
@@ -240,6 +232,7 @@ mod imp {
                 explicit_executable,
                 invoking_user,
                 current,
+                #[cfg(target_os = "linux")]
                 other,
             })
         }
@@ -266,10 +259,8 @@ mod imp {
             if self.app_path.chars().any(char::is_control) {
                 return Err(invalid("path must not contain control characters"));
             }
-            // auto-launcher writes an unquoted command and reads the first
-            // whitespace-delimited token on these platforms. Reject paths it
-            // cannot round-trip instead of writing a broken registration.
-            #[cfg(any(target_os = "linux", windows))]
+            // auto-launcher's systemd format cannot quote an executable path.
+            #[cfg(target_os = "linux")]
             if self.app_path.chars().any(char::is_whitespace) {
                 return Err(invalid(
                     "boot registration does not support whitespace in paths on this platform",
@@ -357,9 +348,11 @@ mod imp {
                 || self.other.is_enabled().into_diagnostic()?
                 || self.legacy.is_enabled().into_diagnostic()?);
 
-            #[cfg(not(target_os = "macos"))]
-            Ok(self.current.is_enabled().into_diagnostic()?
-                || self.other.is_enabled().into_diagnostic()?)
+            #[cfg(target_os = "linux")]
+            return Ok(self.current.is_enabled().into_diagnostic()?
+                || self.other.is_enabled().into_diagnostic()?);
+            #[cfg(windows)]
+            self.current.is_enabled().into_diagnostic()
         }
 
         /// Whether a registration at the *current* privilege level exists.
@@ -377,8 +370,10 @@ mod imp {
                 || (!nix::unistd::Uid::effective().is_root()
                     && self.legacy.is_enabled().into_diagnostic()?));
 
-            #[cfg(not(target_os = "macos"))]
-            self.other.is_enabled().into_diagnostic()
+            #[cfg(target_os = "linux")]
+            return self.other.is_enabled().into_diagnostic();
+            #[cfg(windows)]
+            Ok(false)
         }
 
         /// Remove legacy macOS LaunchAgentSystem entry if present and caller is root.
@@ -404,10 +399,12 @@ mod imp {
             Ok(())
         }
 
-        /// Register at the current privilege level.
+        /// Enable boot startup.
         ///
-        /// Returns an error if a registration at the other privilege level already
-        /// exists, preventing user-level and system-level entries from coexisting.
+        /// On macOS and Linux, returns an error if a registration at the other
+        /// privilege level exists, preventing cross-level registrations.
+        /// On Windows, updates an existing registration in its original root;
+        /// only new registrations choose a root based on write access.
         ///
         /// On macOS, migrates any legacy LaunchAgentSystem entry (from pre-1.0.3)
         /// to the correct LaunchDaemonSystem entry.
@@ -422,8 +419,11 @@ mod imp {
                 self.is_other_level_enabled()?
             };
 
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
             let other_conflict = self.other.is_enabled().into_diagnostic()?;
+
+            #[cfg(windows)]
+            let other_conflict = false;
 
             if other_conflict {
                 miette::bail!(
@@ -441,8 +441,8 @@ mod imp {
             Ok(())
         }
 
-        /// Rewrite the existing registration at the current privilege level,
-        /// updating its binary path and recorded invoking user.
+        /// Rewrite the existing registration, updating its binary path and
+        /// recorded invoking user. Windows preserves the existing registry root.
         pub fn refresh(&self) -> Result<()> {
             self.validate_executable()?;
             write_registration(&self.current)?;
@@ -462,6 +462,7 @@ mod imp {
             if self.current.is_enabled().into_diagnostic()? {
                 self.current.disable().into_diagnostic()?;
             }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             if self.other.is_enabled().into_diagnostic()? {
                 self.other.disable().into_diagnostic()?;
             }
@@ -482,6 +483,7 @@ mod imp {
         /// This is a no-op when boot start is not enabled, or when the registered
         /// path already matches. Errors are logged and swallowed — this is a
         /// best-effort self-heal that must not block supervisor startup.
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         pub fn check_and_reregister_if_stale(&self) {
             if let Err(e) = self.validate_executable() {
                 warn!("cannot repair boot registration: {e}");
@@ -510,7 +512,6 @@ mod imp {
             // Keep the invoking user the registration already records: this
             // runs in whatever supervisor happens to start first, which must
             // neither add a user to a root-shell registration nor drop one.
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
             let preserved = if nix::unistd::Uid::effective().is_root() {
                 let registered = registered_system_invoking_user();
                 if registered == self.invoking_user {
@@ -527,8 +528,6 @@ mod imp {
             } else {
                 None
             };
-            #[cfg(windows)]
-            let preserved: Option<Self> = None;
             let launcher = preserved.as_ref().map_or(&self.current, |m| &m.current);
 
             // Re-register by overwriting the existing registration file.
@@ -541,6 +540,20 @@ mod imp {
             }
 
             info!("boot registration updated to current binary path");
+        }
+
+        /// Repair a stale Windows boot path in its original registry root,
+        /// preserving Task Manager approval. Errors are logged without blocking
+        /// supervisor startup, and missing or current registrations are untouched.
+        #[cfg(windows)]
+        pub fn check_and_reregister_if_stale(&self) {
+            if let Err(e) = self.validate_executable() {
+                warn!("cannot repair boot registration: {e}");
+                return;
+            }
+            if let Err(e) = self.current.repair_if_stale() {
+                warn!("cannot repair boot registration: {e}");
+            }
         }
     }
 

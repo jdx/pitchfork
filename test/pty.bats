@@ -108,6 +108,7 @@ EOF
 }
 
 @test "pty mode preserves ANSI escape codes in logs" {
+  skip_on_windows "PTY allocation is not supported on Windows"
   require_sqlite3
   local ansi_script
   ansi_script="$(script_path ansi_output.sh)"
@@ -133,6 +134,7 @@ EOF
 # uses: nothing after it was logged, and the daemon then blocked (PTY) or
 # failed (pipe) writing to output nobody read.
 @test "pty mode keeps reading after a line that is not UTF-8" {
+  skip_on_windows "PTY allocation is not supported on Windows"
   create_pitchfork_toml <<'EOF2'
 [daemons.pty_bad_bytes]
 run = "echo before; printf 'bad \\377\\376 bytes\\n'; i=0; while [ $i -lt 2000 ]; do i=$((i+1)); echo after $i; done; echo reached_end"

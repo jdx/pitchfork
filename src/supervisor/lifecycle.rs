@@ -15,7 +15,7 @@ use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, RunCommand};
 use crate::procs::PROCS;
 use crate::settings::{resolve_shell, settings};
-use crate::shell::{HideConsoleWindow, Shell, ShellScript, powershell_script};
+use crate::shell::{HideConsoleWindow, Shell, ShellScript, mise_shell_words};
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -340,11 +340,26 @@ fn invalid_argv_program(id: &DaemonId, argv: &[String]) -> Option<String> {
     }
 }
 
-/// Program and arguments to spawn for `words` — the daemon's program followed
-/// by its arguments — run through `mise x` when `mise_bin` is given.
-///
-/// Each word stays one argument: mise hands everything after `--` to the
-/// program as it received it.
+#[cfg(any(windows, test))]
+fn unsupported_windows_options(opts: &RunOptions, supervisor_user: &str) -> Option<String> {
+    if opts.pty == Some(true) {
+        return Some(format!(
+            "daemon {}: pty = true is not supported on Windows; remove pty or set it to false",
+            opts.id
+        ));
+    }
+    let configured_user = opts.user.as_deref().unwrap_or_default().trim();
+    if !configured_user.is_empty() || !supervisor_user.trim().is_empty() {
+        return Some(format!(
+            "daemon {}: user switching is not supported on Windows; remove the daemon's user and settings.supervisor.user, or set them to empty strings",
+            opts.id
+        ));
+    }
+    None
+}
+
+/// Program and arguments to spawn for `words`, run through `mise x` when given.
+/// Each word stays one argument, including a script carried by shell-exec.
 fn launch_command(words: Vec<String>, mise_bin: Option<&std::path::Path>) -> (String, Vec<String>) {
     match mise_bin {
         Some(mise_bin) => {
@@ -580,6 +595,32 @@ impl Supervisor {
         self.run_inner(opts, Some(approved_at), restart_mark).await
     }
 
+    /// Reject unsupported options while the caller holds the daemon's stop lock.
+    #[cfg(windows)]
+    async fn reject_unsupported_windows_options(
+        &self,
+        opts: &RunOptions,
+    ) -> Result<Option<IpcResponse>> {
+        let Some(error) = unsupported_windows_options(opts, &settings().supervisor.user) else {
+            return Ok(None);
+        };
+        // A rejected replacement must leave the running instance alone. A
+        // rejected retry has no process and must become terminal, or the
+        // background checker will keep retrying its old errored record.
+        if self
+            .get_daemon(&opts.id)
+            .await
+            .is_none_or(|d| d.pid.is_none())
+        {
+            self.upsert_daemon(
+                UpsertDaemonOpts::from_run_options(opts, DaemonStatus::Failed(error.clone()))
+                    .build(),
+            )
+            .await?;
+        }
+        Ok(Some(IpcResponse::DaemonFailed { error }))
+    }
+
     /// `restart_mark` is set to the stop epoch a forced start's own stop of
     /// the running instance left, if it made one (see
     /// [`Self::settle_restarting`]).
@@ -629,6 +670,10 @@ impl Supervisor {
         {
             info!("daemon {id} was disabled before this start; not starting it");
             return Ok(IpcResponse::DaemonNotRunning);
+        }
+        #[cfg(windows)]
+        if let Some(response) = self.reject_unsupported_windows_options(&opts).await? {
+            return Ok(response);
         }
         if let Some(response) = self
             .claim_or_defer(&opts, &mut stop_guard, restart_mark)
@@ -1047,6 +1092,11 @@ impl Supervisor {
                 error: "the supervisor is shutting down".to_string(),
             });
         }
+        // Settings can change while a foreground start waits between retries.
+        #[cfg(windows)]
+        if let Some(response) = self.reject_unsupported_windows_options(&opts).await? {
+            return Ok(response);
+        }
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
         // Create channel for readiness notification if wait_ready is true
@@ -1217,9 +1267,8 @@ impl Supervisor {
             });
         }
         // Started directly, the shell gets its script from `shell_script`.
-        // Under mise it goes in as an ordinary argument: mise starts the shell
-        // itself, re-quoting each argument, so the raw command line cmd.exe
-        // needs for a script with `"` cannot reach it that way.
+        // Under mise, cmd scripts go through a bridge that restores the raw
+        // command line after mise has activated the environment.
         let script = match &mise_bin {
             Some(mise_bin) => {
                 info!(
@@ -1227,13 +1276,7 @@ impl Supervisor {
                     mise_bin.display()
                 );
                 if let Some(script) = script {
-                    let script = match words.split_first() {
-                        Some((program, options)) => {
-                            powershell_script(program, options, &script).into_owned()
-                        }
-                        None => script,
-                    };
-                    words.push(script);
+                    words = mise_shell_words(words, script);
                 }
                 None
             }
@@ -4349,6 +4392,34 @@ mod launch_command_tests {
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn windows_rejects_only_enabled_unsupported_options() {
+        let mut opts = crate::daemon::RunOptions::default();
+        assert_eq!(super::unsupported_windows_options(&opts, ""), None);
+        opts.pty = Some(false);
+        opts.user = Some(" \t".into());
+        assert_eq!(super::unsupported_windows_options(&opts, " \t"), None);
+        opts.pty = Some(true);
+        assert!(
+            super::unsupported_windows_options(&opts, "")
+                .unwrap()
+                .contains("pty = true")
+        );
+        opts.pty = Some(false);
+        opts.user = Some("postgres".into());
+        assert!(
+            super::unsupported_windows_options(&opts, "")
+                .unwrap()
+                .contains("user switching")
+        );
+        opts.user = None;
+        assert!(
+            super::unsupported_windows_options(&opts, "postgres")
+                .unwrap()
+                .contains("settings.supervisor.user")
+        );
     }
 
     #[test]
