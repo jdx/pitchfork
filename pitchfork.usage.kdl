@@ -1,7 +1,7 @@
 // @generated from usage-rs metadata
 name pitchfork
 bin pitchfork
-version "2.31.0"
+version "2.32.0"
 about "Daemons with DX"
 unknown_flags error
 external_subcommand #true

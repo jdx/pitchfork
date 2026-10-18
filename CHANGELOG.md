@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.32.0](https://github.com/jdx/pitchfork/compare/v2.31.0...v2.32.0) - 2026-10-17
+
+### Added
+
+- *(mcp)* add --local to expose only the current project's daemons ([#1049](https://github.com/jdx/pitchfork/pull/1049))
+- *(proxy)* add proxy_protocol = "h2c" to forward gRPC daemons over HTTP/2 ([#1048](https://github.com/jdx/pitchfork/pull/1048))
+
+### Other
+
+- *(deps)* update jdx crates ([#1053](https://github.com/jdx/pitchfork/pull/1053))
+- *(deps)* update rust crate xx to v2.6.3 ([#1052](https://github.com/jdx/pitchfork/pull/1052))
+
 ## [2.31.0](https://github.com/jdx/pitchfork/compare/v2.30.1...v2.31.0) - 2026-10-14
 
 ### Added
