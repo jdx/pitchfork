@@ -49,7 +49,7 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: false
       - name: Build UI assets
@@ -59,13 +59,13 @@ jobs:
           aube run build
       - name: Import codesign certs
         if: startsWith(matrix.os, 'macos')
-        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        uses: apple-actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9 # v7.1.0
         with:
           p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
           p12-password: ${{ secrets.CERTIFICATES_P12_PASS }}
       - name: Install cross
         if: matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cross
       - name: Setup Rust target
@@ -279,7 +279,7 @@ jobs:
           zsh -n pitchfork.zsh
           fish --no-execute pitchfork.fish
           gh release upload "$TAG" pitchfork.usage.kdl pitchfork.bash pitchfork.zsh pitchfork.fish --repo "$REPO" --clobber
-      - uses: jdx/packslip@2af36e792faa28130987c8af509e475c7458405d # v1.6.0
+      - uses: jdx/packslip@7b32cd29a9240927882ee18b3db1dcfd8e0328b4 # v1.7.0
         with:
           tag: ${{ inputs.tag }}
           commit: ${{ steps.source.outputs.commit }}
