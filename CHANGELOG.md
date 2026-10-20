@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.32.1](https://github.com/jdx/pitchfork/compare/v2.32.0...v2.32.1) - 2026-10-20
+
+### Fixed
+
+- *(deps)* update webpki-root-certs and rustls-webpki for eMudhra CA revocation ([#1060](https://github.com/jdx/pitchfork/pull/1060))
+
+### Other
+
+- *(deps)* update rust crate usage_rs to v7.1.0 ([#1059](https://github.com/jdx/pitchfork/pull/1059))
+- *(deps)* lock file maintenance ([#1056](https://github.com/jdx/pitchfork/pull/1056))
+- *(deps)* lock file maintenance ([#1054](https://github.com/jdx/pitchfork/pull/1054))
+
 ## [2.32.0](https://github.com/jdx/pitchfork/compare/v2.31.0...v2.32.0) - 2026-10-17
 
 ### Added
