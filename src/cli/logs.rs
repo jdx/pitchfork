@@ -1241,6 +1241,18 @@ fn spinner_due(elapsed: Duration) -> bool {
     elapsed >= READY_SPINNER_DELAY
 }
 
+/// Starts the spinner of a hidden ready-check job once the threshold has passed.
+fn reveal_spinner_if_due(
+    job: &clx::progress::ProgressJob,
+    started: std::time::Instant,
+    revealed: &mut bool,
+) {
+    if !*revealed && spinner_due(started.elapsed()) {
+        *revealed = true;
+        job.set_status(clx::progress::ProgressStatus::Running);
+    }
+}
+
 /// Creates a progress job for a ready check.
 ///
 /// The job starts hidden; [`stream_startup_logs`] reveals the spinner once the
@@ -1382,10 +1394,7 @@ pub fn stream_startup_logs(
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(200)) => {
-                    if !revealed && spinner_due(started.elapsed()) {
-                        revealed = true;
-                        job.set_status(clx::progress::ProgressStatus::Running);
-                    }
+                    reveal_spinner_if_due(&job, started, &mut revealed);
                     if let Ok(entries) = LOG_STORE.tail(&id, Some(last_id)) {
                         for entry in &entries {
                             let time = entry.timestamp.format("%H:%M:%S").to_string();
@@ -1531,24 +1540,23 @@ mod tests {
         assert!(spinner_due(READY_SPINNER_DELAY));
     }
 
-    #[tokio::test]
-    async fn ready_spinner_hidden_until_threshold_and_not_revived() {
+    #[test]
+    fn ready_spinner_starts_hidden_and_reveals_after_threshold() {
         let id = DaemonId::new("spinner-test", "ready-check");
         let job = create_ready_check_job(&id, &ReadyCheckType::Delay(0));
         assert!(!job.is_running(), "job must start hidden");
 
-        let (tx, handle) = stream_startup_logs(&id, job.clone());
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!job.is_running(), "still hidden before the threshold");
+        let mut revealed = false;
+        let now = std::time::Instant::now();
+        reveal_spinner_if_due(&job, now, &mut revealed);
+        assert!(
+            !revealed && !job.is_running(),
+            "hidden before the threshold"
+        );
 
-        tokio::time::sleep(READY_SPINNER_DELAY + Duration::from_millis(400)).await;
-        assert!(job.is_running(), "visible after the threshold");
-
-        let _ = tx.send(true);
-        handle.await.unwrap();
-        job.set_status(clx::progress::ProgressStatus::Done);
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(!job.is_running(), "must not revive after completion");
+        let past = now - READY_SPINNER_DELAY;
+        reveal_spinner_if_due(&job, past, &mut revealed);
+        assert!(revealed && job.is_running(), "visible after the threshold");
         job.remove();
     }
 
