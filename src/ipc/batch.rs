@@ -526,9 +526,9 @@ pub fn update_job_with_result(
         match result {
             Ok(run_result) if run_result.started => {
                 let body = if run_result.oneshot {
-                    format!("{prefix} {id_label} completed")
+                    format!("{prefix} pitchfork: {id_label} completed")
                 } else if run_result.resolved_ports.is_empty() {
-                    format!("{prefix} {id_label} started")
+                    format!("{prefix} pitchfork: {id_label} started")
                 } else {
                     let port_str = run_result
                         .resolved_ports
@@ -542,7 +542,7 @@ pub fn update_job_with_result(
                         "ports"
                     };
                     format!(
-                        "{prefix} {id_label} started on {port_label} {}",
+                        "{prefix} pitchfork: {id_label} started on {port_label} {}",
                         crate::ui::style::ncyan(&port_str)
                     )
                 };
@@ -564,12 +564,12 @@ pub fn update_job_with_result(
                     .map(|msg| format!(": {msg}"))
                     .unwrap_or_default();
                 job.set_body(format!(
-                    "{prefix} {id_label} failed{exit_info}{error_detail}"
+                    "{prefix} pitchfork: {id_label} failed{exit_info}{error_detail}"
                 ));
                 job.set_status(ProgressStatus::Failed);
             }
             Err(e) => {
-                job.set_body(format!("{prefix} {id_label} failed: {e}"));
+                job.set_body(format!("{prefix} pitchfork: {id_label} failed: {e}"));
                 job.set_status(ProgressStatus::Failed);
             }
         }
