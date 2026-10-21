@@ -1271,7 +1271,7 @@ pub fn create_ready_check_job(
 
     ProgressJobBuilder::new()
         .body(format!(
-            "{} {} waiting for {{{{ check_type }}}}...",
+            "{} pitchfork: {} waiting for {{{{ check_type }}}}...",
             prefix, id_label
         ))
         .prop("check_type", &check_type.to_string())
