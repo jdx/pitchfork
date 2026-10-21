@@ -1230,9 +1230,21 @@ impl std::fmt::Display for ReadyCheckType {
     }
 }
 
-/// Creates a progress job showing a spinner while waiting for a ready check.
+/// How long a ready check must run before its spinner is shown.
 ///
-/// Returns a `Arc<ProgressJob>` that the caller should update:
+/// Daemons that are ready right away (e.g. `ready_delay = 0`) never flash a
+/// spinner, which matters when output lands in a new shell's prompt.
+const READY_SPINNER_DELAY: Duration = Duration::from_millis(400);
+
+/// Whether a ready-check spinner that is still hidden should now appear.
+fn spinner_due(elapsed: Duration) -> bool {
+    elapsed >= READY_SPINNER_DELAY
+}
+
+/// Creates a progress job for a ready check.
+///
+/// The job starts hidden; [`stream_startup_logs`] reveals the spinner once the
+/// check has run for [`READY_SPINNER_DELAY`]. Returns a `Arc<ProgressJob>` that the caller should update:
 /// - Set body to success message and status to `Done` when the daemon is ready
 /// - Set body to failure message and status to `Failed` when the daemon fails
 pub fn create_ready_check_job(
@@ -1263,7 +1275,7 @@ pub fn create_ready_check_job(
             prefix, id_label
         ))
         .prop("check_type", &check_type.to_string())
-        .status(ProgressStatus::Running)
+        .status(ProgressStatus::Hide)
         .on_done(ProgressJobDoneBehavior::Keep)
         .start()
 }
@@ -1331,7 +1343,9 @@ pub fn stream_startup_logs(
         .and_then(|entries| entries.last().map(|e| e.id))
         .unwrap_or(0);
 
+    let started = std::time::Instant::now();
     let handle = tokio::spawn(async move {
+        let mut revealed = false;
         let is_tty = std::io::stderr().is_terminal();
         let colors_enabled = is_tty && console::colors_enabled_stderr();
         let id_label = colored_id_label(&id.qualified(), colors_enabled);
@@ -1368,6 +1382,10 @@ pub fn stream_startup_logs(
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                    if !revealed && spinner_due(started.elapsed()) {
+                        revealed = true;
+                        job.set_status(clx::progress::ProgressStatus::Running);
+                    }
                     if let Ok(entries) = LOG_STORE.tail(&id, Some(last_id)) {
                         for entry in &entries {
                             let time = entry.timestamp.format("%H:%M:%S").to_string();
@@ -1505,6 +1523,13 @@ fn strip_pty_controls(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spinner_waits_for_threshold() {
+        assert!(!spinner_due(Duration::ZERO));
+        assert!(!spinner_due(READY_SPINNER_DELAY - Duration::from_millis(1)));
+        assert!(spinner_due(READY_SPINNER_DELAY));
+    }
 
     /// Newest first, as the query returns them: row `i` is the `i`-th newest.
     fn fetch_from(rows: &[u32], reads: &mut Vec<usize>) -> impl FnMut(usize) -> Result<Vec<u32>> {
