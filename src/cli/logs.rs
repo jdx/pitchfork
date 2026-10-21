@@ -1531,6 +1531,27 @@ mod tests {
         assert!(spinner_due(READY_SPINNER_DELAY));
     }
 
+    #[tokio::test]
+    async fn ready_spinner_hidden_until_threshold_and_not_revived() {
+        let id = DaemonId::new("spinner-test", "ready-check");
+        let job = create_ready_check_job(&id, &ReadyCheckType::Delay(0));
+        assert!(!job.is_running(), "job must start hidden");
+
+        let (tx, handle) = stream_startup_logs(&id, job.clone());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!job.is_running(), "still hidden before the threshold");
+
+        tokio::time::sleep(READY_SPINNER_DELAY + Duration::from_millis(400)).await;
+        assert!(job.is_running(), "visible after the threshold");
+
+        let _ = tx.send(true);
+        handle.await.unwrap();
+        job.set_status(clx::progress::ProgressStatus::Done);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!job.is_running(), "must not revive after completion");
+        job.remove();
+    }
+
     /// Newest first, as the query returns them: row `i` is the `i`-th newest.
     fn fetch_from(rows: &[u32], reads: &mut Vec<usize>) -> impl FnMut(usize) -> Result<Vec<u32>> {
         move |window| {
