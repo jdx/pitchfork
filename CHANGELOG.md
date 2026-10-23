@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.32.2](https://github.com/jdx/pitchfork/compare/v2.32.1...v2.32.2) - 2026-10-22
+
+### Fixed
+
+- *(start)* show the ready-check spinner only after a short delay ([#1062](https://github.com/jdx/pitchfork/pull/1062))
+
+### Other
+
+- *(deps)* update rust crate usage_rs to v7.1.1 ([#1064](https://github.com/jdx/pitchfork/pull/1064))
+
 ## [2.32.1](https://github.com/jdx/pitchfork/compare/v2.32.0...v2.32.1) - 2026-10-20
 
 ### Fixed
