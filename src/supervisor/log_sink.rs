@@ -30,6 +30,7 @@
 use crate::Result;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
+use crate::inherited_fds::CloseInheritedFds;
 use crate::log_store::LogStore;
 use crate::shell::HideConsoleWindow;
 use crate::supervisor::SUPERVISOR;
@@ -479,6 +480,7 @@ impl SinkPipe {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .hide_console_window()
+            .close_inherited_fds()
             .spawn()
             .into_diagnostic()
     }
