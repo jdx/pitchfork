@@ -6,6 +6,7 @@
 
 use crate::Result;
 use crate::daemon_id::DaemonId;
+use crate::inherited_fds::CloseInheritedFds;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::resolve_shell;
 use crate::shell::{HideConsoleWindow, ShellScript};
@@ -120,7 +121,7 @@ fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
     let (program, args) = parts.split_first().unwrap();
     let mut command = tokio::process::Command::new(program);
     command.shell_script(program, args, cmd);
-    command.hide_console_window();
+    command.hide_console_window().close_inherited_fds();
     Ok(command)
 }
 

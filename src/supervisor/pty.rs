@@ -18,11 +18,9 @@ pub struct PtyPair {
 /// Allocate a new PTY pair using `openpty(3)`.
 ///
 /// Note: `openpty(3)` does *not* set `FD_CLOEXEC` on the returned file
-/// descriptors. The slave FD is dup'd onto the child's stdio before exec,
-/// so the original slave fd leaks into the child. This is harmless in
-/// practice — the extra fd is simply unused — but if strict
-/// close-on-exec semantics are needed, set `FD_CLOEXEC` manually via
-/// `fcntl(fd, F_SETFD, FD_CLOEXEC)`.
+/// descriptors. Children the supervisor spawns use
+/// [`crate::inherited_fds::CloseInheritedFds`], so neither end survives into
+/// them except as the stdio the daemon is given.
 pub fn openpty() -> std::io::Result<PtyPair> {
     let mut master_fd: libc::c_int = -1;
     let mut slave_fd: libc::c_int = -1;

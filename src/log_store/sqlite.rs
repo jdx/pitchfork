@@ -264,6 +264,7 @@ impl SqliteLogStore {
         daemon_id: &DaemonId,
         reason: &str,
     ) -> Result<()> {
+        use crate::inherited_fds::CloseInheritedFds;
         use crate::shell::{HideConsoleWindow, ShellScript};
         use std::process::{Command, Stdio};
 
@@ -290,6 +291,7 @@ impl SqliteLogStore {
                 .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
                 .env("PITCHFORK_ARCHIVE_REASON", reason)
                 .hide_console_window()
+                .close_inherited_fds()
                 .spawn()
                 .into_diagnostic()
                 .map_err(|e| miette::miette!("failed to spawn archive hook: {e}"))?;

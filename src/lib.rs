@@ -15,6 +15,7 @@ pub mod deps;
 pub mod env;
 pub mod error;
 pub mod extra_configs;
+pub mod inherited_fds;
 pub mod ipc;
 pub mod log_jq;
 pub mod log_parse;

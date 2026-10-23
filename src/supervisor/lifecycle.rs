@@ -9,6 +9,7 @@ use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::error::PortError;
+use crate::inherited_fds::CloseInheritedFds;
 use crate::ipc::IpcResponse;
 use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
@@ -188,7 +189,8 @@ pub(crate) fn spawn_cmd_probe(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
-        .hide_console_window();
+        .hide_console_window()
+        .close_inherited_fds();
     apply_runtime_env(&mut command, id, retry_count, daemon_env, resolved_ports);
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -1364,7 +1366,9 @@ impl Supervisor {
             Some(script) => cmd.shell_script(&program, &args, script),
             None => cmd.args(&args),
         };
-        cmd.current_dir(&opts.dir).hide_console_window();
+        cmd.current_dir(&opts.dir)
+            .hide_console_window()
+            .close_inherited_fds();
 
         #[cfg(unix)]
         if pty_pair.is_none() {
