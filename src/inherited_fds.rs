@@ -16,7 +16,7 @@
 //!   them open forever, so whoever waits for EOF on the pipe (bats, `$(...)`,
 //!   CI log capture) hangs even after the CLI has exited.
 //!
-//! [`CloseInheritedFds`] marks every descriptor above stderr close-on-exec in
+//! `CloseInheritedFds` marks every descriptor above stderr close-on-exec in
 //! the forked child, after stdio is set up and before exec, so the child
 //! starts with its stdio and nothing else, whatever other threads were doing
 //! at the time. It marks them rather than closing them outright so that std's
@@ -35,6 +35,8 @@
 /// On Unix this adds a `pre_exec` hook, so the command is spawned with
 /// fork/exec rather than `posix_spawn`.
 pub(crate) trait CloseInheritedFds {
+    /// Mark every descriptor above stderr close-on-exec in the child before
+    /// it execs. A no-op on Windows.
     fn close_inherited_fds(&mut self) -> &mut Self;
 }
 
@@ -97,6 +99,8 @@ struct InheritedFds {
 
 #[cfg(unix)]
 impl InheritedFds {
+    /// Size the listing buffer and the scan bound from the descriptors open
+    /// now. Runs in the parent, before the fork.
     fn new() -> Self {
         // SAFETY: sysconf has no preconditions.
         let open_max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
@@ -184,6 +188,8 @@ impl InheritedFds {
     }
 }
 
+/// Upper bound (exclusive) for [`cloexec_fd_scan`]: the fd limit `open_max`,
+/// capped, but always past the highest descriptor in `open_fds`.
 #[cfg(unix)]
 fn fd_scan_end(
     open_max: libc::c_long,
@@ -211,6 +217,7 @@ fn cloexec_fd_scan(scan_end: libc::c_int) {
     }
 }
 
+/// Set `FD_CLOEXEC` on `fd` if it is open and lacks it. Async-signal-safe.
 #[cfg(unix)]
 fn set_cloexec(fd: libc::c_int) {
     // SAFETY: fcntl on an arbitrary fd number is safe; unused numbers just
@@ -235,6 +242,7 @@ mod tests {
     /// one test inherits the descriptor of another and keeps it open.
     static INHERITABLE: Mutex<()> = Mutex::new(());
 
+    /// Lock [`INHERITABLE`], recovering it if an earlier test panicked.
     fn inheritable() -> MutexGuard<'static, ()> {
         INHERITABLE.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -247,6 +255,7 @@ mod tests {
         fds
     }
 
+    /// Close both ends of a pipe from [`inheritable_pipe`].
     fn close_pipe(fds: [libc::c_int; 2]) {
         unsafe {
             libc::close(fds[0]);
@@ -265,6 +274,8 @@ mod tests {
         cmd
     }
 
+    /// The scan must reach descriptors above a lowered fd limit, and stay
+    /// bounded when the limit is unlimited or huge.
     #[test]
     fn fd_scan_end_reaches_open_fds_above_the_fd_limit() {
         // A caller opened fd 900, then lowered RLIMIT_NOFILE to 256.
@@ -274,6 +285,8 @@ mod tests {
         assert_eq!(fd_scan_end(libc::c_long::MAX, []), 1 << 20);
     }
 
+    /// A std child spawned through `close_inherited_fds` does not see an
+    /// inheritable pipe that a plain spawn passes on.
     #[test]
     fn close_inherited_fds_hides_inherited_fds_from_children() {
         let _guard = inheritable();
