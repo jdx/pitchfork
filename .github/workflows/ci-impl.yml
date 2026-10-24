@@ -109,10 +109,11 @@ jobs:
         run: |
           aube install
           aube run build
-      - name: Run Rust tests
-        shell: bash
+      - name: Run Rust and native Windows tests
+        shell: pwsh
         run: |
           cargo build --all-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo nextest run --all-features
       # Not a duplicate of the Linux lint: `#[cfg]` decides whether code exists,
       # so an unused import or dead function can be real on Windows and absent
@@ -120,7 +121,7 @@ jobs:
       - name: Install Rust components
         run: rustup component add clippy
       - name: Run clippy
-        shell: bash
+        shell: pwsh
         run: cargo clippy --all-targets --all-features -- -D warnings
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

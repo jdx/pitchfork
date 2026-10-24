@@ -333,6 +333,7 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
     /// Unix user to run this daemon as.
+    /// On Windows, nonempty values prevent daemon startup with an error.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
@@ -344,7 +345,7 @@ struct PitchforkTomlDaemonRaw {
     /// Unix signal to send for graceful shutdown (default: SIGTERM)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub stop_signal: Option<StopConfig>,
-    /// Allocate a pseudo-terminal for the daemon process.
+    /// Allocate a pseudo-terminal on Unix. Windows rejects `true` at startup.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
     /// Maximum age of log entries to keep (e.g. "7d", "30d").
@@ -2500,6 +2501,7 @@ pub struct PitchforkTomlDaemon {
     #[schemars(skip)]
     pub deferred_template_context: Option<String>,
     /// Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.
+    /// On Windows, nonempty values prevent daemon startup with an error.
     pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
     /// The supervisor periodically monitors RSS and kills the process if it exceeds the limit.
@@ -2510,7 +2512,7 @@ pub struct PitchforkTomlDaemon {
     /// Stop signal and optional per-daemon timeout. Accepts a signal name string
     /// or `{ signal = "...", timeout = "..." }` object.
     pub stop_signal: Option<StopConfig>,
-    /// Allocate a pseudo-terminal for the daemon process.
+    /// Allocate a pseudo-terminal on Unix. Windows rejects `true` at startup.
     pub pty: Option<bool>,
     /// Maximum age of log entries to keep (e.g. "7d", "30d").
     /// Overrides the global `settings.logs.time_retention` when set.
