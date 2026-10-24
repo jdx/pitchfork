@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.32.3](https://github.com/jdx/pitchfork/compare/v2.32.2...v2.32.3) - 2026-10-24
+
+### Other
+
+- *(deps)* update rust crate usage_rs to v7.1.2 ([#1069](https://github.com/jdx/pitchfork/pull/1069))
+- *(deps)* update rust crate clx to v3.0.5 ([#1065](https://github.com/jdx/pitchfork/pull/1065))
+
 ## [2.32.2](https://github.com/jdx/pitchfork/compare/v2.32.1...v2.32.2) - 2026-10-22
 
 ### Fixed
