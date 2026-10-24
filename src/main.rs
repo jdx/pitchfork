@@ -15,6 +15,7 @@ mod deps;
 mod env;
 mod error;
 mod extra_configs;
+mod inherited_fds;
 mod ipc;
 mod log_jq;
 mod log_parse;
