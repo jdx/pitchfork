@@ -353,6 +353,13 @@ pub(crate) fn supervisor_identity_matches(
     }
 }
 
+/// Start the supervisor as a detached background process (`pitchfork
+/// supervisor run`). Returns once the process is spawned, not once it is
+/// ready.
+///
+/// On Unix its stderr is appended to the pitchfork log file, it leaves the
+/// caller's session, and it inherits none of the CLI's descriptors beyond
+/// stdio. On Windows it is created without inheriting any handles.
 pub fn start_in_background() -> Result<()> {
     debug!("starting supervisor in background");
     // Ensure the log directory exists so we can redirect stderr there.

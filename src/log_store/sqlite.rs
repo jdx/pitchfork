@@ -257,6 +257,13 @@ impl SqliteLogStore {
         })
     }
 
+    /// Pipe `entries` to the daemon's archive hook as JSON lines, in batches
+    /// of `batch_size`, one hook process per batch.
+    ///
+    /// `reason` (`"age"` or `"count"`) reaches the hook as
+    /// `PITCHFORK_ARCHIVE_REASON`. Returns an error if the shell cannot be
+    /// resolved, the hook cannot be spawned or written to, or it exits
+    /// non-zero; the caller then deletes none of `entries`.
     fn archive_entries(
         &self,
         entries: &[LogEntry],

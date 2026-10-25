@@ -42,6 +42,8 @@ pub(crate) trait CloseInheritedFds {
 
 #[cfg(unix)]
 impl CloseInheritedFds for std::process::Command {
+    /// Install a `pre_exec` hook that marks the child's inherited descriptors
+    /// close-on-exec, using a buffer and bound prepared here in the parent.
     fn close_inherited_fds(&mut self) -> &mut Self {
         use std::os::unix::process::CommandExt;
         let mut fds = InheritedFds::new();
@@ -58,6 +60,7 @@ impl CloseInheritedFds for std::process::Command {
 
 #[cfg(unix)]
 impl CloseInheritedFds for tokio::process::Command {
+    /// Install the same `pre_exec` hook as the `std::process::Command` impl.
     fn close_inherited_fds(&mut self) -> &mut Self {
         let mut fds = InheritedFds::new();
         // SAFETY: as for std::process::Command above.
@@ -72,6 +75,7 @@ impl CloseInheritedFds for tokio::process::Command {
 
 #[cfg(windows)]
 impl CloseInheritedFds for std::process::Command {
+    /// No-op: std creates its handles non-inheritable.
     fn close_inherited_fds(&mut self) -> &mut Self {
         self
     }
@@ -79,6 +83,7 @@ impl CloseInheritedFds for std::process::Command {
 
 #[cfg(windows)]
 impl CloseInheritedFds for tokio::process::Command {
+    /// No-op: std creates its handles non-inheritable.
     fn close_inherited_fds(&mut self) -> &mut Self {
         self
     }
