@@ -9,6 +9,7 @@ use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::error::PortError;
+use crate::inherited_fds::CloseInheritedFds;
 use crate::ipc::IpcResponse;
 use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
@@ -102,12 +103,10 @@ pub(crate) struct CmdProbe {
     pub(crate) result_rx: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
 }
 
-/// Spawn a readiness command probe and return a handle that can be used to wait
-/// for the exit status or cancel the probe.
-///
-/// The probe is started with `kill_on_drop(true)` as a cancellation fallback. The
-/// spawned task waits for the process to exit; if cancellation is requested, it
-/// kills the child and waits for it to reap before reporting the result.
+/// Set the environment pitchfork gives a daemon and its `ready_cmd` probe:
+/// the original `PATH`, the daemon's own `env`, `PITCHFORK_DAEMON_ID`,
+/// `PITCHFORK_DAEMON_NAMESPACE`, `PITCHFORK_RETRY_COUNT`, and `PORT` /
+/// `PORT0..N` for its resolved ports.
 fn apply_runtime_env(
     command: &mut tokio::process::Command,
     id: &DaemonId,
@@ -145,6 +144,12 @@ fn closed_cmd_probe() -> CmdProbe {
     }
 }
 
+/// Spawn a readiness command probe and return a handle that can be used to wait
+/// for the exit status or cancel the probe.
+///
+/// The probe is started with `kill_on_drop(true)` as a cancellation fallback. The
+/// spawned task waits for the process to exit; if cancellation is requested, it
+/// kills the child and waits for it to reap before reporting the result.
 pub(crate) fn spawn_cmd_probe(
     id: &DaemonId,
     cmd: &RunCommand,
@@ -188,7 +193,8 @@ pub(crate) fn spawn_cmd_probe(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
-        .hide_console_window();
+        .hide_console_window()
+        .close_inherited_fds();
     apply_runtime_env(&mut command, id, retry_count, daemon_env, resolved_ports);
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -1364,7 +1370,9 @@ impl Supervisor {
             Some(script) => cmd.shell_script(&program, &args, script),
             None => cmd.args(&args),
         };
-        cmd.current_dir(&opts.dir).hide_console_window();
+        cmd.current_dir(&opts.dir)
+            .hide_console_window()
+            .close_inherited_fds();
 
         #[cfg(unix)]
         if pty_pair.is_none() {
