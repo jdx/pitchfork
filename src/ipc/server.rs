@@ -3,12 +3,12 @@ use crate::env;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize, socket_display};
 use crate::settings::settings;
 use interprocess::local_socket::ListenerOptions;
-use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
+use interprocess::local_socket::tokio::Stream as IpcStream;
 use interprocess::local_socket::traits::tokio::Listener;
-use interprocess::local_socket::traits::tokio::Stream;
 use miette::{IntoDiagnostic, bail, miette};
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{ReadHalf as RecvHalf, WriteHalf as SendHalf};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
 
@@ -176,7 +176,7 @@ impl IpcServer {
                         match result {
                             Ok(stream) => {
                                 trace!("Client accepted");
-                                let (recv, send) = stream.split();
+                                let (recv, send) = tokio::io::split(stream);
                                 let mut incoming_chan = Self::read_messages_chan(recv);
                                 let outgoing_chan = Self::send_messages_chan(send);
                                 let tx = tx.clone();
@@ -214,7 +214,7 @@ impl IpcServer {
         Ok((server, handle))
     }
 
-    async fn send(send: &mut SendHalf, msg: IpcResponse) -> Result<()> {
+    async fn send(send: &mut SendHalf<IpcStream>, msg: IpcResponse) -> Result<()> {
         let mut msg = serialize(&msg)?;
         if msg.contains(&0) {
             bail!("IPC message contains null byte");
@@ -225,7 +225,9 @@ impl IpcServer {
     }
 
     /// Read raw bytes from socket until null terminator (without deserializing)
-    async fn read_raw_message(recv: &mut BufReader<RecvHalf>) -> Result<Option<Vec<u8>>> {
+    async fn read_raw_message(
+        recv: &mut BufReader<RecvHalf<IpcStream>>,
+    ) -> Result<Option<Vec<u8>>> {
         let mut bytes = Vec::new();
         recv.read_until(0, &mut bytes).await.into_diagnostic()?;
         if bytes.is_empty() {
@@ -234,7 +236,7 @@ impl IpcServer {
         Ok(Some(bytes))
     }
 
-    fn read_messages_chan(recv: RecvHalf) -> Receiver<IpcRequest> {
+    fn read_messages_chan(recv: RecvHalf<IpcStream>) -> Receiver<IpcRequest> {
         let mut recv = BufReader::new(recv);
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
@@ -318,7 +320,7 @@ impl IpcServer {
         rx
     }
 
-    fn send_messages_chan(mut send: SendHalf) -> Sender<IpcResponse> {
+    fn send_messages_chan(mut send: SendHalf<IpcStream>) -> Sender<IpcResponse> {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
             loop {
