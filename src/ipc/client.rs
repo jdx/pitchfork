@@ -6,12 +6,13 @@ use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
 use crate::settings::settings;
 use crate::{Result, supervisor};
 use exponential_backoff::Backoff;
-use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
+use interprocess::local_socket::tokio::Stream as IpcStream;
 use interprocess::local_socket::traits::tokio::Stream;
 use miette::Context;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{ReadHalf as RecvHalf, WriteHalf as SendHalf};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -34,8 +35,8 @@ fn version_mismatch_already_warned(supervisor_version: &str) -> bool {
 
 pub struct IpcClient {
     _id: String,
-    recv: Mutex<BufReader<RecvHalf>>,
-    send: Mutex<SendHalf>,
+    recv: Mutex<BufReader<RecvHalf<IpcStream>>>,
+    send: Mutex<SendHalf<IpcStream>>,
     /// Held across a full request/response exchange. The wire protocol has no
     /// request IDs, so responses are attributed purely by read order — if two
     /// tasks interleave request/read on the same connection, each can consume
@@ -124,7 +125,9 @@ impl IpcClient {
     /// Open a raw socket stream to the supervisor with connect retry/backoff.
     /// Used both for the initial connection and to re-establish a connection
     /// whose framing was lost after a failed exchange (see `desynced`).
-    async fn open_stream(name: &str) -> Result<(BufReader<RecvHalf>, SendHalf)> {
+    async fn open_stream(
+        name: &str,
+    ) -> Result<(BufReader<RecvHalf<IpcStream>>, SendHalf<IpcStream>)> {
         let s = settings();
         let connection_help = || {
             if s.supervisor.auto_start {
@@ -169,7 +172,7 @@ impl IpcClient {
             for duration in Backoff::new(connect_attempts, connect_min_delay, connect_max_delay) {
                 match interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await {
                     Ok(conn) => {
-                        let (recv, send) = conn.split();
+                        let (recv, send) = tokio::io::split(conn);
                         return Ok((BufReader::new(recv), send));
                     }
                     Err(err) => {
