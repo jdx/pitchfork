@@ -111,7 +111,7 @@ globset = "0.4"
 humanbyte = { version = "0.4", features = ["serde", "derive", "schemars"] }
 humantime = "2"
 listeners = "0.6"
-lru = "0.18"
+lru = "0.19"
 derive_more = { version = "2", features = ["into", "display", "from", "deref", "as_ref"] }
 vte = { version = "0.15", default-features = false }
 demand = "2"
