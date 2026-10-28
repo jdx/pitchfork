@@ -643,7 +643,7 @@
           "minimum": 1
         },
         "pty": {
-          "description": "Allocate a pseudo-terminal for the daemon process.",
+          "description": "Allocate a pseudo-terminal on Unix. Windows rejects `true` at startup.",
           "type": [
             "boolean",
             "null"
@@ -733,7 +733,7 @@
           ]
         },
         "user": {
-          "description": "Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.",
+          "description": "Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.\nOn Windows, nonempty values prevent daemon startup with an error.",
           "type": [
             "string",
             "null"

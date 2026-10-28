@@ -125,6 +125,7 @@ nix = { version = "0.31", features = ["signal", "process", "user", "net", "ioctl
 plist = "1"
 
 [target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Globalization",
@@ -132,6 +133,12 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Console",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Security_Authorization",
+  "Win32_System_Registry",
 ] }
 
 [dev-dependencies]

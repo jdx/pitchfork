@@ -16,7 +16,7 @@ use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, RunCommand};
 use crate::procs::PROCS;
 use crate::settings::{resolve_shell, settings};
-use crate::shell::{HideConsoleWindow, Shell, ShellScript, powershell_script};
+use crate::shell::{HideConsoleWindow, Shell, ShellScript, mise_shell_words};
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -346,11 +346,26 @@ fn invalid_argv_program(id: &DaemonId, argv: &[String]) -> Option<String> {
     }
 }
 
-/// Program and arguments to spawn for `words` — the daemon's program followed
-/// by its arguments — run through `mise x` when `mise_bin` is given.
-///
-/// Each word stays one argument: mise hands everything after `--` to the
-/// program as it received it.
+#[cfg(any(windows, test))]
+fn unsupported_windows_options(opts: &RunOptions, supervisor_user: &str) -> Option<String> {
+    if opts.pty == Some(true) {
+        return Some(format!(
+            "daemon {}: pty = true is not supported on Windows; remove pty or set it to false",
+            opts.id
+        ));
+    }
+    let configured_user = opts.user.as_deref().unwrap_or_default().trim();
+    if !configured_user.is_empty() || !supervisor_user.trim().is_empty() {
+        return Some(format!(
+            "daemon {}: user switching is not supported on Windows; remove the daemon's user and settings.supervisor.user, or set them to empty strings",
+            opts.id
+        ));
+    }
+    None
+}
+
+/// Program and arguments to spawn for `words`, run through `mise x` when given.
+/// Each word stays one argument, including a script carried by shell-exec.
 fn launch_command(words: Vec<String>, mise_bin: Option<&std::path::Path>) -> (String, Vec<String>) {
     match mise_bin {
         Some(mise_bin) => {
@@ -586,6 +601,32 @@ impl Supervisor {
         self.run_inner(opts, Some(approved_at), restart_mark).await
     }
 
+    /// Reject unsupported options while the caller holds the daemon's stop lock.
+    #[cfg(windows)]
+    async fn reject_unsupported_windows_options(
+        &self,
+        opts: &RunOptions,
+    ) -> Result<Option<IpcResponse>> {
+        let Some(error) = unsupported_windows_options(opts, &settings().supervisor.user) else {
+            return Ok(None);
+        };
+        // A rejected replacement must leave the running instance alone. A
+        // rejected retry has no process and must become terminal, or the
+        // background checker will keep retrying its old errored record.
+        if self
+            .get_daemon(&opts.id)
+            .await
+            .is_none_or(|d| d.pid.is_none())
+        {
+            self.upsert_daemon(
+                UpsertDaemonOpts::from_run_options(opts, DaemonStatus::Failed(error.clone()))
+                    .build(),
+            )
+            .await?;
+        }
+        Ok(Some(IpcResponse::DaemonFailed { error }))
+    }
+
     /// `restart_mark` is set to the stop epoch a forced start's own stop of
     /// the running instance left, if it made one (see
     /// [`Self::settle_restarting`]).
@@ -664,19 +705,6 @@ impl Supervisor {
                     Some(guard) => guard,
                     None => self.stop_lock(id).await.lock_owned().await,
                 });
-                // Ownership has to be re-checked on every attempt, not just
-                // the first. The backoff leaves the daemon errored with no PID,
-                // which is exactly what `check_retry` looks for, so the
-                // background checker can start the next attempt during the
-                // sleep. Spawning another process here would replace that
-                // attempt's monitor registration and leave its process running
-                // unmonitored.
-                if let Some(response) = self
-                    .claim_or_defer(&retry_opts, &mut guard, restart_mark)
-                    .await?
-                {
-                    return Ok(response);
-                }
                 // The background retry checker may have run this attempt for
                 // us and seen it succeed while we slept. Starting again would
                 // repeat a task that has already done its work — for a
@@ -713,6 +741,17 @@ impl Supervisor {
                     return Ok(IpcResponse::DaemonFailed {
                         error: "stopped while retrying".to_string(),
                     });
+                }
+                // Ownership has to be re-checked on every attempt, not just
+                // the first. Another start can claim the daemon during the
+                // backoff, when this attempt no longer holds its stop lock.
+                // Spawning another process here would replace that attempt's
+                // monitor registration and leave its process unmonitored.
+                if let Some(response) = self
+                    .claim_or_defer(&retry_opts, &mut guard, restart_mark)
+                    .await?
+                {
+                    return Ok(response);
                 }
                 let Some(guard) = guard else {
                     // Only the deferring paths take the guard, and each of
@@ -822,9 +861,13 @@ impl Supervisor {
     /// Decide whether this start may take the daemon's record, or must stand
     /// down because a live run already owns it.
     ///
-    /// Returns `Some(response)` when the caller must report that run's outcome
-    /// instead of spawning a second process, and `None` when the record is free
-    /// (including after a forced stop of the previous instance).
+    /// Returns `Some(response)` when the start is rejected or must report an
+    /// existing run's outcome, and `None` when the record is free (including
+    /// after a forced stop of the previous instance).
+    ///
+    /// The caller must hold the daemon's stop lock. Unsupported Windows options
+    /// are rejected before a forced claim can stop an existing instance, even
+    /// when settings changed during a foreground retry's backoff.
     ///
     /// `stop_guard` is released before an in-flight oneshot is awaited: that
     /// wait lasts as long as the task does, and holding the lock would block a
@@ -836,6 +879,10 @@ impl Supervisor {
         restart_mark: &mut Option<u64>,
     ) -> Result<Option<IpcResponse>> {
         let id = &opts.id;
+        #[cfg(windows)]
+        if let Some(response) = self.reject_unsupported_windows_options(opts).await? {
+            return Ok(Some(response));
+        }
         let Some(daemon) = self.get_daemon(id).await else {
             return Ok(None);
         };
@@ -1053,6 +1100,11 @@ impl Supervisor {
                 error: "the supervisor is shutting down".to_string(),
             });
         }
+        // Settings can change while a foreground start waits between retries.
+        #[cfg(windows)]
+        if let Some(response) = self.reject_unsupported_windows_options(&opts).await? {
+            return Ok(response);
+        }
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
         // Create channel for readiness notification if wait_ready is true
@@ -1223,9 +1275,9 @@ impl Supervisor {
             });
         }
         // Started directly, the shell gets its script from `shell_script`.
-        // Under mise it goes in as an ordinary argument: mise starts the shell
-        // itself, re-quoting each argument, so the raw command line cmd.exe
-        // needs for a script with `"` cannot reach it that way.
+        // Under mise, cmd scripts go through a bridge that restores the raw
+        // command line after mise has activated the environment. Deferred
+        // templates keep cmd as the outer program so mise uses cmd quoting.
         let script = match &mise_bin {
             Some(mise_bin) => {
                 info!(
@@ -1233,13 +1285,8 @@ impl Supervisor {
                     mise_bin.display()
                 );
                 if let Some(script) = script {
-                    let script = match words.split_first() {
-                        Some((program, options)) => {
-                            powershell_script(program, options, &script).into_owned()
-                        }
-                        None => script,
-                    };
-                    words.push(script);
+                    words =
+                        mise_shell_words(words, script, opts.deferred_template_context.is_some());
                 }
                 None
             }
@@ -4360,6 +4407,34 @@ mod launch_command_tests {
     }
 
     #[test]
+    fn windows_rejects_only_enabled_unsupported_options() {
+        let mut opts = crate::daemon::RunOptions::default();
+        assert_eq!(super::unsupported_windows_options(&opts, ""), None);
+        opts.pty = Some(false);
+        opts.user = Some(" \t".into());
+        assert_eq!(super::unsupported_windows_options(&opts, " \t"), None);
+        opts.pty = Some(true);
+        assert!(
+            super::unsupported_windows_options(&opts, "")
+                .unwrap()
+                .contains("pty = true")
+        );
+        opts.pty = Some(false);
+        opts.user = Some("postgres".into());
+        assert!(
+            super::unsupported_windows_options(&opts, "")
+                .unwrap()
+                .contains("user switching")
+        );
+        opts.user = None;
+        assert!(
+            super::unsupported_windows_options(&opts, "postgres")
+                .unwrap()
+                .contains("settings.supervisor.user")
+        );
+    }
+
+    #[test]
     fn starts_the_first_word_with_the_rest_as_arguments() {
         let argv = words(&["node", "my server.js", "--name=\"a b\"", "&", "%PATH%"]);
         assert_eq!(
@@ -4381,6 +4456,188 @@ mod launch_command_tests {
             args,
             words(&["x", "--", "node", "my server.js", "'single'"])
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_retry_tests {
+    use super::*;
+    use crate::config_types::{Dir, Retry};
+    use crate::settings::reload_settings;
+    use std::process::Stdio;
+    use tokio::io::AsyncBufReadExt;
+
+    #[tokio::test]
+    async fn forced_retry_claim_revalidates_settings_before_stopping_a_live_instance() {
+        const CHILD_ENV: &str = "PITCHFORK_TEST_WINDOWS_RETRY_CLAIM";
+        const CHILD_SENTINEL: &str = "windows-retry-claim-child-ran";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // Settings and supervisor state are process globals. Give their
+            // reload and persistence private directories in an isolated test.
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir(temp.path().join("config")).unwrap();
+            std::fs::write(
+                temp.path().join("pitchfork.toml"),
+                "[settings.supervisor]\nuser = ''\n",
+            )
+            .unwrap();
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            for (name, _) in std::env::vars_os() {
+                if name
+                    .to_string_lossy()
+                    .to_ascii_uppercase()
+                    .starts_with("PITCHFORK_")
+                {
+                    command.env_remove(name);
+                }
+            }
+            command
+                .args([
+                    "--exact",
+                    "supervisor::lifecycle::windows_retry_tests::forced_retry_claim_revalidates_settings_before_stopping_a_live_instance",
+                    "--nocapture",
+                ])
+                .current_dir(temp.path())
+                .env(CHILD_ENV, "1")
+                .env("PITCHFORK_CONFIG_DIR", temp.path().join("config"))
+                .env("PITCHFORK_STATE_DIR", temp.path().join("state"))
+                .env("PITCHFORK_LOGS_DIR", temp.path().join("logs"))
+                .env("PITCHFORK_BOOT_EXECUTABLE", temp.path().join("missing.exe"))
+                .hide_console_window()
+                .kill_on_drop(true);
+            let output = time::timeout(Duration::from_secs(30), command.output())
+                .await
+                .expect("isolated retry claim test timed out")
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated retry claim test failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stderr).contains(CHILD_SENTINEL));
+            return;
+        }
+        eprintln!("{CHILD_SENTINEL}");
+
+        let mut opts = RunOptions {
+            id: DaemonId::new("windows-retry", "live"),
+            force: true,
+            wait_ready: true,
+            retry: Retry(2),
+            dir: Dir(env::CWD.clone()),
+            ..RunOptions::default()
+        };
+        let mut restart_mark = None;
+        let mut guard = Some(SUPERVISOR.stop_lock(&opts.id).await.lock_owned().await);
+        assert!(
+            SUPERVISOR
+                .claim_or_defer(&opts, &mut guard, &mut restart_mark)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        drop(guard.take());
+        let retrying_claim = SUPERVISOR.mark_retrying(&opts.id);
+
+        // Model another start taking the record during the foreground retry's
+        // backoff. Keep its process handle open to pin the PID. On a panic,
+        // kill_on_drop terminates it; if the isolated test itself is killed,
+        // closing its stdin also releases the waiting PowerShell process.
+        let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let mut child = tokio::process::Command::new(powershell)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::Out.WriteLine('READY'); [Console]::In.ReadToEnd() | Out-Null",
+            ])
+            .current_dir(std::env::var_os("SystemRoot").unwrap())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .hide_console_window()
+            .spawn()
+            .unwrap();
+        let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        stdout.read_line(&mut ready).await.unwrap();
+        assert_eq!(ready.trim_end(), "READY");
+        let pid = child.id().unwrap();
+        PROCS.refresh_pids(&[pid]);
+        assert!(PROCS.is_running(pid));
+        assert!(child.try_wait().unwrap().is_none());
+        guard = Some(SUPERVISOR.stop_lock(&opts.id).await.lock_owned().await);
+        let running = SUPERVISOR
+            .upsert_daemon(
+                UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
+                    .set(|o| o.pid = Some(pid))
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert!(running.start_time.is_some());
+        assert_eq!(running.start_time, PROCS.start_time(pid));
+        let stop_epoch = SUPERVISOR.stop_epoch(&opts.id);
+
+        std::fs::write(
+            env::CWD.join("pitchfork.toml"),
+            "[settings.supervisor]\nuser = 'unsupported-account'\n",
+        )
+        .unwrap();
+        reload_settings();
+        assert_eq!(settings().supervisor.user, "unsupported-account");
+        opts.retry_count = 1;
+        let response = SUPERVISOR
+            .claim_or_defer(&opts, &mut guard, &mut restart_mark)
+            .await
+            .unwrap();
+
+        // Check the destructive boundary's effects, not just its diagnostic.
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the live instance was stopped"
+        );
+        let preserved = SUPERVISOR.get_daemon(&opts.id).await.unwrap();
+        assert_eq!(preserved.pid, Some(pid));
+        assert!(preserved.status.is_running());
+        assert_eq!(
+            serde_json::to_value(&preserved).unwrap(),
+            serde_json::to_value(&running).unwrap()
+        );
+        assert_eq!(SUPERVISOR.stop_epoch(&opts.id), stop_epoch);
+        assert!(!retrying_claim.is_cancelled());
+        assert!(restart_mark.is_none());
+        assert!(matches!(response, Some(IpcResponse::DaemonFailed { .. })));
+        drop(guard.take());
+        child.kill().await.unwrap();
+        child.wait().await.unwrap();
+
+        // The same rejection must settle a retry without a process, so the
+        // background checker cannot keep picking up its old errored record.
+        opts.id = DaemonId::new("windows-retry", "pidless");
+        guard = Some(SUPERVISOR.stop_lock(&opts.id).await.lock_owned().await);
+        SUPERVISOR
+            .upsert_daemon(
+                UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Errored(7)).build(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            SUPERVISOR
+                .claim_or_defer(&opts, &mut guard, &mut restart_mark)
+                .await
+                .unwrap(),
+            Some(IpcResponse::DaemonFailed { .. })
+        ));
+        let failed = SUPERVISOR.get_daemon(&opts.id).await.unwrap();
+        assert!(failed.status.is_failed());
+        assert!(failed.pid.is_none());
+        assert_eq!(failed.retry_count, 1);
+        assert_eq!(failed.retry, Retry(2));
     }
 }
 

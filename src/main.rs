@@ -44,6 +44,11 @@ use tokio::signal::unix::SignalKind;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // The shell bridge inherits daemon output. Loading normal CLI settings
+    // here would send Pitchfork's warnings into readiness checks and hooks.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("shell-exec")) {
+        return cli::run().await;
+    }
     // Install ring as the default rustls crypto provider.
     // Required because reqwest is built with `rustls-tls-*-no-provider`, which
     // avoids pulling in aws-lc-sys but requires the caller to install a provider.

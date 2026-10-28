@@ -6,16 +6,17 @@
 
 Enable or disable boot start
 
-Manages whether pitchfork supervisor starts automatically when the system
-boots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).
+Manages whether pitchfork supervisor starts automatically at system boot on
+macOS and Linux or at login on Windows. Uses launchd on macOS, systemd on
+Linux, and a registry startup entry on Windows.
 
-When run as root (or via sudo), registers a system-level entry that starts
-pitchfork for all users:
+On macOS and Linux, running as root (or via sudo) registers a system-level
+entry that starts pitchfork for all users:
 
     macOS: /Library/LaunchDaemons/pitchfork.plist
     Linux: /etc/systemd/system/pitchfork.service
 
-When run as a normal user, registers a user-level entry:
+On macOS and Linux, running as a normal user registers a user-level entry:
 
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
@@ -30,6 +31,11 @@ root login shell records no user and runs entirely as root.
 
 Running `enable` again rewrites an existing entry, for example to record the
 invoking user in an entry created by an older version.
+
+On Windows, new entries use HKLM when permitted and otherwise HKCU. Updates
+keep an existing entry in its original registry root, including executable
+paths with spaces and Unicode. Automatic path repair preserves Task Manager
+approval; explicitly enable boot start to re-enable a disabled entry.
 
 Subcommands:
 

@@ -90,6 +90,10 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
 // left unclassified lives next to the decision rather than in a commit message.
 #[cfg(test)]
 pub const UNCLASSIFIED: &[(&str, &str)] = &[
+    (
+        "shell-exec",
+        "runs a daemon's shell script after mise activation",
+    ),
     ("mcp", "serves tools that start and stop daemons on request"),
     ("restart", "stops then reruns a user-configured daemon"),
     ("run", "runs a one-off command as a daemon"),

@@ -93,6 +93,10 @@ as JSON, which mise reads and removes before running the command.
 Only a mise release that reads `PITCHFORK_TEMPLATE_CONTEXT` (jdx/mise#13894) renders a
 deferred command. With an older mise the command reaches the shell with its template
 tags unrendered, so update mise before relying on this.
+
+On Windows with `cmd /C`, deferred commands require mise 2026.10.10 or later
+to render the `quote` filter for cmd and preserve the resulting script.
+Ordinary commands do not have this additional version requirement.
 :::
 
 Deferral applies only when `mise x` will actually wrap the daemon: `mise = true` on the
