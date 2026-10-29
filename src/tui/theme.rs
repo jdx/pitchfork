@@ -76,6 +76,7 @@ impl Theme {
 
     fn catppuccin(p: &Palette) -> Self {
         let bg = |c: u32| Style::new().bg(hex(c));
+        let panel = Style::new().fg(hex(p.text)).bg(hex(p.base));
         Self {
             fg: hex(p.text),
             muted: hex(p.subtext),
@@ -86,13 +87,13 @@ impl Theme {
             yellow: hex(p.yellow),
             cyan: hex(p.sky),
             dim_green: hex(p.teal),
-            background: bg(p.base),
+            background: panel,
             selection: bg(p.surface_alt),
             marked: bg(p.surface),
             match_current: bg(p.yellow_dim),
             match_other: bg(p.surface),
-            overlay: bg(p.base),
-            danger: bg(p.base),
+            overlay: panel,
+            danger: panel,
         }
     }
 
@@ -134,6 +135,19 @@ impl Theme {
             overlay => overlay_bg,
             danger => danger_bg
         );
+        // Cells are merged onto the buffer and `Clear` wipes it, so every
+        // full-area style must carry the foreground itself.
+        if def.bg.is_some() {
+            if def.overlay_bg.is_none() {
+                self.overlay = self.background;
+            }
+            if def.danger_bg.is_none() {
+                self.danger = self.background;
+            }
+        }
+        for panel in [&mut self.background, &mut self.overlay, &mut self.danger] {
+            *panel = panel.fg(self.fg);
+        }
         Ok(self)
     }
 }
@@ -210,7 +224,12 @@ fn resolve_inner<'a>(
     seen.push(name);
     // A custom theme shadows a built-in one of the same name.
     if let Some(def) = custom.get(name) {
-        let base = resolve_inner(def.base.as_deref().unwrap_or(AUTO), custom, seen)?;
+        let base = match def.base.as_deref() {
+            Some(base) => resolve_inner(base, custom, seen)?,
+            // `[themes.auto]` customizes the built-in `auto`, not itself.
+            None if name == AUTO => Theme::auto(),
+            None => resolve_inner(AUTO, custom, seen)?,
+        };
         return base.apply(name, def);
     }
     if name == AUTO {
@@ -416,6 +435,26 @@ mod tests {
         );
         let t = resolve("b", &c).unwrap();
         assert_eq!((t.red, t.green), (Color::Blue, Color::Magenta));
+    }
+
+    #[test]
+    fn a_custom_auto_without_base_customizes_the_builtin() {
+        let c = custom(r#"auto = { red = "magenta" }"#);
+        let t = resolve(AUTO, &c).unwrap();
+        assert_eq!((t.red, t.green), (Color::Magenta, Color::Green));
+    }
+
+    #[test]
+    fn full_area_styles_carry_the_foreground() {
+        let t = resolve("catppuccin_latte", &IndexMap::new()).unwrap();
+        for s in [t.background, t.overlay, t.danger] {
+            assert_eq!(s.fg, Some(t.fg));
+        }
+        let c = custom(r##"mine = { fg = "#111111", bg = "#eeeeee" }"##);
+        let t = resolve("mine", &c).unwrap();
+        for s in [t.background, t.overlay, t.danger] {
+            assert_eq!((s.fg, s.bg), (Some(t.fg), t.background.bg));
+        }
     }
 
     #[test]
