@@ -49,7 +49,11 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Terminal palette only: adapts to light and dark terminals.
+    /// The default theme: no RGB, no whole-screen background, so every color
+    /// is the terminal's own and follows its light or dark theme.
+    ///
+    /// The cursor row is bold and underlined rather than colored: no ANSI
+    /// color is guaranteed to contrast with the text under every terminal theme.
     pub fn auto() -> Self {
         Self {
             fg: Color::Reset,
@@ -74,6 +78,8 @@ impl Theme {
         }
     }
 
+    /// Theme of one Catppuccin flavor. It paints its own background and text
+    /// color, so it reads the same whatever the terminal's background is.
     fn catppuccin(p: &Palette) -> Self {
         let bg = |c: u32| Style::new().bg(hex(c));
         let panel = Style::new().fg(hex(p.text)).bg(hex(p.base));
@@ -97,7 +103,12 @@ impl Theme {
         }
     }
 
-    /// Per-role colors of `def` replace the ones of `self`.
+    /// Replaces the roles `def` sets, keeping the others.
+    ///
+    /// Fails on a color that does not parse, naming `name` and the key. The
+    /// full-area styles (`background`, `overlay`, `danger`) always end up with
+    /// the final `fg`, and a `bg` without `overlay_bg` / `danger_bg` also
+    /// colors the overlays.
     fn apply(mut self, name: &str, def: &ThemeDef) -> miette::Result<Self> {
         let color = |key: &str, v: &Option<String>| -> miette::Result<Option<Color>> {
             v.as_deref()
@@ -209,10 +220,16 @@ pub struct ThemeDef {
 }
 
 /// Resolves `name` against the built-in themes and the user's `themes`.
+///
+/// A custom theme shadows a built-in one of the same name, and a custom
+/// `auto` without `base` customizes the built-in `auto`. Fails, listing the
+/// available names, if `name` is unknown; also fails on a `base` cycle or an
+/// invalid color.
 pub fn resolve(name: &str, custom: &IndexMap<String, ThemeDef>) -> miette::Result<Theme> {
     resolve_inner(name, custom, &mut Vec::new())
 }
 
+/// `seen` is the chain of themes being resolved, to detect `base` cycles.
 fn resolve_inner<'a>(
     name: &'a str,
     custom: &'a IndexMap<String, ThemeDef>,
@@ -268,6 +285,10 @@ pub fn pick_name<'a>(
 }
 
 /// Whether the terminal has a dark background, `None` if it does not say.
+///
+/// Asks the terminal (OSC 11) and waits for its answer, up to one second when
+/// it stays silent, so only call it when the answer is needed. It handles the
+/// terminal mode itself: call it before entering raw mode.
 pub fn terminal_is_dark() -> Option<bool> {
     use terminal_colorsaurus::{QueryOptions, ThemeMode, theme_mode};
     match theme_mode(QueryOptions::default()) {
@@ -280,6 +301,9 @@ pub fn terminal_is_dark() -> Option<bool> {
 static THEME: OnceLock<Theme> = OnceLock::new();
 
 /// Installs the theme for this process. Later calls are ignored.
+///
+/// Call it before the first frame is drawn: [`theme`] falls back to `auto` and
+/// keeps it if it runs first.
 pub fn init(theme: Theme) {
     let _ = THEME.set(theme);
 }
@@ -289,6 +313,7 @@ pub fn theme() -> &'static Theme {
     THEME.get_or_init(Theme::auto)
 }
 
+/// `0xRRGGBB` to a color.
 fn hex(c: u32) -> Color {
     Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
