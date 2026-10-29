@@ -107,8 +107,9 @@ impl Theme {
     ///
     /// Fails on a color that does not parse, naming `name` and the key. The
     /// full-area styles (`background`, `overlay`, `danger`) always end up with
-    /// the final `fg`, and a `bg` without `overlay_bg` / `danger_bg` also
-    /// colors the overlays.
+    /// the final `fg`. A new `bg` also colors the overlays that were following
+    /// the screen background (same `bg` in `self`), unless `def` sets them;
+    /// overlays that `self` colored differently keep their own color.
     fn apply(mut self, name: &str, def: &ThemeDef) -> miette::Result<Self> {
         let color = |key: &str, v: &Option<String>| -> miette::Result<Option<Color>> {
             v.as_deref()
@@ -122,6 +123,8 @@ impl Theme {
                 })
                 .transpose()
         };
+        let overlay_follows_bg = self.overlay.bg == self.background.bg;
+        let danger_follows_bg = self.danger.bg == self.background.bg;
         macro_rules! fg {
             ($($f:ident),*) => {$(
                 if let Some(c) = color(stringify!($f), &def.$f)? { self.$f = c; }
@@ -149,10 +152,10 @@ impl Theme {
         // Cells are merged onto the buffer and `Clear` wipes it, so every
         // full-area style must carry the foreground itself.
         if def.bg.is_some() {
-            if def.overlay_bg.is_none() {
+            if overlay_follows_bg && def.overlay_bg.is_none() {
                 self.overlay = self.background;
             }
-            if def.danger_bg.is_none() {
+            if danger_follows_bg && def.danger_bg.is_none() {
                 self.danger = self.background;
             }
         }
@@ -480,6 +483,21 @@ mod tests {
         for s in [t.background, t.overlay, t.danger] {
             assert_eq!((s.fg, s.bg), (Some(t.fg), t.background.bg));
         }
+    }
+
+    #[test]
+    fn a_new_bg_keeps_the_dialog_colors_the_base_chose_apart_from_it() {
+        let c = custom(
+            r##"
+            a = { bg = "#101010", overlay_bg = "#202020" }
+            b = { base = "a", bg = "#303030" }
+            "##,
+        );
+        let t = resolve("b", &c).unwrap();
+        assert_eq!(t.background.bg, Some(Color::Rgb(0x30, 0x30, 0x30)));
+        assert_eq!(t.overlay.bg, Some(Color::Rgb(0x20, 0x20, 0x20)));
+        // The confirmation overlay was following the screen, so it still does.
+        assert_eq!(t.danger.bg, t.background.bg);
     }
 
     #[test]
