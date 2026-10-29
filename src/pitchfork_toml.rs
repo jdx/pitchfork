@@ -4,6 +4,7 @@ use crate::error::{ConfigParseError, DependencyError, FileError, find_similar_da
 use crate::settings::SettingsPartial;
 use crate::settings::settings;
 use crate::state_file::StateFile;
+use crate::tui::theme::ThemeDef;
 use crate::{Result, env};
 use indexmap::IndexMap;
 use miette::Context;
@@ -227,6 +228,9 @@ struct PitchforkTomlRaw {
     /// Maps namespace names to their project directory.
     #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
     pub namespaces: IndexMap<String, NamespaceEntryRaw>,
+    /// Custom TUI themes.
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub themes: IndexMap<String, ThemeDef>,
 }
 
 /// Per-daemon log configuration sub-table `[daemons.<name>.logs]`.
@@ -413,6 +417,19 @@ pub struct PitchforkToml {
     /// Maps namespace names to their project directory.
     #[schemars(default, with = "IndexMap<String, NamespaceEntryRaw>")]
     pub namespaces: IndexMap<String, NamespaceEntry>,
+    /// Custom TUI themes, selected with `settings.tui.theme`
+    /// (or `light_theme` / `dark_theme`).
+    ///
+    /// Each theme lists only the colors it changes from its `base`
+    /// (`auto` by default, which follows the terminal's own palette).
+    ///
+    /// ```toml
+    /// [themes.mine]
+    /// base = "catppuccin_latte"
+    /// selection_bg = "#ddd6fe"
+    /// ```
+    #[serde(default)]
+    pub themes: IndexMap<String, ThemeDef>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
     /// Top-level `[env]` of the registered project each daemon merged in from
@@ -1388,6 +1405,7 @@ impl PitchforkToml {
             slugs: IndexMap::new(),
             groups: IndexMap::new(),
             namespaces: IndexMap::new(),
+            themes: IndexMap::new(),
             path: Some(path),
             foreign_env: IndexMap::new(),
         }
@@ -1753,6 +1771,8 @@ impl PitchforkToml {
             );
         }
 
+        pt.themes = raw_config.themes;
+
         Ok(pt)
     }
 
@@ -1804,6 +1824,7 @@ impl PitchforkToml {
                 worktree_label: self.worktree_label.clone(),
                 env: self.env.clone(),
                 settings: (!self.settings.is_empty()).then(|| self.settings.clone()),
+                themes: self.themes.clone(),
                 ..PitchforkTomlRaw::default()
             };
             for (id, daemon) in &self.daemons {
@@ -1975,6 +1996,10 @@ impl PitchforkToml {
         // Merge namespaces - pt's values override self's values
         for (name, entry) in pt.namespaces {
             self.namespaces.insert(name, entry);
+        }
+        // Merge themes - pt's values override self's values
+        for (name, theme) in pt.themes {
+            self.themes.insert(name, theme);
         }
         // Merge settings - pt's values override self's values
         self.settings.merge_from(&pt.settings);
@@ -2882,6 +2907,28 @@ groups = ["a"]
     fn test_group_without_daemons_key_parses() {
         let groups = parse_groups("[groups.empty]\n");
         assert!(expand_group(&groups, "empty").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_themes_parse_merge_and_survive_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pitchfork.toml");
+        std::fs::write(
+            &path,
+            "[themes.mine]\nbase = \"catppuccin_latte\"\nred = \"#ff0000\"\n",
+        )
+        .unwrap();
+        let mut pt = PitchforkToml::read(&path).unwrap();
+        assert_eq!(pt.themes["mine"].red.as_deref(), Some("#ff0000"));
+
+        let mut other = PitchforkToml::new(dir.path().join("other.toml"));
+        other.themes.insert("mine".into(), ThemeDef::default());
+        pt.merge(other);
+        assert_eq!(pt.themes["mine"], ThemeDef::default());
+
+        let pt = PitchforkToml::read(&path).unwrap();
+        pt.write().unwrap();
+        assert_eq!(PitchforkToml::read(&path).unwrap().themes, pt.themes);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 mod app;
 mod event;
+pub mod theme;
 mod ui;
 
 use crate::Result;
@@ -7,6 +8,7 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_list::{DaemonListEntry, NamespaceFilter};
 use crate::ipc::batch::{StartOptions, StartResult, StopResult};
 use crate::ipc::client::IpcClient;
+use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -78,6 +80,20 @@ enum TaskResult {
 }
 
 pub async fn run(namespace_filter: NamespaceFilter) -> Result<()> {
+    // Resolve before touching the terminal so a bad theme is reported normally.
+    let custom_themes = PitchforkToml::all_merged()
+        .map(|c| c.themes)
+        .unwrap_or_default();
+    // Before raw mode: the background query manages the terminal mode itself.
+    let tui = &settings().tui;
+    let name = theme::pick_name(
+        &tui.theme,
+        &tui.light_theme,
+        &tui.dark_theme,
+        theme::terminal_is_dark,
+    );
+    theme::init(theme::resolve(name, &custom_themes)?);
+
     // Suppress terminal logging while TUI is active (logs still go to file)
     let prev_log_level = log::max_level();
     log::set_max_level(LevelFilter::Off);

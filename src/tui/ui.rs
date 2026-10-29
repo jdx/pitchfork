@@ -4,6 +4,7 @@ use crate::pitchfork_toml::{CronRetrigger, PitchforkToml, PitchforkTomlAuto};
 use crate::tui::app::{
     App, EditMode, FormFieldValue, PendingAction, SortColumn, StatsHistory, View,
 };
+use crate::tui::theme::theme;
 use crate::ui::cron::format_at;
 use listeners::Listener;
 use ratatui::{
@@ -14,16 +15,6 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
     },
 };
-
-// Theme colors matching the web UI's "devilish" theme
-const RED: Color = Color::Rgb(220, 38, 38); // #dc2626
-const ORANGE: Color = Color::Rgb(255, 107, 0); // #ff6b00
-const GREEN: Color = Color::Rgb(34, 197, 94);
-const YELLOW: Color = Color::Rgb(234, 179, 8);
-const GRAY: Color = Color::Rgb(107, 114, 128);
-const DARK_GRAY: Color = Color::Rgb(55, 55, 55);
-const CYAN: Color = Color::Rgb(34, 211, 238); // #22d3ee - for available/config-only daemons
-const DIM_GREEN: Color = Color::Rgb(48, 164, 108); // #30a46c - completed oneshot tasks
 
 // Unicode block characters for bar rendering
 const BAR_FULL: char = '█';
@@ -45,6 +36,7 @@ fn truncate_path_end(s: &str, max_chars: usize) -> String {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    f.render_widget(Block::default().style(theme().background), f.area());
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -79,24 +71,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(f: &mut Frame, area: Rect) {
-    // Gradient from orange to red: p i t c h f o r k
     let title = vec![
-        Span::styled("p", Style::default().fg(Color::Rgb(255, 140, 0)).bold()), // dark orange
-        Span::styled("i", Style::default().fg(Color::Rgb(255, 120, 0)).bold()),
-        Span::styled("t", Style::default().fg(Color::Rgb(255, 100, 0)).bold()),
-        Span::styled("c", Style::default().fg(Color::Rgb(240, 80, 20)).bold()),
-        Span::styled("h", Style::default().fg(Color::Rgb(230, 60, 30)).bold()),
-        Span::styled("f", Style::default().fg(Color::Rgb(220, 50, 38)).bold()), // red
-        Span::styled("o", Style::default().fg(Color::Rgb(210, 45, 40)).bold()),
-        Span::styled("r", Style::default().fg(Color::Rgb(200, 40, 45)).bold()),
-        Span::styled("k", Style::default().fg(Color::Rgb(190, 38, 50)).bold()), // darker red
+        Span::styled("pitch", Style::default().fg(theme().orange).bold()),
+        Span::styled("fork", Style::default().fg(theme().red).bold()),
     ];
     let header = Paragraph::new(Line::from(title))
         .alignment(Alignment::Center)
         .block(
             Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(RED)),
+                .border_style(Style::default().fg(theme().red)),
         );
     f.render_widget(header, area);
 }
@@ -105,26 +89,35 @@ fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
     let (total, running, stopped, errored, available) = app.stats();
 
     let mut spans = vec![
-        Span::styled("Total: ", Style::default().fg(Color::White)),
-        Span::styled(total.to_string(), Style::default().fg(Color::White).bold()),
+        Span::styled("Total: ", Style::default().fg(theme().fg)),
+        Span::styled(total.to_string(), Style::default().fg(theme().fg).bold()),
         Span::raw("  "),
-        Span::styled("Running: ", Style::default().fg(GREEN)),
-        Span::styled(running.to_string(), Style::default().fg(GREEN).bold()),
+        Span::styled("Running: ", Style::default().fg(theme().green)),
+        Span::styled(
+            running.to_string(),
+            Style::default().fg(theme().green).bold(),
+        ),
         Span::raw("  "),
-        Span::styled("Stopped: ", Style::default().fg(GRAY)),
-        Span::styled(stopped.to_string(), Style::default().fg(GRAY).bold()),
+        Span::styled("Stopped: ", Style::default().fg(theme().muted)),
+        Span::styled(
+            stopped.to_string(),
+            Style::default().fg(theme().muted).bold(),
+        ),
         Span::raw("  "),
-        Span::styled("Errored: ", Style::default().fg(RED)),
-        Span::styled(errored.to_string(), Style::default().fg(RED).bold()),
+        Span::styled("Errored: ", Style::default().fg(theme().red)),
+        Span::styled(errored.to_string(), Style::default().fg(theme().red).bold()),
     ];
 
     // Show available count if there are config-only daemons
     if available > 0 {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled("Available: ", Style::default().fg(CYAN)));
+        spans.push(Span::styled(
+            "Available: ",
+            Style::default().fg(theme().cyan),
+        ));
         spans.push(Span::styled(
             available.to_string(),
-            Style::default().fg(CYAN).bold(),
+            Style::default().fg(theme().cyan).bold(),
         ));
     }
 
@@ -183,13 +176,13 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         };
         let paragraph = Paragraph::new(msg)
             .alignment(Alignment::Center)
-            .style(Style::default().fg(GRAY))
+            .style(Style::default().fg(theme().muted))
             .block(
                 Block::default()
                     .title(title)
-                    .title_style(Style::default().fg(RED).bold())
+                    .title_style(Style::default().fg(theme().red).bold())
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(RED)),
+                    .border_style(Style::default().fg(theme().red)),
             );
         f.render_widget(paragraph, table_area);
         return;
@@ -207,7 +200,7 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         ("Error", None),
     ];
     let mut header_cells: Vec<Cell> = if show_checkbox {
-        vec![Cell::from("☐").style(Style::default().fg(ORANGE).bold())]
+        vec![Cell::from("☐").style(Style::default().fg(theme().orange).bold())]
     } else {
         vec![]
     };
@@ -217,7 +210,7 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         } else {
             (*name).to_string()
         };
-        Cell::from(text).style(Style::default().fg(ORANGE).bold())
+        Cell::from(text).style(Style::default().fg(theme().orange).bold())
     }));
     let header = Row::new(header_cells).height(1);
 
@@ -241,13 +234,13 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         let is_config_only = app.is_config_only(&daemon.id);
 
         let name_style = if is_config_only {
-            Style::default().fg(CYAN).italic() // Cyan for available/config-only
+            Style::default().fg(theme().cyan).italic() // Cyan for available/config-only
         } else if disabled {
-            Style::default().fg(GRAY).italic()
+            Style::default().fg(theme().muted).italic()
         } else if cursor_here {
-            Style::default().fg(Color::White).bold()
+            Style::default().fg(theme().fg).bold()
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme().fg)
         };
 
         // Styled name: dim `namespace/` prefix, then the daemon name. When the
@@ -272,7 +265,7 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
 
         // Show "available" for config-only daemons instead of "stopped"
         let (status_text, status_color) = if is_config_only {
-            ("available".to_string(), CYAN)
+            ("available".to_string(), theme().cyan)
         } else {
             status_display(&daemon.status)
         };
@@ -282,12 +275,12 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         // CPU bar (5 chars wide)
         let cpu_cell = stats
             .map(|s| Cell::from(render_bar(s.cpu_percent, 5)))
-            .unwrap_or_else(|| Cell::from("-").style(Style::default().fg(GRAY)));
+            .unwrap_or_else(|| Cell::from("-").style(Style::default().fg(theme().muted)));
 
         // Memory bar (5 chars wide)
         let mem_cell = stats
             .map(|s| Cell::from(render_memory_bar(s.memory_bytes, 5)))
-            .unwrap_or_else(|| Cell::from("-").style(Style::default().fg(GRAY)));
+            .unwrap_or_else(|| Cell::from("-").style(Style::default().fg(theme().muted)));
 
         let uptime = stats
             .map(|s| s.uptime_display())
@@ -296,9 +289,9 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         let error = daemon.status.error_message().unwrap_or_default();
 
         let row_style = if is_multi_selected {
-            Style::default().bg(Color::Rgb(40, 40, 20)) // Yellow-ish for multi-select
+            theme().marked
         } else if cursor_here {
-            Style::default().bg(Color::Rgb(50, 20, 20))
+            theme().selection
         } else {
             Style::default()
         };
@@ -308,9 +301,9 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         if show_checkbox {
             let checkbox = if is_multi_selected { "☑" } else { "☐" };
             let checkbox_style = if is_multi_selected {
-                Style::default().fg(GREEN)
+                Style::default().fg(theme().green)
             } else {
-                Style::default().fg(GRAY)
+                Style::default().fg(theme().muted)
             };
             cells.push(Cell::from(checkbox).style(checkbox_style));
         }
@@ -320,8 +313,8 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             Cell::from(status_text).style(Style::default().fg(status_color)),
             cpu_cell,
             mem_cell,
-            Cell::from(uptime).style(Style::default().fg(GRAY)),
-            Cell::from(error).style(Style::default().fg(RED)),
+            Cell::from(uptime).style(Style::default().fg(theme().muted)),
+            Cell::from(error).style(Style::default().fg(theme().red)),
         ]);
 
         Row::new(cells).style(row_style).height(1)
@@ -366,9 +359,9 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
     let table = Table::new(rows, widths).header(header).block(
         Block::default()
             .title(title)
-            .title_style(Style::default().fg(RED).bold())
+            .title_style(Style::default().fg(theme().red).bold())
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(RED)),
+            .border_style(Style::default().fg(theme().red)),
     );
 
     // Use a stateful render so ratatui scrolls the viewport to keep the
@@ -388,7 +381,7 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             .end_symbol(Some("▼"))
             .track_symbol(Some("│"))
             .thumb_symbol("█")
-            .style(Style::default().fg(GRAY));
+            .style(Style::default().fg(theme().muted));
         f.render_stateful_widget(
             scrollbar,
             table_area.inner(Margin {
@@ -409,19 +402,19 @@ fn draw_search_bar(f: &mut Frame, area: Rect, app: &App) {
 
     let search_bar = Paragraph::new(search_text)
         .style(if app.search_active {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme().fg)
         } else {
-            Style::default().fg(GRAY)
+            Style::default().fg(theme().muted)
         })
         .block(
             Block::default()
                 .title(" Search ")
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
                 .border_style(if app.search_active {
-                    Style::default().fg(ORANGE)
+                    Style::default().fg(theme().orange)
                 } else {
-                    Style::default().fg(GRAY)
+                    Style::default().fg(theme().muted)
                 }),
         );
     f.render_widget(search_bar, area);
@@ -429,15 +422,15 @@ fn draw_search_bar(f: &mut Frame, area: Rect, app: &App) {
 
 fn status_display(status: &DaemonStatus) -> (String, Color) {
     match status {
-        DaemonStatus::Running => ("running".to_string(), GREEN),
-        DaemonStatus::Stopped => ("stopped".to_string(), GRAY),
-        DaemonStatus::Completed => ("completed".to_string(), DIM_GREEN),
-        DaemonStatus::Waiting => ("waiting".to_string(), YELLOW),
-        DaemonStatus::Stopping => ("stopping".to_string(), YELLOW),
-        DaemonStatus::Restarting => ("restarting".to_string(), YELLOW),
-        DaemonStatus::Failed(_) => ("failed".to_string(), RED),
-        DaemonStatus::Errored(code) if *code != -1 => (format!("errored ({code})"), RED),
-        DaemonStatus::Errored(_) => ("errored".to_string(), RED),
+        DaemonStatus::Running => ("running".to_string(), theme().green),
+        DaemonStatus::Stopped => ("stopped".to_string(), theme().muted),
+        DaemonStatus::Completed => ("completed".to_string(), theme().dim_green),
+        DaemonStatus::Waiting => ("waiting".to_string(), theme().yellow),
+        DaemonStatus::Stopping => ("stopping".to_string(), theme().yellow),
+        DaemonStatus::Restarting => ("restarting".to_string(), theme().yellow),
+        DaemonStatus::Failed(_) => ("failed".to_string(), theme().red),
+        DaemonStatus::Errored(code) if *code != -1 => (format!("errored ({code})"), theme().red),
+        DaemonStatus::Errored(_) => ("errored".to_string(), theme().red),
     }
 }
 
@@ -449,13 +442,13 @@ fn render_bar(percent: f32, width: usize) -> Line<'static> {
 
     // Color based on usage level
     let bar_color = if clamped >= 90.0 {
-        RED
+        theme().red
     } else if clamped >= 70.0 {
-        ORANGE
+        theme().orange
     } else if clamped >= 50.0 {
-        YELLOW
+        theme().yellow
     } else {
-        GREEN
+        theme().green
     };
 
     let filled_str: String = std::iter::repeat_n(BAR_FULL, filled).collect();
@@ -464,9 +457,9 @@ fn render_bar(percent: f32, width: usize) -> Line<'static> {
 
     Line::from(vec![
         Span::styled(filled_str, Style::default().fg(bar_color)),
-        Span::styled(empty_str, Style::default().fg(DARK_GRAY)),
+        Span::styled(empty_str, Style::default().fg(theme().faint)),
         Span::raw(" "),
-        Span::styled(pct_str, Style::default().fg(GRAY)),
+        Span::styled(pct_str, Style::default().fg(theme().muted)),
     ])
 }
 
@@ -481,13 +474,13 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
 
     // Color based on usage level
     let bar_color = if bytes > 2 * 1024 * 1024 * 1024 {
-        RED // > 2GB
+        theme().red // > 2GB
     } else if bytes > 1024 * 1024 * 1024 {
-        ORANGE // > 1GB
+        theme().orange // > 1GB
     } else if bytes > 512 * 1024 * 1024 {
-        YELLOW // > 512MB
+        theme().yellow // > 512MB
     } else {
-        GREEN
+        theme().green
     };
 
     let filled_str: String = std::iter::repeat_n(BAR_FULL, filled).collect();
@@ -500,9 +493,9 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
 
     Line::from(vec![
         Span::styled(filled_str, Style::default().fg(bar_color)),
-        Span::styled(empty_str, Style::default().fg(DARK_GRAY)),
+        Span::styled(empty_str, Style::default().fg(theme().faint)),
         Span::raw(" "),
-        Span::styled(format!("{size_str:>5}"), Style::default().fg(GRAY)),
+        Span::styled(format!("{size_str:>5}"), Style::default().fg(theme().muted)),
     ])
 }
 
@@ -603,11 +596,11 @@ fn draw_network(f: &mut Frame, area: Rect, app: &mut App) {
         format!("Network Listeners ({} total)", app.network_listeners.len())
     };
     let header = Paragraph::new(header_text)
-        .style(Style::default().fg(ORANGE).bold())
+        .style(Style::default().fg(theme().orange).bold())
         .block(
             Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(GRAY)),
+                .border_style(Style::default().fg(theme().muted)),
         );
     f.render_widget(header, chunks[0]);
 
@@ -631,14 +624,14 @@ fn draw_network_search_bar(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let search_paragraph = Paragraph::new(search_text)
-        .style(Style::default().fg(Color::Yellow))
+        .style(Style::default().fg(theme().yellow))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(if app.network_search_active {
-                    Color::Yellow
+                    theme().yellow
                 } else {
-                    GRAY
+                    theme().muted
                 }))
                 .title("Search"),
         );
@@ -693,10 +686,10 @@ fn draw_network_table(f: &mut Frame, area: Rect, app: &mut App) {
             ];
 
             let style = if actual_idx == app.network_selected {
-                Style::default().bg(Color::DarkGray).fg(Color::White)
+                theme().selection
             } else if is_overlapping {
                 // Highlight overlapping ports with a warning color
-                Style::default().fg(Color::Rgb(255, 100, 100)) // Reddish
+                Style::default().fg(theme().red)
             } else {
                 Style::default()
             };
@@ -717,13 +710,13 @@ fn draw_network_table(f: &mut Frame, area: Rect, app: &mut App) {
     )
     .header(
         Row::new(vec!["PID", "Process", "Proto", "Address", "Port"])
-            .style(Style::default().fg(ORANGE).bold())
+            .style(Style::default().fg(theme().orange).bold())
             .bottom_margin(1),
     )
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(GRAY)),
+            .border_style(Style::default().fg(theme().muted)),
     );
 
     f.render_widget(table, area);
@@ -739,7 +732,7 @@ fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     let mut lines = vec![
         Line::from(vec![Span::styled(
             daemon_id,
-            Style::default().fg(ORANGE).bold(),
+            Style::default().fg(theme().orange).bold(),
         )]),
         Line::from(""),
     ];
@@ -748,14 +741,14 @@ fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     if let Some(d) = daemon {
         let (status_text, status_color) = status_display(&d.status);
         lines.push(Line::from(vec![
-            Span::styled("Status: ", Style::default().fg(GRAY)),
+            Span::styled("Status: ", Style::default().fg(theme().muted)),
             Span::styled(status_text, Style::default().fg(status_color)),
         ]));
 
         if let Some(pid) = d.pid {
             lines.push(Line::from(vec![
-                Span::styled("PID:    ", Style::default().fg(GRAY)),
-                Span::styled(pid.to_string(), Style::default().fg(Color::White)),
+                Span::styled("PID:    ", Style::default().fg(theme().muted)),
+                Span::styled(pid.to_string(), Style::default().fg(theme().fg)),
             ]));
         }
     }
@@ -763,30 +756,36 @@ fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     // Stats from process
     if let Some(stats) = stats {
         lines.push(Line::from(vec![
-            Span::styled("Uptime: ", Style::default().fg(GRAY)),
-            Span::styled(stats.uptime_display(), Style::default().fg(Color::White)),
+            Span::styled("Uptime: ", Style::default().fg(theme().muted)),
+            Span::styled(stats.uptime_display(), Style::default().fg(theme().fg)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("CPU:    ", Style::default().fg(GRAY)),
+            Span::styled("CPU:    ", Style::default().fg(theme().muted)),
             Span::styled(
                 format!("{:.1}%", stats.cpu_percent),
                 Style::default().fg(cpu_color(stats.cpu_percent)),
             ),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Memory: ", Style::default().fg(GRAY)),
+            Span::styled("Memory: ", Style::default().fg(theme().muted)),
             Span::styled(
                 stats.memory_display(),
                 Style::default().fg(memory_color(stats.memory_bytes)),
             ),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Disk R: ", Style::default().fg(GRAY)),
-            Span::styled(stats.disk_read_display(), Style::default().fg(GREEN)),
+            Span::styled("Disk R: ", Style::default().fg(theme().muted)),
+            Span::styled(
+                stats.disk_read_display(),
+                Style::default().fg(theme().green),
+            ),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Disk W: ", Style::default().fg(GRAY)),
-            Span::styled(stats.disk_write_display(), Style::default().fg(YELLOW)),
+            Span::styled("Disk W: ", Style::default().fg(theme().muted)),
+            Span::styled(
+                stats.disk_write_display(),
+                Style::default().fg(theme().yellow),
+            ),
         ]));
     }
 
@@ -797,16 +796,16 @@ fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "DISABLED",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]));
     }
 
     let panel = Paragraph::new(lines).block(
         Block::default()
             .title(" Info ")
-            .title_style(Style::default().fg(ORANGE).bold())
+            .title_style(Style::default().fg(theme().orange).bold())
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(DARK_GRAY)),
+            .border_style(Style::default().fg(theme().faint)),
     );
     f.render_widget(panel, area);
 }
@@ -815,7 +814,10 @@ fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
 fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     let daemon = app.daemons.iter().find(|d| d.id.qualified() == daemon_id);
 
-    let mut spans = vec![Span::styled(daemon_id, Style::default().fg(ORANGE).bold())];
+    let mut spans = vec![Span::styled(
+        daemon_id,
+        Style::default().fg(theme().orange).bold(),
+    )];
 
     if let Some(d) = daemon {
         let (status_text, status_color) = status_display(&d.status);
@@ -832,7 +834,7 @@ fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &
                     stats.cpu_percent,
                     stats.memory_display()
                 ),
-                Style::default().fg(GRAY),
+                Style::default().fg(theme().muted),
             ));
         }
     }
@@ -840,7 +842,7 @@ fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &
     spans.push(Span::raw("  "));
     spans.push(Span::styled(
         "[expanded]",
-        Style::default().fg(DARK_GRAY).italic(),
+        Style::default().fg(theme().faint).italic(),
     ));
 
     let header = Paragraph::new(Line::from(spans))
@@ -848,7 +850,7 @@ fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &
         .block(
             Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(DARK_GRAY)),
+                .border_style(Style::default().fg(theme().faint)),
         );
     f.render_widget(header, area);
 }
@@ -902,20 +904,20 @@ fn draw_cpu_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
         .block(
             Block::default()
                 .title(format!(" CPU {current:.1}% "))
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(DARK_GRAY)),
+                .border_style(Style::default().fg(theme().faint)),
         )
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_max])
-                .style(Style::default().fg(DARK_GRAY)),
+                .style(Style::default().fg(theme().faint)),
         )
         .y_axis(
             Axis::default()
                 .bounds([0.0, 100.0])
                 .labels(vec![Line::from("0"), Line::from("50"), Line::from("100")])
-                .style(Style::default().fg(DARK_GRAY)),
+                .style(Style::default().fg(theme().faint)),
         );
 
     f.render_widget(chart, area);
@@ -950,14 +952,14 @@ fn draw_memory_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) 
         .block(
             Block::default()
                 .title(format!(" Mem {} ", format_memory(current)))
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(DARK_GRAY)),
+                .border_style(Style::default().fg(theme().faint)),
         )
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_max])
-                .style(Style::default().fg(DARK_GRAY)),
+                .style(Style::default().fg(theme().faint)),
         )
         .y_axis(
             Axis::default()
@@ -967,7 +969,7 @@ fn draw_memory_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) 
                     Line::from(format!("{}M", (y_max / 2.0) as u64)),
                     Line::from(format!("{}M", y_max as u64)),
                 ])
-                .style(Style::default().fg(DARK_GRAY)),
+                .style(Style::default().fg(theme().faint)),
         );
 
     f.render_widget(chart, area);
@@ -1003,13 +1005,13 @@ fn draw_disk_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
             .name("R")
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(GREEN))
+            .style(Style::default().fg(theme().green))
             .data(&read_data),
         Dataset::default()
             .name("W")
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(YELLOW))
+            .style(Style::default().fg(theme().yellow))
             .data(&write_data),
     ];
 
@@ -1026,14 +1028,14 @@ fn draw_disk_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
         .block(
             Block::default()
                 .title(title)
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(DARK_GRAY)),
+                .border_style(Style::default().fg(theme().faint)),
         )
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_max])
-                .style(Style::default().fg(DARK_GRAY)),
+                .style(Style::default().fg(theme().faint)),
         )
         .y_axis(
             Axis::default()
@@ -1043,7 +1045,7 @@ fn draw_disk_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
                     Line::from(format!("{}K", (y_max / 2.0) as u64)),
                     Line::from(format!("{}K", y_max as u64)),
                 ])
-                .style(Style::default().fg(DARK_GRAY)),
+                .style(Style::default().fg(theme().faint)),
         );
 
     f.render_widget(chart, area);
@@ -1086,9 +1088,9 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
 
     let block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(RED).bold())
+        .title_style(Style::default().fg(theme().red).bold())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(RED));
+        .border_style(Style::default().fg(theme().red));
     let inner_width = block.inner(area).width;
     let logs = Paragraph::new(visible_lines)
         .block(block)
@@ -1107,7 +1109,7 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
             .end_symbol(Some("▼"))
             .track_symbol(Some("│"))
             .thumb_symbol("█")
-            .style(Style::default().fg(GRAY));
+            .style(Style::default().fg(theme().muted));
         f.render_stateful_widget(
             scrollbar,
             area.inner(Margin {
@@ -1122,26 +1124,26 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
 /// Get color for CPU usage
 fn cpu_color(percent: f32) -> Color {
     if percent >= 90.0 {
-        RED
+        theme().red
     } else if percent >= 70.0 {
-        ORANGE
+        theme().orange
     } else if percent >= 50.0 {
-        YELLOW
+        theme().yellow
     } else {
-        GREEN
+        theme().green
     }
 }
 
 /// Get color for memory usage
 fn memory_color(bytes: u64) -> Color {
     if bytes > 2 * 1024 * 1024 * 1024 {
-        RED // > 2GB
+        theme().red // > 2GB
     } else if bytes > 1024 * 1024 * 1024 {
-        ORANGE // > 1GB
+        theme().orange // > 1GB
     } else if bytes > 512 * 1024 * 1024 {
-        YELLOW // > 512MB
+        theme().yellow // > 512MB
     } else {
-        GREEN
+        theme().green
     }
 }
 
@@ -1176,19 +1178,19 @@ fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {
 
     let search_bar = Paragraph::new(format!("{search_text}{match_info}"))
         .style(if app.log_search_active {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme().fg)
         } else {
-            Style::default().fg(GRAY)
+            Style::default().fg(theme().muted)
         })
         .block(
             Block::default()
                 .title(" Search Logs ")
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
                 .border_style(if app.log_search_active {
-                    Style::default().fg(ORANGE)
+                    Style::default().fg(theme().orange)
                 } else {
-                    Style::default().fg(GRAY)
+                    Style::default().fg(theme().muted)
                 }),
         );
     f.render_widget(search_bar, area);
@@ -1226,20 +1228,20 @@ fn highlight_log_line(line: std::borrow::Cow<str>, line_idx: usize, app: &App) -
         || line_lower.contains("fatal")
         || line_lower.contains("panic")
     {
-        Style::default().fg(RED)
+        Style::default().fg(theme().red)
     } else if line_lower.contains("warn") {
-        Style::default().fg(YELLOW)
+        Style::default().fg(theme().yellow)
     } else if line_lower.contains("debug") || line_lower.contains("trace") {
-        Style::default().fg(DARK_GRAY)
+        Style::default().fg(theme().faint)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme().fg)
     };
 
     // Apply search highlight
     let style = if is_current_match {
-        base_style.bg(Color::Rgb(100, 60, 0)) // Orange-ish background for current match
+        base_style.patch(theme().match_current)
     } else if is_match {
-        base_style.bg(Color::Rgb(50, 40, 0)) // Dim yellow background for other matches
+        base_style.patch(theme().match_other)
     } else {
         base_style
     };
@@ -1258,7 +1260,10 @@ fn highlight_log_line(line: std::borrow::Cow<str>, line_idx: usize, app: &App) -
                 .count()
                 == 8
         {
-            spans.push(Span::styled(potential_date, Style::default().fg(GRAY)));
+            spans.push(Span::styled(
+                potential_date,
+                Style::default().fg(theme().muted),
+            ));
             let remaining: String = chars[10..].iter().collect();
             if !remaining.is_empty() {
                 spans.push(Span::styled(remaining, style));
@@ -1276,7 +1281,7 @@ fn highlight_log_line(line: std::borrow::Cow<str>, line_idx: usize, app: &App) -
 fn draw_message_bar(f: &mut Frame, area: Rect, app: &App) {
     if let Some(msg) = &app.message {
         let message = Paragraph::new(msg.as_str())
-            .style(Style::default().fg(GREEN))
+            .style(Style::default().fg(theme().green))
             .alignment(Alignment::Center);
         f.render_widget(message, area);
     }
@@ -1317,7 +1322,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let footer = Paragraph::new(help_text)
-        .style(Style::default().fg(GRAY))
+        .style(Style::default().fg(theme().muted))
         .alignment(Alignment::Center);
     f.render_widget(footer, area);
 }
@@ -1331,12 +1336,12 @@ fn draw_help_overlay(f: &mut Frame) {
     let help_text = vec![
         Line::from(vec![Span::styled(
             "Keyboard Shortcuts",
-            Style::default().fg(ORANGE).bold(),
+            Style::default().fg(theme().orange).bold(),
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Navigation",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]),
         Line::from("  j / Down    Move selection down"),
         Line::from("  k / Up      Move selection up"),
@@ -1349,7 +1354,7 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "Multi-select",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]),
         Line::from("  Space       Toggle selection"),
         Line::from("  Ctrl+A      Select all visible"),
@@ -1357,7 +1362,7 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "Actions",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]),
         Line::from("  s           Start stopped daemon(s)"),
         Line::from("  x           Stop running daemon(s)"),
@@ -1369,14 +1374,14 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "Config Editor",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]),
         Line::from("  n           New daemon"),
         Line::from("  E           Edit selected daemon config"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "General",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]),
         Line::from("  p           Show network ports view"),
         Line::from("  ?           Toggle this help"),
@@ -1385,7 +1390,7 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "Details View",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]),
         Line::from("  j / k       Scroll logs up/down"),
         Line::from("  Ctrl+D/U    Page down/up"),
@@ -1398,7 +1403,7 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from(""),
         Line::from(vec![Span::styled(
             "Network View",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]),
         Line::from("  j / k       Navigate up/down"),
         Line::from("  g / G       Go to top/bottom"),
@@ -1411,11 +1416,11 @@ fn draw_help_overlay(f: &mut Frame) {
         .block(
             Block::default()
                 .title(" Help ")
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
+                .border_style(Style::default().fg(theme().red)),
         )
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+        .style(theme().overlay);
 
     f.render_widget(help, area);
 }
@@ -1430,7 +1435,10 @@ fn draw_loading_overlay(f: &mut Frame, app: &App) {
 
     let content = vec![
         Line::from(""),
-        Line::from(vec![Span::styled(text, Style::default().fg(ORANGE).bold())]),
+        Line::from(vec![Span::styled(
+            text,
+            Style::default().fg(theme().orange).bold(),
+        )]),
         Line::from(""),
     ];
 
@@ -1439,9 +1447,9 @@ fn draw_loading_overlay(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
+                .border_style(Style::default().fg(theme().red)),
         )
-        .style(Style::default().bg(Color::Rgb(30, 20, 20)));
+        .style(theme().danger);
 
     f.render_widget(loading, area);
 }
@@ -1473,21 +1481,21 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
     let text = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled(action_text, Style::default().fg(ORANGE).bold()),
+            Span::styled(action_text, Style::default().fg(theme().orange).bold()),
             Span::raw(" "),
-            Span::styled(target_text, Style::default().fg(Color::White).bold()),
+            Span::styled(target_text, Style::default().fg(theme().fg).bold()),
             Span::raw("?"),
         ]),
         Line::from(""),
         Line::from(""),
         Line::from(vec![
-            Span::styled("y", Style::default().fg(GREEN).bold()),
+            Span::styled("y", Style::default().fg(theme().green).bold()),
             Span::raw(" / "),
-            Span::styled("Enter", Style::default().fg(GREEN).bold()),
+            Span::styled("Enter", Style::default().fg(theme().green).bold()),
             Span::raw(" to confirm, "),
-            Span::styled("n", Style::default().fg(RED).bold()),
+            Span::styled("n", Style::default().fg(theme().red).bold()),
             Span::raw(" / "),
-            Span::styled("Esc", Style::default().fg(RED).bold()),
+            Span::styled("Esc", Style::default().fg(theme().red).bold()),
             Span::raw(" to cancel"),
         ]),
     ];
@@ -1497,11 +1505,11 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .title(" Confirm ")
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
+                .border_style(Style::default().fg(theme().red)),
         )
-        .style(Style::default().bg(Color::Rgb(30, 20, 20)));
+        .style(theme().danger);
 
     f.render_widget(confirm, area);
 }
@@ -1536,14 +1544,14 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
     let mut lines = vec![
         Line::from(vec![Span::styled(
             daemon_id,
-            Style::default().fg(ORANGE).bold(),
+            Style::default().fg(theme().orange).bold(),
         )]),
         Line::from(""),
     ];
 
     if let Some(err) = config_error {
         lines.push(Line::from(vec![
-            Span::styled("Config error: ", Style::default().fg(RED).bold()),
+            Span::styled("Config error: ", Style::default().fg(theme().red).bold()),
             Span::raw(err),
         ]));
         lines.push(Line::from(""));
@@ -1552,37 +1560,37 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
     // Status info
     if let Some(d) = daemon {
         lines.push(Line::from(vec![
-            Span::styled("Status: ", Style::default().fg(GRAY)),
+            Span::styled("Status: ", Style::default().fg(theme().muted)),
             Span::styled(
                 format!("{:?}", d.status),
                 Style::default().fg(match &d.status {
-                    crate::daemon_status::DaemonStatus::Running => GREEN,
-                    crate::daemon_status::DaemonStatus::Stopped => GRAY,
-                    crate::daemon_status::DaemonStatus::Completed => DIM_GREEN,
-                    crate::daemon_status::DaemonStatus::Waiting => YELLOW,
-                    crate::daemon_status::DaemonStatus::Stopping => YELLOW,
-                    crate::daemon_status::DaemonStatus::Restarting => YELLOW,
-                    _ => RED,
+                    crate::daemon_status::DaemonStatus::Running => theme().green,
+                    crate::daemon_status::DaemonStatus::Stopped => theme().muted,
+                    crate::daemon_status::DaemonStatus::Completed => theme().dim_green,
+                    crate::daemon_status::DaemonStatus::Waiting => theme().yellow,
+                    crate::daemon_status::DaemonStatus::Stopping => theme().yellow,
+                    crate::daemon_status::DaemonStatus::Restarting => theme().yellow,
+                    _ => theme().red,
                 }),
             ),
         ]));
 
         if let Some(pid) = d.pid {
             lines.push(Line::from(vec![
-                Span::styled("PID: ", Style::default().fg(GRAY)),
-                Span::styled(pid.to_string(), Style::default().fg(Color::White)),
+                Span::styled("PID: ", Style::default().fg(theme().muted)),
+                Span::styled(pid.to_string(), Style::default().fg(theme().fg)),
             ]));
 
             if let Some(stats) = app.get_stats(pid) {
                 lines.push(Line::from(vec![
-                    Span::styled("CPU: ", Style::default().fg(GRAY)),
-                    Span::styled(stats.cpu_display(), Style::default().fg(Color::White)),
+                    Span::styled("CPU: ", Style::default().fg(theme().muted)),
+                    Span::styled(stats.cpu_display(), Style::default().fg(theme().fg)),
                     Span::raw("  "),
-                    Span::styled("Memory: ", Style::default().fg(GRAY)),
-                    Span::styled(stats.memory_display(), Style::default().fg(Color::White)),
+                    Span::styled("Memory: ", Style::default().fg(theme().muted)),
+                    Span::styled(stats.memory_display(), Style::default().fg(theme().fg)),
                     Span::raw("  "),
-                    Span::styled("Uptime: ", Style::default().fg(GRAY)),
-                    Span::styled(stats.uptime_display(), Style::default().fg(Color::White)),
+                    Span::styled("Uptime: ", Style::default().fg(theme().muted)),
+                    Span::styled(stats.uptime_display(), Style::default().fg(theme().fg)),
                 ]));
             }
         }
@@ -1590,8 +1598,8 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         if let Some(err) = d.status.error_message() {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Error: ", Style::default().fg(RED)),
-                Span::styled(err, Style::default().fg(RED)),
+                Span::styled("Error: ", Style::default().fg(theme().red)),
+                Span::styled(err, Style::default().fg(theme().red)),
             ]));
         }
     }
@@ -1601,12 +1609,12 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "Configuration",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]));
 
         lines.push(Line::from(vec![
-            Span::styled("Command: ", Style::default().fg(GRAY)),
-            Span::styled(cfg.run.to_string(), Style::default().fg(Color::White)),
+            Span::styled("Command: ", Style::default().fg(theme().muted)),
+            Span::styled(cfg.run.to_string(), Style::default().fg(theme().fg)),
         ]));
 
         // Show ports - use daemon's resolved ports if running, otherwise config ports
@@ -1632,19 +1640,19 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
                 "Ports: "
             };
             lines.push(Line::from(vec![
-                Span::styled(port_label, Style::default().fg(GRAY)),
-                Span::styled(port_str, Style::default().fg(Color::White)),
+                Span::styled(port_label, Style::default().fg(theme().muted)),
+                Span::styled(port_str, Style::default().fg(theme().fg)),
             ]));
         }
 
         if let Some(cron) = &cfg.cron {
             lines.push(Line::from(vec![
-                Span::styled("Cron: ", Style::default().fg(GRAY)),
-                Span::styled(cron.schedule.clone(), Style::default().fg(Color::White)),
+                Span::styled("Cron: ", Style::default().fg(theme().muted)),
+                Span::styled(cron.schedule.clone(), Style::default().fg(theme().fg)),
                 Span::raw(" (retrigger: "),
                 Span::styled(
                     format!("{:?}", cron.retrigger),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme().fg),
                 ),
                 Span::raw(")"),
             ]));
@@ -1657,17 +1665,17 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
                 // Timestamp only: the status line above already carries how
                 // the daemon last exited, attributed to the run it describes.
                 let (last, last_color) = match d.last_cron_run {
-                    Some(t) => (format_at(t, now, false), Color::White),
-                    None => ("never".to_string(), GRAY),
+                    Some(t) => (format_at(t, now, false), theme().fg),
+                    None => ("never".to_string(), theme().muted),
                 };
                 lines.push(Line::from(vec![
-                    Span::styled("Last run: ", Style::default().fg(GRAY)),
+                    Span::styled("Last run: ", Style::default().fg(theme().muted)),
                     Span::styled(last, Style::default().fg(last_color)),
                 ]));
                 if let Some(t) = d.next_cron_run(now) {
                     lines.push(Line::from(vec![
-                        Span::styled("Next run: ", Style::default().fg(GRAY)),
-                        Span::styled(format_at(t, now, true), Style::default().fg(Color::White)),
+                        Span::styled("Next run: ", Style::default().fg(theme().muted)),
+                        Span::styled(format_at(t, now, true), Style::default().fg(theme().fg)),
                     ]));
                 }
             }
@@ -1675,8 +1683,8 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
 
         if cfg.retry.count() > 0 {
             lines.push(Line::from(vec![
-                Span::styled("Retry: ", Style::default().fg(GRAY)),
-                Span::styled(cfg.retry.to_string(), Style::default().fg(Color::White)),
+                Span::styled("Retry: ", Style::default().fg(theme().muted)),
+                Span::styled(cfg.retry.to_string(), Style::default().fg(theme().fg)),
                 if cfg.retry.is_infinite() {
                     Span::raw("")
                 } else {
@@ -1687,57 +1695,57 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
 
         if let Some(delay) = cfg.ready_delay {
             lines.push(Line::from(vec![
-                Span::styled("Ready delay: ", Style::default().fg(GRAY)),
-                Span::styled(format!("{delay}s"), Style::default().fg(Color::White)),
+                Span::styled("Ready delay: ", Style::default().fg(theme().muted)),
+                Span::styled(format!("{delay}s"), Style::default().fg(theme().fg)),
             ]));
         }
 
         if let Some(output) = &cfg.ready_output {
             lines.push(Line::from(vec![
-                Span::styled("Ready output: ", Style::default().fg(GRAY)),
-                Span::styled(output.pattern.clone(), Style::default().fg(Color::White)),
+                Span::styled("Ready output: ", Style::default().fg(theme().muted)),
+                Span::styled(output.pattern.clone(), Style::default().fg(theme().fg)),
             ]));
         }
 
         if let Some(http) = &cfg.ready_http {
             lines.push(Line::from(vec![
-                Span::styled("Ready HTTP: ", Style::default().fg(GRAY)),
-                Span::styled(http.to_string(), Style::default().fg(Color::White)),
+                Span::styled("Ready HTTP: ", Style::default().fg(theme().muted)),
+                Span::styled(http.to_string(), Style::default().fg(theme().fg)),
             ]));
         }
 
         if let Some(cmd) = &cfg.health_cmd {
             lines.push(Line::from(vec![
-                Span::styled("Health cmd: ", Style::default().fg(GRAY)),
-                Span::styled(cmd.to_string(), Style::default().fg(Color::White)),
+                Span::styled("Health cmd: ", Style::default().fg(theme().muted)),
+                Span::styled(cmd.to_string(), Style::default().fg(theme().fg)),
             ]));
         }
 
         if let Some(http) = &cfg.health_http {
             lines.push(Line::from(vec![
-                Span::styled("Health HTTP: ", Style::default().fg(GRAY)),
-                Span::styled(http.to_string(), Style::default().fg(Color::White)),
+                Span::styled("Health HTTP: ", Style::default().fg(theme().muted)),
+                Span::styled(http.to_string(), Style::default().fg(theme().fg)),
             ]));
         }
 
         if let Some(port) = &cfg.health_port {
             lines.push(Line::from(vec![
-                Span::styled("Health port: ", Style::default().fg(GRAY)),
-                Span::styled(port.to_string(), Style::default().fg(Color::White)),
+                Span::styled("Health port: ", Style::default().fg(theme().muted)),
+                Span::styled(port.to_string(), Style::default().fg(theme().fg)),
             ]));
         }
 
         if cfg.boot_start.unwrap_or(false) {
             lines.push(Line::from(vec![
-                Span::styled("Boot start: ", Style::default().fg(GRAY)),
-                Span::styled("enabled", Style::default().fg(GREEN)),
+                Span::styled("Boot start: ", Style::default().fg(theme().muted)),
+                Span::styled("enabled", Style::default().fg(theme().green)),
             ]));
         }
     } else {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "No configuration found in pitchfork.toml",
-            Style::default().fg(GRAY).italic(),
+            Style::default().fg(theme().muted).italic(),
         )]));
     }
 
@@ -1748,7 +1756,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "This daemon is DISABLED",
-            Style::default().fg(RED).bold(),
+            Style::default().fg(theme().red).bold(),
         )]));
     }
 
@@ -1756,11 +1764,11 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .title(" Daemon Details ")
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
+                .border_style(Style::default().fg(theme().red)),
         )
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+        .style(theme().overlay);
 
     f.render_widget(details, area);
 }
@@ -1812,9 +1820,9 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
 
     // Daemon ID header
     let id_style = if editor.daemon_id_editing {
-        Style::default().fg(ORANGE).bold()
+        Style::default().fg(theme().orange).bold()
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme().fg)
     };
 
     let id_display = if editor.daemon_id_editing {
@@ -1833,7 +1841,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
     };
 
     let id_style = if editor.daemon_id_error.is_some() {
-        Style::default().fg(RED).bold()
+        Style::default().fg(theme().red).bold()
     } else {
         id_style
     };
@@ -1843,18 +1851,18 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .title(title)
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
+                .border_style(Style::default().fg(theme().red)),
         )
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+        .style(theme().overlay);
     f.render_widget(header, chunks[0]);
 
     // Config path
     let path_str = editor.config_path.display().to_string();
     let path_display = truncate_path_end(&path_str, 60);
     let path_line = Paragraph::new(format!("  Config: {path_display}"))
-        .style(Style::default().fg(GRAY).bg(Color::Rgb(20, 20, 20)));
+        .style(theme().overlay.fg(theme().muted));
     f.render_widget(path_line, chunks[1]);
 
     // Form fields
@@ -1867,15 +1875,15 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
         let focus_indicator = if is_focused { "▶ " } else { "  " };
         let required_marker = if field.required { "*" } else { "" };
         let label_style = if is_focused {
-            Style::default().fg(ORANGE).bold()
+            Style::default().fg(theme().orange).bold()
         } else {
-            Style::default().fg(GRAY)
+            Style::default().fg(theme().muted)
         };
 
         lines.push(Line::from(vec![
-            Span::styled(focus_indicator, Style::default().fg(ORANGE)),
+            Span::styled(focus_indicator, Style::default().fg(theme().orange)),
             Span::styled(field.label, label_style),
-            Span::styled(required_marker, Style::default().fg(RED)),
+            Span::styled(required_marker, Style::default().fg(theme().red)),
         ]));
 
         // Field value
@@ -1886,7 +1894,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
         if let Some(error) = &field.error {
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled(format!("⚠ {error}"), Style::default().fg(RED)),
+                Span::styled(format!("⚠ {error}"), Style::default().fg(theme().red)),
             ]));
         }
 
@@ -1898,11 +1906,11 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .title(" Configuration ")
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(DARK_GRAY)),
+                .border_style(Style::default().fg(theme().faint)),
         )
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+        .style(theme().overlay);
     f.render_widget(form, chunks[2]);
 
     // Footer with keybindings
@@ -1921,7 +1929,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
 
     let footer = Paragraph::new(footer_text)
         .alignment(Alignment::Center)
-        .style(Style::default().fg(GRAY).bg(Color::Rgb(20, 20, 20)));
+        .style(theme().overlay.fg(theme().muted));
     f.render_widget(footer, chunks[3]);
 }
 
@@ -1931,53 +1939,53 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
     match &field.value {
         FormFieldValue::Text(s) => {
             let display = if s.is_empty() && !is_editing {
-                Span::styled("(empty)", Style::default().fg(DARK_GRAY).italic())
+                Span::styled("(empty)", Style::default().fg(theme().faint).italic())
             } else {
-                Span::styled(format!("{s}{cursor}"), Style::default().fg(Color::White))
+                Span::styled(format!("{s}{cursor}"), Style::default().fg(theme().fg))
             };
             Line::from(vec![Span::raw("    "), display])
         }
         FormFieldValue::OptionalText(opt) => {
             let display = match opt {
-                Some(s) => Span::styled(format!("{s}{cursor}"), Style::default().fg(Color::White)),
+                Some(s) => Span::styled(format!("{s}{cursor}"), Style::default().fg(theme().fg)),
                 None if is_editing => {
-                    Span::styled(cursor.to_string(), Style::default().fg(Color::White))
+                    Span::styled(cursor.to_string(), Style::default().fg(theme().fg))
                 }
-                None => Span::styled("(not set)", Style::default().fg(DARK_GRAY).italic()),
+                None => Span::styled("(not set)", Style::default().fg(theme().faint).italic()),
             };
             Line::from(vec![Span::raw("    "), display])
         }
         FormFieldValue::Number(n) => {
             let display = if is_editing {
-                Span::styled(format!("{n}{cursor}"), Style::default().fg(Color::White))
+                Span::styled(format!("{n}{cursor}"), Style::default().fg(theme().fg))
             } else {
-                Span::styled(n.to_string(), Style::default().fg(Color::White))
+                Span::styled(n.to_string(), Style::default().fg(theme().fg))
             };
             Line::from(vec![Span::raw("    "), display])
         }
         FormFieldValue::OptionalNumber(opt) => {
             let display = match opt {
-                Some(n) => Span::styled(format!("{n}{cursor}"), Style::default().fg(Color::White)),
+                Some(n) => Span::styled(format!("{n}{cursor}"), Style::default().fg(theme().fg)),
                 None if is_editing => {
-                    Span::styled(cursor.to_string(), Style::default().fg(Color::White))
+                    Span::styled(cursor.to_string(), Style::default().fg(theme().fg))
                 }
-                None => Span::styled("(not set)", Style::default().fg(DARK_GRAY).italic()),
+                None => Span::styled("(not set)", Style::default().fg(theme().faint).italic()),
             };
             Line::from(vec![Span::raw("    "), display])
         }
         FormFieldValue::OptionalPort(opt) => {
             let display = match opt {
-                Some(p) => Span::styled(format!("{p}{cursor}"), Style::default().fg(Color::White)),
+                Some(p) => Span::styled(format!("{p}{cursor}"), Style::default().fg(theme().fg)),
                 None if is_editing => {
-                    Span::styled(cursor.to_string(), Style::default().fg(Color::White))
+                    Span::styled(cursor.to_string(), Style::default().fg(theme().fg))
                 }
-                None => Span::styled("(not set)", Style::default().fg(DARK_GRAY).italic()),
+                None => Span::styled("(not set)", Style::default().fg(theme().faint).italic()),
             };
             Line::from(vec![Span::raw("    "), display])
         }
         FormFieldValue::Boolean(b) => {
             let checkbox = if *b { "[x]" } else { "[ ]" };
-            let color = if *b { GREEN } else { GRAY };
+            let color = if *b { theme().green } else { theme().muted };
             Line::from(vec![
                 Span::raw("    "),
                 Span::styled(checkbox, Style::default().fg(color)),
@@ -1985,9 +1993,9 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
         }
         FormFieldValue::OptionalBoolean(opt) => {
             let (checkbox, color) = match opt {
-                Some(true) => ("[x] Yes", GREEN),
-                Some(false) => ("[ ] No", GRAY),
-                None => ("[-] (not set)", DARK_GRAY),
+                Some(true) => ("[x] Yes", theme().green),
+                Some(false) => ("[ ] No", theme().muted),
+                None => ("[-] (not set)", theme().faint),
             };
             Line::from(vec![
                 Span::raw("    "),
@@ -2005,12 +2013,20 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
                 Span::raw("    "),
                 Span::styled(
                     start_box,
-                    Style::default().fg(if has_start { GREEN } else { GRAY }),
+                    Style::default().fg(if has_start {
+                        theme().green
+                    } else {
+                        theme().muted
+                    }),
                 ),
                 Span::raw(" Start  "),
                 Span::styled(
                     stop_box,
-                    Style::default().fg(if has_stop { GREEN } else { GRAY }),
+                    Style::default().fg(if has_stop {
+                        theme().green
+                    } else {
+                        theme().muted
+                    }),
                 ),
                 Span::raw(" Stop"),
             ])
@@ -2026,9 +2042,9 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
             let mut spans = vec![Span::raw("    ")];
             for (name, val) in &options {
                 let style = if r == val {
-                    Style::default().fg(GREEN).bold()
+                    Style::default().fg(theme().green).bold()
                 } else {
-                    Style::default().fg(GRAY)
+                    Style::default().fg(theme().muted)
                 };
                 spans.push(Span::styled(format!("{name} "), style));
             }
@@ -2036,10 +2052,10 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
         }
         FormFieldValue::StringList(v) => {
             let display = if v.is_empty() && !is_editing {
-                Span::styled("(none)", Style::default().fg(DARK_GRAY).italic())
+                Span::styled("(none)", Style::default().fg(theme().faint).italic())
             } else {
                 let text = v.join(", ");
-                Span::styled(format!("{text}{cursor}"), Style::default().fg(Color::White))
+                Span::styled(format!("{text}{cursor}"), Style::default().fg(theme().fg))
             };
             Line::from(vec![Span::raw("    "), display])
         }
@@ -2058,7 +2074,7 @@ fn draw_file_select_overlay(f: &mut Frame, app: &App) {
     let mut lines: Vec<Line> = vec![
         Line::from(vec![Span::styled(
             "Select a config file for the new daemon:",
-            Style::default().fg(ORANGE),
+            Style::default().fg(theme().orange),
         )]),
         Line::from(""),
     ];
@@ -2073,33 +2089,33 @@ fn draw_file_select_overlay(f: &mut Frame, app: &App) {
         let exists_marker = if path.exists() { "" } else { " (new)" };
 
         let style = if is_selected {
-            Style::default().fg(ORANGE).bold()
+            Style::default().fg(theme().orange).bold()
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme().fg)
         };
 
         lines.push(Line::from(vec![
-            Span::styled(indicator, Style::default().fg(ORANGE)),
+            Span::styled(indicator, Style::default().fg(theme().orange)),
             Span::styled(display_path, style),
-            Span::styled(exists_marker, Style::default().fg(CYAN)),
+            Span::styled(exists_marker, Style::default().fg(theme().cyan)),
         ]));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "j/k: Navigate | Enter: Select | q: Cancel",
-        Style::default().fg(GRAY),
+        Style::default().fg(theme().muted),
     )]));
 
     let popup = Paragraph::new(lines)
         .block(
             Block::default()
                 .title(" Select Config File ")
-                .title_style(Style::default().fg(ORANGE).bold())
+                .title_style(Style::default().fg(theme().orange).bold())
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
+                .border_style(Style::default().fg(theme().red)),
         )
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+        .style(theme().overlay);
 
     f.render_widget(popup, area);
 }

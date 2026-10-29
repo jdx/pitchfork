@@ -1107,6 +1107,41 @@ pub struct SettingsTui {
     /// responsive but use more CPU.
     #[usage(env = "PITCHFORK_TUI_TICK_RATE", default = "100ms", ty = "duration")]
     pub tick_rate: String,
+
+    /// Color theme
+    ///
+    /// `auto` only uses the terminal's own palette, so it adapts to light and
+    /// dark terminals. Other values are a built-in theme (`catppuccin_latte`,
+    /// `catppuccin_frappe`, `catppuccin_macchiato`, `catppuccin_mocha`) or a
+    /// custom theme declared under `[themes.<name>]` in a config file.
+    ///
+    /// ```toml
+    /// [settings.tui]
+    /// theme = "mine"
+    ///
+    /// [themes.mine]
+    /// base = "auto"
+    /// selection_bg = "#ddd6fe"
+    /// ```
+    #[usage(env = "PITCHFORK_TUI_THEME", default = "auto")]
+    pub theme: String,
+
+    /// Theme for a light terminal
+    ///
+    /// Used instead of `theme` when `theme` is `auto` and the terminal's
+    /// background is light. Same values as `theme`. Empty keeps `auto`.
+    ///
+    /// The background is queried when the TUI starts; if the terminal does not
+    /// answer, `theme` is used.
+    #[usage(env = "PITCHFORK_TUI_LIGHT_THEME", default = "")]
+    pub light_theme: String,
+
+    /// Theme for a dark terminal
+    ///
+    /// Used instead of `theme` when `theme` is `auto` and the terminal's
+    /// background is dark. Same values as `theme`. Empty keeps `auto`.
+    #[usage(env = "PITCHFORK_TUI_DARK_THEME", default = "")]
+    pub dark_theme: String,
 }
 
 /// The `web.*` (web UI) settings.
@@ -2090,6 +2125,12 @@ settings_partial! {
         stat_history: i64,
         /// Event loop tick rate
         tick_rate: String,
+        /// Color theme
+        theme: String,
+        /// Theme for a light terminal
+        light_theme: String,
+        /// Theme for a dark terminal
+        dark_theme: String,
     }
 }
 
@@ -2443,8 +2484,8 @@ mod tests {
             .map(|meta| meta.key)
             .collect();
         // 75 before either change, plus `supervisor.oneshot_timeout` from main,
-        // `proxy.dns` / `proxy.dns_port`, `proxy.idle_timeout`, and `boot.executable`.
-        assert_eq!(keys.len(), 80, "{keys:?}");
+        // `proxy.dns` / `proxy.dns_port`, `proxy.idle_timeout`, `boot.executable`, `tui.theme`, `tui.light_theme` and `tui.dark_theme`.
+        assert_eq!(keys.len(), 83, "{keys:?}");
         assert!(keys.contains(&"boot.executable"));
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"supervisor.oneshot_timeout"));
