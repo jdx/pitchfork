@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.32.4](https://github.com/jdx/pitchfork/compare/v2.32.3...v2.32.4) - 2026-10-28
+
+### Fixed
+
+- preserve Windows command quoting and boot paths ([#1045](https://github.com/jdx/pitchfork/pull/1045))
+- *(deps)* update rust crates ([#1072](https://github.com/jdx/pitchfork/pull/1072))
+
+### Other
+
+- *(deps)* lock file maintenance ([#1081](https://github.com/jdx/pitchfork/pull/1081))
+- *(deps)* lock file maintenance ([#1080](https://github.com/jdx/pitchfork/pull/1080))
+- *(deps)* lock file maintenance ([#1077](https://github.com/jdx/pitchfork/pull/1077))
+- *(deps)* lock file maintenance ([#1073](https://github.com/jdx/pitchfork/pull/1073))
+- *(deps)* update rust crate usage_rs to v7.1.3 ([#1074](https://github.com/jdx/pitchfork/pull/1074))
+
 ## [2.32.3](https://github.com/jdx/pitchfork/compare/v2.32.2...v2.32.3) - 2026-10-26
 
 ### Fixed
