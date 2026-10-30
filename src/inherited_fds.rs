@@ -3,12 +3,12 @@
 //! A child inherits, across exec, every descriptor of its parent that lacks
 //! `FD_CLOEXEC`. Such descriptors come from several places:
 //!
-//! - On macOS, std creates a socket and marks it close-on-exec in two separate
-//!   calls, because the platform has no `SOCK_CLOEXEC`. A child forked by
-//!   another thread between the two keeps the socket. The supervisor's port
-//!   check is one such socket: it binds and listens on a daemon's port, then
-//!   drops it, and a log sink spawned in that window kept the port in LISTEN
-//!   for as long as it ran, so the daemon itself could not bind it.
+//! - On macOS, which has no `SOCK_CLOEXEC`, a socket is created in one call
+//!   and marked close-on-exec in another. A child forked by another thread
+//!   between the two calls keeps the socket. The supervisor's port check is
+//!   one such socket: it binds a daemon's port, then drops it, and a log sink
+//!   spawned in that window kept the port bound for as long as it ran, so the
+//!   daemon itself could not bind it.
 //! - `openpty(3)` does not set `FD_CLOEXEC`, so every child spawned while a
 //!   `pty = true` daemon runs would otherwise get that daemon's PTY.
 //! - Callers hand the CLI descriptors without `O_CLOEXEC` (bats' fd 3, pipes
@@ -353,9 +353,9 @@ mod tests {
         );
     }
 
-    /// The port-check race on macOS: a child spawned between socket() and std
-    /// setting FD_CLOEXEC inherits the probe's socket, and once the probe has
-    /// listened and dropped it, the child holds the port.
+    /// The port-check race on macOS: a child spawned between socket() and the
+    /// call that sets FD_CLOEXEC inherits the probe's socket, and once the probe
+    /// has dropped it, the child holds the port.
     #[test]
     fn close_inherited_fds_hides_a_listening_socket_from_tokio_children() {
         use std::os::fd::AsRawFd;

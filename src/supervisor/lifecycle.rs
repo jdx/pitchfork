@@ -3212,7 +3212,7 @@ async fn check_ports_available(
             // Use spawn_blocking to avoid blocking the async runtime during TCP bind checks.
             //
             // We check multiple addresses to avoid false-negatives caused by SO_REUSEADDR.
-            // On macOS/BSD, Rust's TcpListener::bind sets SO_REUSEADDR by default, which
+            // On macOS/BSD, the probe sets SO_REUSEADDR (see `bind_probe`), which
             // allows binding 0.0.0.0:port even when 127.0.0.1:port is already in use
             // (because 0.0.0.0 is technically a different address).  Most daemons bind
             // to localhost, so checking 127.0.0.1 is essential to detect real conflicts.
@@ -3283,8 +3283,8 @@ async fn port_bind_conflict(port: u16) -> Option<std::net::IpAddr> {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             IpAddr::V6(Ipv6Addr::LOCALHOST),
         ] {
-            match std::net::TcpListener::bind((addr, port)) {
-                Ok(listener) => drop(listener),
+            match bind_probe((addr, port).into()) {
+                Ok(socket) => drop(socket),
                 Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return Some(addr),
                 Err(_) => continue,
             }
@@ -3293,6 +3293,38 @@ async fn port_bind_conflict(port: u16) -> Option<std::net::IpAddr> {
     })
     .await
     .unwrap_or(None)
+}
+
+/// Bind a TCP socket to `addr` for [`port_bind_conflict`].
+///
+/// The socket never listens. A child forked by another thread while the socket
+/// is open keeps a copy until the child execs, so the copy can still be bound
+/// when the next address is probed. On Linux, a listening copy would make that
+/// bind fail even with `SO_REUSEADDR`, and the port would look taken. A copy
+/// that doesn't listen doesn't, because Linux lets sockets that set
+/// `SO_REUSEADDR` and don't listen share a port. A copy that doesn't listen
+/// can't accept connections either, so a `ready_port` check can't pass on it.
+/// A socket listening on the same address and port still makes the bind fail.
+#[cfg(unix)]
+fn bind_probe(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpSocket> {
+    let socket = if addr.is_ipv4() {
+        tokio::net::TcpSocket::new_v4()?
+    } else {
+        tokio::net::TcpSocket::new_v6()?
+    };
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    Ok(socket)
+}
+
+/// Bind a TCP listener to `addr` for [`port_bind_conflict`].
+///
+/// Unlike on Unix, the probe listens: Windows may report that a wildcard bind
+/// conflicts only when the socket listens. Children don't inherit std's
+/// sockets there, so no child can hold a copy of it.
+#[cfg(not(unix))]
+fn bind_probe(addr: std::net::SocketAddr) -> std::io::Result<std::net::TcpListener> {
+    std::net::TcpListener::bind(addr)
 }
 
 /// An address as a message shows it: IPv6 in brackets, as in `[::1]`.
@@ -3590,6 +3622,23 @@ mod port_conflict_tests {
         }
         drop(listener);
         assert_eq!(port_bind_conflict(port).await, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_of_a_probe_socket_does_not_look_like_a_listener() {
+        use super::bind_probe;
+        // A child forked while the probe of 0.0.0.0 is open still holds it
+        // when the probe of 127.0.0.1 binds.
+        let copy = bind_probe(SocketAddr::from(([0, 0, 0, 0], 0))).unwrap();
+        let port = copy.local_addr().unwrap().port();
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        bind_probe(addr).unwrap();
+        // Nor can a ready_port check connect to it: Linux refuses the
+        // connection, and macOS lets it time out.
+        let timeout = std::time::Duration::from_millis(200);
+        assert!(std::net::TcpStream::connect_timeout(&addr, timeout).is_err());
+        drop(copy);
     }
 
     fn ip(s: &str) -> IpAddr {
