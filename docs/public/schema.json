@@ -57,6 +57,14 @@
         "$ref": "#/$defs/SlugEntryRaw"
       }
     },
+    "themes": {
+      "description": "Custom TUI themes, selected with `settings.tui.theme`\n(or `light_theme` / `dark_theme`).\n\nEach theme lists only the colors it changes from its `base`\n(`auto` by default, which follows the terminal's own palette).\n\n```toml\n[themes.mine]\nbase = \"catppuccin_latte\"\nselection_bg = \"#ddd6fe\"\n```",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ThemeDef"
+      },
+      "default": {}
+    },
     "worktree_label": {
       "description": "Hostname label for this checkout when it is a linked git worktree.\n\nOverrides the worktree directory's name in proxy hostnames.",
       "type": [
@@ -1730,6 +1738,20 @@
       "description": "Partial mirror of [`SettingsTui`].",
       "type": "object",
       "properties": {
+        "dark_theme": {
+          "description": "Theme for a dark terminal",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "light_theme": {
+          "description": "Theme for a light terminal",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message_duration": {
           "description": "Status message display duration",
           "type": [
@@ -1751,6 +1773,13 @@
             "null"
           ],
           "format": "int64"
+        },
+        "theme": {
+          "description": "Color theme",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tick_rate": {
           "description": "Event loop tick rate",
@@ -1880,6 +1909,128 @@
         "SIGUSR1",
         "SIGUSR2"
       ]
+    },
+    "ThemeDef": {
+      "description": "A theme declared in `[themes.<name>]`. Only the roles set here differ from\n`base`; colors are `#rrggbb`, ANSI names (`red`, `bright_black`, …),\n`reset` (the terminal's own color) or a 0-255 palette index.",
+      "type": "object",
+      "properties": {
+        "base": {
+          "description": "Theme to start from: `auto`, a built-in theme or another custom theme.\nDefaults to `auto`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bg": {
+          "description": "Background of the whole screen.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cyan": {
+          "description": "Daemons declared in a config but not started yet.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "danger_bg": {
+          "description": "Background of the confirmation overlay.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dim_green": {
+          "description": "Completed oneshot tasks.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "faint": {
+          "description": "Borders and empty parts of bars.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fg": {
+          "description": "Default text color.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "green": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "marked_bg": {
+          "description": "Background of rows ticked with `Space`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "match_current_bg": {
+          "description": "Background of the current search match.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "match_other_bg": {
+          "description": "Background of the other search matches.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "muted": {
+          "description": "Secondary text color.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "orange": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overlay_bg": {
+          "description": "Background of overlays.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "red": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selection_bg": {
+          "description": "Background of the row under the cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "yellow": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "WatchMode": {
       "description": "File watch backend mode for daemon `watch` patterns.",

@@ -7514,6 +7514,70 @@
         "default_list": [],
         "extensions": []
       },
+      "tui.dark_theme": {
+        "default": "",
+        "default_note": null,
+        "data_type": "string",
+        "value_type": {
+          "kind": "base",
+          "of": "string"
+        },
+        "env": "PITCHFORK_TUI_DARK_THEME",
+        "envs": [
+          "PITCHFORK_TUI_DARK_THEME"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Theme for a dark terminal",
+        "long_help": "Theme for a dark terminal\n\nUsed instead of `theme` when `theme` is `auto` and the terminal's background is dark. Same values as `theme`. Empty keeps `auto`.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
+      "tui.light_theme": {
+        "default": "",
+        "default_note": null,
+        "data_type": "string",
+        "value_type": {
+          "kind": "base",
+          "of": "string"
+        },
+        "env": "PITCHFORK_TUI_LIGHT_THEME",
+        "envs": [
+          "PITCHFORK_TUI_LIGHT_THEME"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Theme for a light terminal",
+        "long_help": "Theme for a light terminal\n\nUsed instead of `theme` when `theme` is `auto` and the terminal's background is light. Same values as `theme`. Empty keeps `auto`.\n\nThe background is queried when the TUI starts; if the terminal does not answer, `theme` is used.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "tui.message_duration": {
         "default": "3s",
         "default_note": null,
@@ -7594,6 +7658,38 @@
         "bindings": {},
         "help": "Number of stat samples to keep for graphs",
         "long_help": "Number of stat samples to keep for graphs\n\nHow many CPU/memory stat samples to keep for each daemon's graph. With the default refresh rate of 2s, 60 samples = ~2 minutes of history.\n\nIncrease for longer history in graphs, at the cost of more memory.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
+      "tui.theme": {
+        "default": "auto",
+        "default_note": null,
+        "data_type": "string",
+        "value_type": {
+          "kind": "base",
+          "of": "string"
+        },
+        "env": "PITCHFORK_TUI_THEME",
+        "envs": [
+          "PITCHFORK_TUI_THEME"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Color theme",
+        "long_help": "Color theme\n\n`auto` only uses the terminal's own palette, so it adapts to light and dark terminals. Other values are a built-in theme (`catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`, `catppuccin_mocha`) or a custom theme declared under `[themes.<name>]` in a config file.\n\n```toml\n[settings.tui]\ntheme = \"mine\"\n\n[themes.mine]\nbase = \"auto\"\nselection_bg = \"#ddd6fe\"\n```",
         "help_heading": null,
         "choices": [],
         "merge": "replace",

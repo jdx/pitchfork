@@ -115,6 +115,7 @@ lru = "0.19"
 derive_more = { version = "2", features = ["into", "display", "from", "deref", "as_ref"] }
 vte = { version = "0.15", default-features = false }
 demand = "2"
+terminal-colorsaurus = "1"
 
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"

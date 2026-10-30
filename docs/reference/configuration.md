@@ -1088,6 +1088,42 @@ named `default` appears first and supplies the **Start stack**, **Stop stack**,
 and **Restart stack** actions. Groups from user and system configs are excluded
 from the stack page.
 
+## TUI Themes
+
+The TUI colors come from `settings.tui.theme`. The default, `auto`, only uses
+the terminal's own palette, so it follows your terminal theme (light or dark).
+Built-in alternatives are `catppuccin_latte`, `catppuccin_frappe`,
+`catppuccin_macchiato` and `catppuccin_mocha`.
+
+To tweak or create a theme, declare it under `[themes.<name>]` in any config
+file and select it:
+
+```toml
+[settings.tui]
+theme = "mine"
+
+[themes.mine]
+base = "catppuccin_latte"  # optional, defaults to "auto"
+red = "#c00000"
+selection_bg = "bright_black"
+```
+
+To pick a theme from the terminal's background instead, keep `theme = "auto"`
+and set `light_theme` and/or `dark_theme`. The background is queried (OSC 11)
+when the TUI starts; if the terminal does not answer, `auto` is used:
+
+```toml
+[settings.tui]
+light_theme = "catppuccin_latte"
+dark_theme = "catppuccin_mocha"
+```
+
+A theme only lists the roles it changes from its `base`. Colors are `#rrggbb`,
+ANSI names (`red`, `bright_black`, …), `reset` (the terminal's own color) or a
+0–255 palette index. Roles: `fg`, `muted`, `faint`, `red`, `orange`, `green`,
+`yellow`, `cyan`, `dim_green`, and the backgrounds `bg` (whole screen, unset in `auto`), `selection_bg`, `marked_bg`,
+`match_current_bg`, `match_other_bg`, `overlay_bg`, `danger_bg`.
+
 ## Complete example
 
 Adapt commands, initialized database paths, and application endpoints to your project. The API in this example must read `PORT` from its environment.

@@ -1639,6 +1639,15 @@ config {
     prop "tui.tick_rate" type="duration" default="100ms" help="Event loop tick rate" long_help="Event loop tick rate\n\nHow often the TUI checks for keyboard input and other events. This affects input responsiveness.\n\nMost users won't need to change this. Lower values make the UI more responsive but use more CPU." {
         env "PITCHFORK_TUI_TICK_RATE"
     }
+    prop "tui.theme" type="string" default="auto" help="Color theme" long_help="Color theme\n\n`auto` only uses the terminal's own palette, so it adapts to light and dark terminals. Other values are a built-in theme (`catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`, `catppuccin_mocha`) or a custom theme declared under `[themes.<name>]` in a config file.\n\n```toml\n[settings.tui]\ntheme = \"mine\"\n\n[themes.mine]\nbase = \"auto\"\nselection_bg = \"#ddd6fe\"\n```" {
+        env "PITCHFORK_TUI_THEME"
+    }
+    prop "tui.light_theme" type="string" default="" help="Theme for a light terminal" long_help="Theme for a light terminal\n\nUsed instead of `theme` when `theme` is `auto` and the terminal's background is light. Same values as `theme`. Empty keeps `auto`.\n\nThe background is queried when the TUI starts; if the terminal does not answer, `theme` is used." {
+        env "PITCHFORK_TUI_LIGHT_THEME"
+    }
+    prop "tui.dark_theme" type="string" default="" help="Theme for a dark terminal" long_help="Theme for a dark terminal\n\nUsed instead of `theme` when `theme` is `auto` and the terminal's background is dark. Same values as `theme`. Empty keeps `auto`." {
+        env "PITCHFORK_TUI_DARK_THEME"
+    }
     prop "web.auto_start" type="bool" default=#false help="Automatically start web UI when supervisor starts" long_help="Automatically start web UI when supervisor starts\n\nWhen enabled, the web UI server will automatically start alongside the supervisor.\n\nBy default, this is disabled. You can also start the web UI manually with:\n```text\npitchfork supervisor start --web-port=3120\n```" {
         env "PITCHFORK_WEB_AUTO_START"
     }

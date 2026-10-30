@@ -925,6 +925,26 @@ This applies when daemon `watch_mode` is `poll`, or when `watch_mode = "auto"` f
 
 Lower values detect changes faster but use more CPU and I/O. `"100ms"` is useful for highly interactive workflows; `"500ms"` is a practical default for remote/networked filesystems.
 
+## `tui.dark_theme`
+
+- **Type:** `string`
+- **Set with:** `PITCHFORK_TUI_DARK_THEME`
+
+Theme for a dark terminal
+
+Used instead of `theme` when `theme` is `auto` and the terminal's background is dark. Same values as `theme`. Empty keeps `auto`.
+
+## `tui.light_theme`
+
+- **Type:** `string`
+- **Set with:** `PITCHFORK_TUI_LIGHT_THEME`
+
+Theme for a light terminal
+
+Used instead of `theme` when `theme` is `auto` and the terminal's background is light. Same values as `theme`. Empty keeps `auto`.
+
+The background is queried when the TUI starts; if the terminal does not answer, `theme` is used.
+
 ## `tui.message_duration`
 
 - **Type:** `duration`
@@ -960,6 +980,25 @@ Number of stat samples to keep for graphs
 How many CPU/memory stat samples to keep for each daemon's graph. With the default refresh rate of 2s, 60 samples = ~2 minutes of history.
 
 Increase for longer history in graphs, at the cost of more memory.
+
+## `tui.theme`
+
+- **Type:** `string`
+- **Default:** `auto`
+- **Set with:** `PITCHFORK_TUI_THEME`
+
+Color theme
+
+`auto` only uses the terminal's own palette, so it adapts to light and dark terminals. Other values are a built-in theme (`catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`, `catppuccin_mocha`) or a custom theme declared under `[themes.<name>]` in a config file.
+
+```toml
+[settings.tui]
+theme = "mine"
+
+[themes.mine]
+base = "auto"
+selection_bg = "#ddd6fe"
+```
 
 ## `tui.tick_rate`
 
