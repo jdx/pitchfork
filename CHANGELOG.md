@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.33.0](https://github.com/jdx/pitchfork/compare/v2.32.4...v2.33.0) - 2026-10-31
+
+### Added
+
+- *(tui)* add color themes that adapt to light and dark terminals ([#1082](https://github.com/jdx/pitchfork/pull/1082))
+
+### Fixed
+
+- *(supervisor)* fix race between port checks and spawns on Linux ([#1086](https://github.com/jdx/pitchfork/pull/1086))
+
+### Other
+
+- *(deps)* update rust crate usage_rs to v7.1.4 ([#1083](https://github.com/jdx/pitchfork/pull/1083))
+
 ## [2.32.4](https://github.com/jdx/pitchfork/compare/v2.32.3...v2.32.4) - 2026-10-28
 
 ### Fixed
