@@ -3592,8 +3592,13 @@ mod port_conflict_tests {
     use crate::error::PortError;
     use std::net::{IpAddr, SocketAddr};
 
+    /// Held by a test that forks continuously, and by any test whose sockets
+    /// a forked child must not keep after the test drops them.
+    static FORKS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn a_taken_port_is_reported_with_its_address_and_holder() {
+        let _forks = FORKS.lock().await;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -3639,6 +3644,53 @@ mod port_conflict_tests {
         let timeout = std::time::Duration::from_millis(200);
         assert!(std::net::TcpStream::connect_timeout(&addr, timeout).is_err());
         drop(copy);
+    }
+
+    /// While another thread forks, each child holds copies of the probe sockets
+    /// open at that moment until it execs. The copies must not make a free
+    /// port look taken. Where the forks land is up to the scheduler, so the
+    /// test repeats the check many times.
+    ///
+    /// Linux only: macOS refuses a bind to an address and port while a copy of
+    /// an earlier socket bound there is open, even when neither listens. This
+    /// test's back-to-back checks of one port would fail on such copies.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_free_port_stays_free_while_another_thread_forks() {
+        use crate::inherited_fds::CloseInheritedFds;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let _forks = FORKS.lock().await;
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let forker = std::thread::spawn({
+            let stop = stop.clone();
+            move || {
+                while !stop.load(Ordering::Relaxed) {
+                    // close_inherited_fds makes std fork and exec, as the
+                    // supervisor's spawns do, instead of using posix_spawn.
+                    std::process::Command::new("true")
+                        .close_inherited_fds()
+                        .status()
+                        .unwrap();
+                }
+            }
+        });
+        let mut conflicts = Vec::new();
+        for _ in 0..500 {
+            conflicts.extend(port_bind_conflict(port).await);
+        }
+        stop.store(true, Ordering::Relaxed);
+        forker.join().unwrap();
+        assert!(
+            conflicts.is_empty(),
+            "free port looked taken on {conflicts:?}"
+        );
     }
 
     fn ip(s: &str) -> IpAddr {
