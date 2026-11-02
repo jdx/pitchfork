@@ -1,0 +1,8 @@
+[checks]
+full = "mise run test"
+lint = "mise run lint"
+before_push = ["cargo clippy --all-targets --all-features -- -D warnings", "mise run render"]
+
+[checks.focused]
+nextest = "jouet test --cmd -- cargo nextest run NAME"
+bats = "git submodule update --init --recursive && mise run build && jouet test --cmd -- bats test/NAME.bats"
