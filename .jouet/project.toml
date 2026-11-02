@@ -5,4 +5,4 @@ before_push = ["cargo clippy --all-targets --all-features -- -D warnings", "mise
 
 [checks.focused]
 nextest = "jouet test --cmd -- cargo nextest run NAME"
-bats = "mise run build && jouet test --cmd -- bats test/NAME.bats"
+bats = "git submodule update --init --recursive && mise run build && jouet test --cmd -- bats test/NAME.bats"
