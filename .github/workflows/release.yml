@@ -49,7 +49,7 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
           cache: false
       - name: Build UI assets
@@ -65,7 +65,7 @@ jobs:
           p12-password: ${{ secrets.CERTIFICATES_P12_PASS }}
       - name: Install cross
         if: matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cross
       - name: Setup Rust target
@@ -279,7 +279,7 @@ jobs:
           zsh -n pitchfork.zsh
           fish --no-execute pitchfork.fish
           gh release upload "$TAG" pitchfork.usage.kdl pitchfork.bash pitchfork.zsh pitchfork.fish --repo "$REPO" --clobber
-      - uses: jdx/packslip@2187c31f8317b8548833baf60cfe93db1f42431d # v1.9.0
+      - uses: jdx/packslip@3a4afb16b29d3ac639fcd35cbe99124184f71859 # v1.11.1
         with:
           tag: ${{ inputs.tag }}
           commit: ${{ steps.source.outputs.commit }}
