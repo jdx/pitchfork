@@ -42,7 +42,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
           cache: false
       - name: Build UI assets
@@ -56,7 +56,7 @@ jobs:
       # long-lived registry token to leak or rotate.
       - name: Authenticate to crates.io
         id: crates-io-auth
-        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       # release-plz shells out to `cargo package` inside temp checkouts of the
       # commits it diffs against the published crate. On PATH `cargo` is mise's
       # command wrapper, which mise.toml routes to mbx — and in those checkouts
@@ -68,7 +68,7 @@ jobs:
         run: dirname "$(mise which cargo)" >> "$GITHUB_PATH"
       - name: Run release-plz
         id: release-plz
-        uses: release-plz/action@6caa8d34f74d82b0dc76a18edd1cc3d6801c9baf # v0.5.143
+        uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5.146
         with:
           command: release
         env:
@@ -112,7 +112,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
           cache: false
       - run: communique generate "$TAG" --github-release
@@ -179,7 +179,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install mise
-        uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+        uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
           cache: false
       - name: Build UI assets
@@ -199,7 +199,7 @@ jobs:
         run: dirname "$(mise which cargo)" >> "$GITHUB_PATH"
       - name: Run release-plz
         id: release-plz
-        uses: release-plz/action@6caa8d34f74d82b0dc76a18edd1cc3d6801c9baf # v0.5.143
+        uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5.146
         with:
           command: release-pr
         env:
