@@ -18,17 +18,15 @@ env:
 
 jobs:
   build:
-    # `jouet cost push` writes refs/notes/jouet-cost on pushes to main.
     permissions:
-      contents: write
+      contents: read
     runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64;overrides.cache-tag=cache' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
-          # Only main keeps the token, for `jouet cost push` below.
-          persist-credentials: ${{ inputs.trusted && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          persist-credentials: false
       - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
           cache: false
@@ -55,13 +53,22 @@ jobs:
           fi
       - run: cargo nextest run
         if: ${{ !(inputs.trusted && github.event_name == 'push' && github.ref == 'refs/heads/main') }}
-      # On main the same run goes through jouet so its timing is recorded, and
-      # `jouet cost push` shares the timings with agents.
-      - name: cargo nextest run with jouet and share timings
+      # On main the same run goes through jouet so its timing is recorded. The
+      # `cost` job in ci.yml pushes the timings, so this job needs no write token.
+      # `--display human` streams the output, and the baseline rerun is off so a
+      # failure stays a failure.
+      - name: cargo nextest run with jouet
         if: ${{ inputs.trusted && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          JOUET_TEST_BASELINE: "off"
         run: |
-          jouet test --cmd -- cargo nextest run
-          jouet cost push
+          jouet test --display human --cmd -- cargo nextest run
+          git bundle create "$RUNNER_TEMP/jouet-cost.bundle" refs/notes/jouet-cost
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ inputs.trusted && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        with:
+          name: jouet-cost
+          path: ${{ runner.temp }}/jouet-cost.bundle
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pitchfork-debug
