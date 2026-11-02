@@ -63,7 +63,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls-native-certs",
     "rustls-no-provider",
 ] }
-rusqlite = { version = "0.40", features = ["bundled", "chrono", "functions"] }
+rusqlite = { version = "0.41", features = ["bundled", "chrono", "functions"] }
 rev_lines = "0.3"
 rust-embed = { version = "8", features = ["axum"] }
 axum = { version = "0.8" }
@@ -126,7 +126,7 @@ nix = { version = "0.31", features = ["signal", "process", "user", "net", "ioctl
 plist = "1"
 
 [target.'cfg(windows)'.dependencies]
-windows-registry = "0.6"
+windows-registry = "0.100"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Globalization",
