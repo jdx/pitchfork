@@ -116,6 +116,7 @@ cargo-binstall = "latest"
 communique = { version = "latest", minimum_release_age = "0s" }
 hk = { version = "latest", minimum_release_age = "0s" }
 jactionlint = { version = "latest", minimum_release_age = "0s" }
+jouet = "0.0.3"
 node = "24"
 pkl = "latest"
 # Parallel runner for bats (see test:bats); replaces GNU parallel.
