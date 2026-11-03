@@ -350,44 +350,51 @@ url = "https://github.com/apple/pkl/releases/download/0.32.2/pkl-windows-amd64.e
 url_api = "https://api.github.com/repos/apple/pkl/releases/assets/663854370"
 
 [[tools.rush]]
-version = "0.11.0"
+version = "0.11.1"
 backend = "aqua:shenwei356/rush"
 specifiers = ["latest"]
 
 [tools.rush."platforms.linux-arm64"]
-checksum = "sha256:466931db70732296b98bfe1a1aec4a6a79c226e4aa5bc690283bb39560e708de"
-url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426242"
+checksum = "sha256:5008abfafa8c2e7c69c0f8714c06ebd08899b0a082e95db14bae50495f695efc"
+checksum_source = "mise-versions"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.1/rush_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/700065148"
 
 [tools.rush."platforms.linux-arm64-musl"]
-checksum = "sha256:466931db70732296b98bfe1a1aec4a6a79c226e4aa5bc690283bb39560e708de"
-url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426242"
+checksum = "sha256:5008abfafa8c2e7c69c0f8714c06ebd08899b0a082e95db14bae50495f695efc"
+checksum_source = "mise-versions"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.1/rush_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/700065148"
 
 [tools.rush."platforms.linux-x64"]
-checksum = "sha256:7a22bbc7122acd5bd23e2dfde49f84bb856944a1860057bc89921b3dce45d056"
-url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426098"
+checksum = "sha256:1a08baa9f2751c8581f0655fe1aa40a15595ffe70d5f3377d113060329c58fc4"
+checksum_source = "mise-versions"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.1/rush_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/700065006"
 
 [tools.rush."platforms.linux-x64-musl"]
-checksum = "sha256:7a22bbc7122acd5bd23e2dfde49f84bb856944a1860057bc89921b3dce45d056"
-url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426098"
+checksum = "sha256:1a08baa9f2751c8581f0655fe1aa40a15595ffe70d5f3377d113060329c58fc4"
+checksum_source = "mise-versions"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.1/rush_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/700065006"
 
 [tools.rush."platforms.macos-arm64"]
-checksum = "sha256:87f811032b727806158111856b77be076d2c923cc013de20d744405eb4dfe455"
-url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579424349"
+checksum = "sha256:bbcbf882da03ab06f17f6c5c8ee29dc50cd9515937dc8373d5b6cc25de19dcd9"
+checksum_source = "mise-versions"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.1/rush_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/700064344"
 
 [tools.rush."platforms.macos-x64"]
-checksum = "sha256:3d5c24ea9947c84b19ef1f0992470e255e296efbbda5fad0ccf5cc870d088433"
-url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579420523"
+checksum = "sha256:3e5f6f320fbbdd67a900705ed1486d9aecee6db7bc16d0eaf61b686b91b8f524"
+checksum_source = "mise-versions"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.1/rush_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/700063910"
 
 [tools.rush."platforms.windows-x64"]
-checksum = "sha256:47dd38a1d527c8e00714623351379dfa2f617cf9f8f399586233c5ca29482a45"
-url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_windows_amd64.exe.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426784"
+checksum = "sha256:4b81911ebf7f4b7343fbe099c2f07947c7e75047342ad8ff207a952c0bb48656"
+checksum_source = "mise-versions"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.1/rush_windows_amd64.exe.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/700065723"
 
 [[tools.rust]]
 version = "stable"
