@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.33.1](https://github.com/jdx/pitchfork/compare/v2.33.0...v2.33.1) - 2026-11-03
+
+### Fixed
+
+- *(deps)* update rust crates ([#1090](https://github.com/jdx/pitchfork/pull/1090))
+
+### Other
+
+- *(deps)* lock file maintenance ([#1098](https://github.com/jdx/pitchfork/pull/1098))
+- *(deps)* lock file maintenance ([#1094](https://github.com/jdx/pitchfork/pull/1094))
+- *(deps)* lock file maintenance ([#1093](https://github.com/jdx/pitchfork/pull/1093))
+- *(deps)* lock file maintenance ([#1092](https://github.com/jdx/pitchfork/pull/1092))
+- *(deps)* update rust crate usage_rs to v7.1.5 ([#1087](https://github.com/jdx/pitchfork/pull/1087))
+
 ## [2.33.0](https://github.com/jdx/pitchfork/compare/v2.32.4...v2.33.0) - 2026-10-31
 
 ### Added
