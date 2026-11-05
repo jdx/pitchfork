@@ -1845,6 +1845,20 @@
             "string",
             "null"
           ]
+        },
+        "tls_cert": {
+          "description": "Path to TLS certificate file (PEM format) for serving the web UI over HTTPS",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_key": {
+          "description": "Path to TLS private key file (PEM format) matching `web.tls_cert`",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

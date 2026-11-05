@@ -7961,6 +7961,70 @@
         "examples": [],
         "default_list": [],
         "extensions": []
+      },
+      "web.tls_cert": {
+        "default": "",
+        "default_note": null,
+        "data_type": "string",
+        "value_type": {
+          "kind": "base",
+          "of": "string"
+        },
+        "env": "PITCHFORK_WEB_TLS_CERT",
+        "envs": [
+          "PITCHFORK_WEB_TLS_CERT"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Path to TLS certificate file (PEM format) for serving the web UI over HTTPS",
+        "long_help": "Path to TLS certificate file (PEM format) for serving the web UI over HTTPS\n\nWhen both `web.tls_cert` and `web.tls_key` are set, the web UI listener speaks HTTPS instead of plain HTTP and the URL reported by `pitchfork supervisor status` uses the `https://` scheme. The file may hold the full chain (leaf first). Setting only one of the pair is an error and the web UI does not start.\n\nThe certificate must cover the hostname clients use to reach the web UI, and clients must trust its issuer. Use this when exposing the web UI on a non-loopback `web.bind_address`, so the API token is never sent in clear text.\n\n**Example:**\n```toml\n[settings.web]\nbind_address = \"0.0.0.0\"\ntls_cert = \"/etc/pitchfork/web.crt\"\ntls_key = \"/etc/pitchfork/web.key\"\n```",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
+      "web.tls_key": {
+        "default": "",
+        "default_note": null,
+        "data_type": "string",
+        "value_type": {
+          "kind": "base",
+          "of": "string"
+        },
+        "env": "PITCHFORK_WEB_TLS_KEY",
+        "envs": [
+          "PITCHFORK_WEB_TLS_KEY"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Path to TLS private key file (PEM format) matching `web.tls_cert`",
+        "long_help": "Path to TLS private key file (PEM format) matching `web.tls_cert`\n\nPKCS#8, PKCS#1 (RSA) and SEC1 (EC) keys are accepted. The pair is checked when the web UI starts, so a key that does not belong to the certificate is reported once instead of failing every handshake.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
       }
     },
     "sources": {},

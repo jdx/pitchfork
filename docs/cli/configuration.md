@@ -1095,3 +1095,31 @@ For example, with `bind_port = 3120` and `port_attempts = 10`, it will try ports
 Server-Sent Events poll interval for log streaming
 
 How often the web UI checks for new log lines when streaming logs. Lower values provide more real-time updates but use more resources.
+
+## `web.tls_cert`
+
+- **Type:** `string`
+- **Set with:** `PITCHFORK_WEB_TLS_CERT`
+
+Path to TLS certificate file (PEM format) for serving the web UI over HTTPS
+
+When both `web.tls_cert` and `web.tls_key` are set, the web UI listener speaks HTTPS instead of plain HTTP and the URL reported by `pitchfork supervisor status` uses the `https://` scheme. The file may hold the full chain (leaf first). Setting only one of the pair is an error and the web UI does not start.
+
+The certificate must cover the hostname clients use to reach the web UI, and clients must trust its issuer. Use this when exposing the web UI on a non-loopback `web.bind_address`, so the API token is never sent in clear text.
+
+**Example:**
+```toml
+[settings.web]
+bind_address = "0.0.0.0"
+tls_cert = "/etc/pitchfork/web.crt"
+tls_key = "/etc/pitchfork/web.key"
+```
+
+## `web.tls_key`
+
+- **Type:** `string`
+- **Set with:** `PITCHFORK_WEB_TLS_KEY`
+
+Path to TLS private key file (PEM format) matching `web.tls_cert`
+
+PKCS#8, PKCS#1 (RSA) and SEC1 (EC) keys are accepted. The pair is checked when the web UI starts, so a key that does not belong to the certificate is reported once instead of failing every handshake.
