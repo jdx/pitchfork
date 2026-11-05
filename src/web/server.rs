@@ -146,7 +146,7 @@ fn tls_pair_problem(cert: &str, key: &str) -> Option<String> {
 ///
 /// The key is checked against the certificate here, so a mismatch is reported
 /// once at startup instead of failing every handshake.
-fn web_tls_config(cert: &str, key: &str) -> Result<Option<Arc<rustls::ServerConfig>>> {
+async fn web_tls_config(cert: &str, key: &str) -> Result<Option<Arc<rustls::ServerConfig>>> {
     use rustls::pki_types::CertificateDer;
     use rustls_pemfile::{certs, private_key};
 
@@ -159,9 +159,11 @@ fn web_tls_config(cert: &str, key: &str) -> Result<Option<Arc<rustls::ServerConf
     let cert_path = Path::new(cert);
     let key_path = Path::new(key);
 
-    let cert_pem = std::fs::read(cert_path)
+    let cert_pem = tokio::fs::read(cert_path)
+        .await
         .map_err(|e| miette::miette!("Failed to read web.tls_cert {}: {e}", cert_path.display()))?;
-    let key_pem = std::fs::read(key_path)
+    let key_pem = tokio::fs::read(key_path)
+        .await
         .map_err(|e| miette::miette!("Failed to read web.tls_key {}: {e}", key_path.display()))?;
 
     let cert_ders: Vec<CertificateDer<'static>> = certs(&mut cert_pem.as_slice())
@@ -320,7 +322,7 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
 
     // Resolve TLS before binding, so a bad certificate is reported without
     // having claimed the port first.
-    let tls_config = web_tls_config(&s.web.tls_cert, &s.web.tls_key)?;
+    let tls_config = web_tls_config(&s.web.tls_cert, &s.web.tls_key).await?;
     let scheme = if tls_config.is_some() {
         "https"
     } else {
@@ -353,6 +355,9 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
         std::net::IpAddr::V4(ip) => ip.to_string(),
     };
     let _ = super::WEB_URL.set(format!("{scheme}://{url_host}:{actual_port}{base_path}"));
+    if tls_config.is_some() {
+        let _ = super::WEB_HTTPS_ORIGIN.set(format!("https://{url_host}:{actual_port}"));
+    }
 
     info!("Web UI listening on {scheme}://{actual_addr}");
 
@@ -413,25 +418,26 @@ mod tests {
         assert!(tls_pair_problem("", "/k.pem").is_some());
     }
 
-    #[test]
-    fn no_tls_config_when_unset() {
-        assert!(web_tls_config("", "").unwrap().is_none());
+    #[tokio::test]
+    async fn no_tls_config_when_unset() {
+        assert!(web_tls_config("", "").await.unwrap().is_none());
     }
 
-    #[test]
-    fn half_configured_pair_is_an_error() {
-        let err = web_tls_config("/c.pem", "").unwrap_err().to_string();
+    #[tokio::test]
+    async fn half_configured_pair_is_an_error() {
+        let err = web_tls_config("/c.pem", "").await.unwrap_err().to_string();
         assert!(err.contains("web.tls_key is empty"), "{err}");
-        let err = web_tls_config("", "/k.pem").unwrap_err().to_string();
+        let err = web_tls_config("", "/k.pem").await.unwrap_err().to_string();
         assert!(err.contains("web.tls_cert is empty"), "{err}");
     }
 
-    #[test]
-    fn missing_cert_file_is_an_error() {
+    #[tokio::test]
+    async fn missing_cert_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let cert = dir.path().join("missing.crt");
         let key = dir.path().join("missing.key");
         let err = web_tls_config(cert.to_str().unwrap(), key.to_str().unwrap())
+            .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("Failed to read web.tls_cert"), "{err}");
@@ -456,47 +462,69 @@ mod tests {
     }
 
     #[cfg(feature = "proxy-tls")]
-    #[test]
-    fn mismatched_key_is_reported_at_load() {
+    #[tokio::test]
+    async fn mismatched_key_is_reported_at_load() {
         let dir = tempfile::tempdir().unwrap();
         let (cert_a, _, _) = write_self_signed(dir.path(), "a");
         let (_, key_b, _) = write_self_signed(dir.path(), "b");
         let err = web_tls_config(cert_a.to_str().unwrap(), key_b.to_str().unwrap())
+            .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("does not match web.tls_cert"), "{err}");
     }
 
+    /// A `/ping` router behind the TLS accept loop, on a fresh self-signed
+    /// certificate. Returns the address, the certificate PEM a client must
+    /// trust, and the server task.
+    #[cfg(feature = "proxy-tls")]
+    async fn start_tls_server(
+        dir: &Path,
+    ) -> (SocketAddr, String, tokio::task::JoinHandle<Result<()>>) {
+        let (cert_path, key_path, cert_pem) = write_self_signed(dir, "web");
+        let tls_config = web_tls_config(cert_path.to_str().unwrap(), key_path.to_str().unwrap())
+            .await
+            .unwrap()
+            .expect("configured pair yields a TLS config");
+        let app = Router::new().route("/ping", get(|| async { "pong" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_tls(listener, app, tls_config));
+        (addr, cert_pem, server)
+    }
+
+    /// A TLS connection to `addr` that trusts exactly `cert_pem`, offering
+    /// `alpn` (none when empty).
+    #[cfg(feature = "proxy-tls")]
+    async fn connect_tls(
+        addr: SocketAddr,
+        cert_pem: &str,
+        alpn: Vec<Vec<u8>>,
+    ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in rustls_pemfile::certs(&mut cert_pem.as_bytes()) {
+            roots.add(cert.unwrap()).unwrap();
+        }
+        let mut client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        client_config.alpn_protocols = alpn;
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
+        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        connector.connect(server_name, tcp).await.unwrap()
+    }
+
     /// End to end: the TLS accept loop terminates a real handshake and hands
-    /// the request to the router.
+    /// an HTTP/1.1 request to the router.
     #[cfg(feature = "proxy-tls")]
     #[tokio::test]
     async fn serves_router_over_tls() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let dir = tempfile::tempdir().unwrap();
-        let (cert_path, key_path, cert_pem) = write_self_signed(dir.path(), "web");
-        let tls_config = web_tls_config(cert_path.to_str().unwrap(), key_path.to_str().unwrap())
-            .unwrap()
-            .expect("configured pair yields a TLS config");
-
-        let app = Router::new().route("/ping", get(|| async { "pong" }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve_tls(listener, app, tls_config));
-
-        // A client that trusts exactly the certificate the server was given.
-        let mut roots = rustls::RootCertStore::empty();
-        for cert in rustls_pemfile::certs(&mut cert_pem.as_bytes()) {
-            roots.add(cert.unwrap()).unwrap();
-        }
-        let client_config = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
-        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
-        let mut tls = connector.connect(server_name, tcp).await.unwrap();
+        let (addr, cert_pem, server) = start_tls_server(dir.path()).await;
+        let mut tls = connect_tls(addr, &cert_pem, Vec::new()).await;
 
         tls.write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             .await
@@ -506,6 +534,36 @@ mod tests {
         let response = String::from_utf8_lossy(&response);
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.ends_with("pong"), "{response}");
+
+        server.abort();
+    }
+
+    /// A client offering only `h2` gets HTTP/2 negotiated through ALPN and
+    /// served, so the dashboard can multiplex over one connection.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn negotiates_http2_over_tls() {
+        use http_body_util::{BodyExt, Empty};
+        use hyper_util::rt::{TokioExecutor, TokioIo};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (addr, cert_pem, server) = start_tls_server(dir.path()).await;
+        let tls = connect_tls(addr, &cert_pem, vec![b"h2".to_vec()]).await;
+        assert_eq!(tls.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()));
+
+        let (mut sender, conn) =
+            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(tls))
+                .await
+                .unwrap();
+        tokio::spawn(conn);
+        let req = hyper::Request::builder()
+            .uri("https://localhost/ping")
+            .body(Empty::<hyper::body::Bytes>::new())
+            .unwrap();
+        let res = sender.send_request(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"pong");
 
         server.abort();
     }

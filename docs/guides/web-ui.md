@@ -132,7 +132,9 @@ one of the pair, or a key that does not belong to the certificate, is reported
 when the supervisor starts and the web UI does not come up. The certificate must
 cover the hostname you open in the browser, and the browser must trust its
 issuer. Plain HTTP requests on the HTTPS port are rejected at the TLS handshake,
-not redirected.
+not redirected. When the [reverse proxy](/guides/port-management) is enabled,
+requests for `pitchfork.<tld>` redirect to the HTTPS URL instead of being
+forwarded, because the proxy only speaks plain HTTP to its backends.
 
 The standalone API server (`[settings.api]`) is not affected by these settings
 and still serves plain HTTP.
