@@ -149,9 +149,7 @@ pub async fn run() -> Result<()> {
         Commands::Cd(cd) => cd.run().await,
         Commands::Clean(clean) => clean.run().await,
         Commands::Daemons(daemons) => daemons.run().await,
-        Commands::Completion(completion) => completion
-            .run("pitchfork", &mut std::io::stdout())
-            .into_diagnostic(),
+        Commands::Completion(completion) => completion::run(completion).await,
         Commands::Config(config) => config.run().await,
         Commands::Disable(disable) => disable.run().await,
         Commands::Enable(enable) => enable.run().await,

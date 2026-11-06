@@ -1,3 +1,25 @@
+use crate::Result;
+use miette::IntoDiagnostic as _;
+use tokio::io::AsyncWriteExt as _;
+
+/// Run the shared `completion` command without blocking a Tokio worker.
+///
+/// `Completion::run` is synchronous and `--install` touches the filesystem, so it runs on the
+/// blocking pool into a buffer, and the buffer is written to stdout asynchronously.
+pub async fn run(completion: usage_rs::completion::Completion) -> Result<()> {
+    let output = tokio::task::spawn_blocking(move || {
+        let mut buffer = Vec::new();
+        completion.run("pitchfork", &mut buffer).map(|()| buffer)
+    })
+    .await
+    .into_diagnostic()?
+    .into_diagnostic()?;
+    let mut stdout = tokio::io::stdout();
+    stdout.write_all(&output).await.into_diagnostic()?;
+    stdout.flush().await.into_diagnostic()?;
+    Ok(())
+}
+
 fn complete_daemon_ids(
     ctx: usage_rs::spec::CompleteCtx<'_>,
 ) -> usage_rs::complete::CompletionFuture<'_> {
