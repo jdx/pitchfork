@@ -111,6 +111,34 @@ auto_start = true
 base_path = "ps"
 ```
 
+### HTTPS
+
+The web UI serves plain HTTP by default. To serve it over HTTPS, point
+`web.tls_cert` and `web.tls_key` at a PEM certificate and its private key:
+
+```toml
+[settings.web]
+auto_start = true
+bind_address = "0.0.0.0"
+tls_cert = "/etc/pitchfork/web.crt"   # may include the chain, leaf first
+tls_key = "/etc/pitchfork/web.key"    # PKCS#8, PKCS#1 or SEC1
+```
+
+Or via environment variables `PITCHFORK_WEB_TLS_CERT` and `PITCHFORK_WEB_TLS_KEY`.
+
+With both set, the listener speaks HTTPS (HTTP/2 and HTTP/1.1 are negotiated via
+ALPN), and `pitchfork supervisor status` reports an `https://` URL. Setting only
+one of the pair, or a key that does not belong to the certificate, is reported
+when the supervisor starts and the web UI does not come up. The certificate must
+cover the hostname you open in the browser, and the browser must trust its
+issuer. Plain HTTP requests on the HTTPS port are rejected at the TLS handshake,
+not redirected. When the [reverse proxy](/guides/port-management) is enabled,
+requests for `pitchfork.<tld>` redirect to the HTTPS URL instead of being
+forwarded, because the proxy only speaks plain HTTP to its backends.
+
+The standalone API server (`[settings.api]`) is not affected by these settings
+and still serves plain HTTP.
+
 ## Standalone API Server
 
 By default, the REST API is bundled with the web UI on the same port. You can run the API on a dedicated port separate from the web UI:
@@ -128,11 +156,12 @@ When `api.auto_start = true` and a valid `api.bind_port` are set, the API endpoi
 ## Authentication
 
 The API uses token-based authentication when binding to non-loopback addresses.
-The web UI and standalone API serve plain HTTP: the token does not encrypt the
-connection. Keep their listeners on loopback, or use an HTTPS reverse proxy on
-the same host with a loopback HTTP backend for remote access. Sending `X-Pitchfork-Token`
-directly over a network via HTTP lets anyone who can observe the traffic
-capture and reuse the token.
+The token does not encrypt the connection: sending `X-Pitchfork-Token` over plain
+HTTP across a network lets anyone who can observe the traffic capture and reuse
+the token. For remote access, either serve the web UI [over HTTPS](#https) with
+`web.tls_cert` / `web.tls_key`, or keep the listener on loopback behind an HTTPS
+reverse proxy on the same host. The standalone API server always serves plain
+HTTP, so it needs the reverse proxy approach.
 
 - **Loopback only** (`127.0.0.1`, `::1`): No token is required by default. If you configure a token, it is enforced for local requests too.
 - **Non-loopback** (e.g., `0.0.0.0`, LAN IP): If no token is configured, a random 64-character hex token is auto-generated at startup. The generated token is printed to stderr and logged.
@@ -149,8 +178,8 @@ The proxy must forward `X-Pitchfork-Token` unchanged to the loopback API, which
 validates it. HTTPS protects the client-to-proxy connection; the HTTP hop to
 `127.0.0.1` stays on the same host. If the proxy runs on another host, use an
 authenticated encrypted tunnel to the API host instead of forwarding the
-token over a plain HTTP network connection. Pitchfork's API listener does not
-support TLS directly.
+token over a plain HTTP network connection. Pitchfork's standalone API listener
+does not support TLS directly; only the web UI listener does.
 
 Include the token in every request when one is configured. This example assumes
 you have configured an HTTPS reverse proxy at `pitchfork.example.com`:

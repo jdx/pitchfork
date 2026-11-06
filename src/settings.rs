@@ -1221,6 +1221,37 @@ pub struct SettingsWeb {
         ty = "duration"
     )]
     pub sse_poll_interval: String,
+
+    /// Path to TLS certificate file (PEM format) for serving the web UI over HTTPS
+    ///
+    /// When both `web.tls_cert` and `web.tls_key` are set, the web UI listener
+    /// speaks HTTPS instead of plain HTTP and the URL reported by
+    /// `pitchfork supervisor status` uses the `https://` scheme. The file may
+    /// hold the full chain (leaf first). Setting only one of the pair is an
+    /// error and the web UI does not start.
+    ///
+    /// The certificate must cover the hostname clients use to reach the web
+    /// UI, and clients must trust its issuer. Use this when exposing the web
+    /// UI on a non-loopback `web.bind_address`, so the API token is never sent
+    /// in clear text.
+    ///
+    /// **Example:**
+    /// ```toml
+    /// [settings.web]
+    /// bind_address = "0.0.0.0"
+    /// tls_cert = "/etc/pitchfork/web.crt"
+    /// tls_key = "/etc/pitchfork/web.key"
+    /// ```
+    #[usage(env = "PITCHFORK_WEB_TLS_CERT", default = "")]
+    pub tls_cert: String,
+
+    /// Path to TLS private key file (PEM format) matching `web.tls_cert`
+    ///
+    /// PKCS#8, PKCS#1 (RSA) and SEC1 (EC) keys are accepted. The pair is
+    /// checked when the web UI starts, so a key that does not belong to the
+    /// certificate is reported once instead of failing every handshake.
+    #[usage(env = "PITCHFORK_WEB_TLS_KEY", default = "")]
+    pub tls_key: String,
 }
 
 /// Every setting pitchfork has.
@@ -2151,6 +2182,10 @@ settings_partial! {
         port_attempts: i64,
         /// Server-Sent Events poll interval for log streaming
         sse_poll_interval: String,
+        /// Path to TLS certificate file (PEM format) for serving the web UI over HTTPS
+        tls_cert: String,
+        /// Path to TLS private key file (PEM format) matching `web.tls_cert`
+        tls_key: String,
     }
 }
 
@@ -2484,8 +2519,11 @@ mod tests {
             .map(|meta| meta.key)
             .collect();
         // 75 before either change, plus `supervisor.oneshot_timeout` from main,
-        // `proxy.dns` / `proxy.dns_port`, `proxy.idle_timeout`, `boot.executable`, `tui.theme`, `tui.light_theme` and `tui.dark_theme`.
-        assert_eq!(keys.len(), 83, "{keys:?}");
+        // `proxy.dns` / `proxy.dns_port`, `proxy.idle_timeout`, `boot.executable`, `tui.theme`, `tui.light_theme`, `tui.dark_theme`,
+        // and `web.tls_cert` / `web.tls_key`.
+        assert_eq!(keys.len(), 85, "{keys:?}");
+        assert!(keys.contains(&"web.tls_cert"));
+        assert!(keys.contains(&"web.tls_key"));
         assert!(keys.contains(&"boot.executable"));
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"supervisor.oneshot_timeout"));

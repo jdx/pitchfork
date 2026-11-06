@@ -2993,6 +2993,17 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     // Intercept "pitchfork.<tld>" — route to the built-in web UI
     let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
         if subdomain.eq_ignore_ascii_case("pitchfork") {
+            // With `web.tls_cert` set the web UI listener terminates TLS
+            // itself, and the proxy only speaks plain HTTP to backends. Send
+            // the browser to the HTTPS URL rather than fail the handshake.
+            if let Some(origin) = crate::web::https_origin() {
+                let path = req
+                    .uri()
+                    .path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or("/");
+                return page_redirect_response(&origin, path);
+            }
             crate::web::port()
         } else {
             None

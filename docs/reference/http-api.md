@@ -11,13 +11,16 @@ See [authentication](/guides/web-ui#authentication) when using a non-loopback ad
 The [API JSON Schema](/api-schema.json) describes the response types.
 
 ::: warning Encrypt remote API access
-The web UI and standalone API listeners serve plain HTTP. Direct non-loopback
-requests send `X-Pitchfork-Token` unencrypted, allowing anyone who can observe
-that traffic to capture the token and reuse it to control the supervisor.
-Keep the listener bound to loopback (`127.0.0.1` or `::1`). For remote access,
-place it behind an HTTPS reverse proxy on the same host and keep the HTTP
-backend on loopback. See the [proxy authentication guidance](/guides/web-ui#authentication)
-for token forwarding and proxies on another host.
+By default the web UI and standalone API listeners serve plain HTTP. Direct
+non-loopback requests send `X-Pitchfork-Token` unencrypted, allowing anyone who
+can observe that traffic to capture the token and reuse it to control the
+supervisor. Keep the listener bound to loopback (`127.0.0.1` or `::1`). For
+remote access, either configure [`web.tls_cert` and `web.tls_key`](/guides/web-ui#https)
+so the web UI port serves HTTPS, or place the listener behind an HTTPS reverse
+proxy on the same host and keep the HTTP backend on loopback. The standalone
+API port does not support TLS. See the
+[proxy authentication guidance](/guides/web-ui#authentication) for token
+forwarding and proxies on another host.
 :::
 
 The following REST endpoints are available on the web UI port (or the dedicated API port if configured). All endpoints accept and return JSON unless otherwise noted.

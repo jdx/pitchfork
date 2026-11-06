@@ -22,6 +22,17 @@ pub fn url() -> Option<String> {
     WEB_URL.get().cloned()
 }
 
+/// Origin (`https://host:port`, no path prefix) of the web UI when it
+/// terminates TLS itself; `None` while it serves plain HTTP.
+///
+/// The reverse proxy only speaks plain HTTP to its backends, so when this is
+/// set it redirects `pitchfork.<tld>` here instead of forwarding to the port.
+static WEB_HTTPS_ORIGIN: OnceLock<String> = OnceLock::new();
+
+pub fn https_origin() -> Option<String> {
+    WEB_HTTPS_ORIGIN.get().cloned()
+}
+
 pub(crate) fn normalize_base_path(path: Option<&str>) -> crate::Result<String> {
     match path {
         None => Ok(String::new()),
