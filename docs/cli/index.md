@@ -20,7 +20,7 @@
 - [`pitchfork daemons [--json] [SUBCOMMAND]`](/cli/daemons.md)
 - [`pitchfork daemons add [FLAGS] <ID> [ARGS]…`](/cli/daemons/add.md)
 - [`pitchfork daemons remove [FLAGS] <ID>`](/cli/daemons/remove.md)
-- [`pitchfork completion <SHELL>`](/cli/completion.md)
+- [`pitchfork completion [--install] [--force] <SHELL>`](/cli/completion.md)
 - [`pitchfork config [--json] [SUBCOMMAND]`](/cli/config.md)
 - [`pitchfork config add [FLAGS] <FILE>`](/cli/config/add.md)
 - [`pitchfork config remove <FILE>`](/cli/config/remove.md)

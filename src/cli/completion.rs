@@ -2,65 +2,22 @@ use crate::Result;
 use miette::IntoDiagnostic as _;
 use tokio::io::AsyncWriteExt as _;
 
-#[derive(Clone, Debug, usage_rs::ValueEnum)]
-enum Shell {
-    Bash,
-    Zsh,
-    Fish,
-}
-
-impl From<Shell> for usage_rs::complete::Shell {
-    fn from(shell: Shell) -> Self {
-        match shell {
-            Shell::Bash => Self::Bash,
-            Shell::Zsh => Self::Zsh,
-            Shell::Fish => Self::Fish,
-        }
-    }
-}
-
-/// Generates shell completion scripts
-#[derive(Debug, usage_rs::Args)]
-#[usage(
-    verbatim_doc_comment,
-    long_about = "\
-Generates shell completion scripts
-
-Creates self-contained tab-completion scripts for your shell.
-
-Supported shells: bash, zsh, fish
-
-Installation:
-
-    bash:
-      mkdir -p ~/.local/share/bash-completion/completions
-      pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork
-
-    zsh:
-      mkdir -p ~/.zfunc
-      pitchfork completion zsh > ~/.zfunc/_pitchfork
-
-    fish:
-      mkdir -p ~/.config/fish/completions
-      pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish"
-)]
-pub struct Completion {
-    /// Shell to generate completions for (bash, zsh, fish)
-    #[usage(value_enum)]
-    shell: Shell,
-}
-
-impl Completion {
-    pub async fn run(&self) -> Result<()> {
-        let rendered = app().completion_script(self.shell.clone().into());
-        let mut stdout = tokio::io::stdout();
-        stdout
-            .write_all(rendered.as_bytes())
-            .await
-            .into_diagnostic()?;
-        stdout.flush().await.into_diagnostic()?;
-        Ok(())
-    }
+/// Run the shared `completion` command without blocking a Tokio worker.
+///
+/// `Completion::run` is synchronous and `--install` touches the filesystem, so it runs on the
+/// blocking pool into a buffer, and the buffer is written to stdout asynchronously.
+pub async fn run(completion: usage_rs::completion::Completion) -> Result<()> {
+    let output = tokio::task::spawn_blocking(move || {
+        let mut buffer = Vec::new();
+        completion.run("pitchfork", &mut buffer).map(|()| buffer)
+    })
+    .await
+    .into_diagnostic()?
+    .into_diagnostic()?;
+    let mut stdout = tokio::io::stdout();
+    stdout.write_all(&output).await.into_diagnostic()?;
+    stdout.flush().await.into_diagnostic()?;
+    Ok(())
 }
 
 fn complete_daemon_ids(

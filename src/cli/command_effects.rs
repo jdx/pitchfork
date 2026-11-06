@@ -31,7 +31,8 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     // Drops list entries for daemons that already stopped or failed; no
     // configuration or output is lost.
     ("clean", Write),
-    ("completion", Read),
+    // Printing a script reads nothing, but `--install` writes the script file.
+    ("completion", Write),
     ("config", Read),
     ("config list", Read),
     ("config add", Write),
