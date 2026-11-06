@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.34.0](https://github.com/jdx/pitchfork/compare/v2.33.1...v2.34.0) - 2026-11-06
+
+### Added
+
+- *(web)* serve the web UI over HTTPS with web.tls_cert and web.tls_key ([#1104](https://github.com/jdx/pitchfork/pull/1104))
+- *(completion)* install shell completions with pitchfork completion --install ([#1105](https://github.com/jdx/pitchfork/pull/1105))
+
+### Other
+
+- *(deps)* update rust crate usage_rs to v7.3.0 ([#1106](https://github.com/jdx/pitchfork/pull/1106))
+- *(deps)* update rust crate usage_rs to v7.2.0 ([#1101](https://github.com/jdx/pitchfork/pull/1101))
+
 ## [2.33.1](https://github.com/jdx/pitchfork/compare/v2.33.0...v2.33.1) - 2026-11-03
 
 ### Fixed
