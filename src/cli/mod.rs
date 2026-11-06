@@ -66,7 +66,8 @@ enum Commands {
     Clean(clean::Clean),
     #[usage(alias = "daemon")]
     Daemons(daemons::Daemons),
-    Completion(completion::Completion),
+    /// Generate shell completions
+    Completion(usage_rs::completion::Completion),
     Config(config::Config),
     #[usage(alias = "d")]
     Disable(disable::Disable),
@@ -148,7 +149,9 @@ pub async fn run() -> Result<()> {
         Commands::Cd(cd) => cd.run().await,
         Commands::Clean(clean) => clean.run().await,
         Commands::Daemons(daemons) => daemons.run().await,
-        Commands::Completion(completion) => completion.run().await,
+        Commands::Completion(completion) => completion
+            .run("pitchfork", &mut std::io::stdout())
+            .into_diagnostic(),
         Commands::Config(config) => config.run().await,
         Commands::Disable(disable) => disable.run().await,
         Commands::Enable(enable) => enable.run().await,
