@@ -164,6 +164,9 @@ impl Run {
                 clx::progress::stop();
                 clx::progress::clear_jobs();
 
+                if !result.started && result.exit_code.is_none() {
+                    warn!("Daemon {daemon_id} already running");
+                }
                 if result.exit_code.is_some() {
                     std::process::exit(1);
                 }

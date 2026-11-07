@@ -130,6 +130,38 @@ EOF
   pitchfork stop --all
 }
 
+@test "a dependent waits for a dependency that is still starting" {
+  create_pitchfork_toml <<EOF
+[daemons.db]
+run = "echo db starting && sleep 5 && echo 'db READY' && sleep 30"
+ready_output = "READY"
+
+[daemons.api]
+run = "echo api ready && sleep 30"
+depends = ["db"]
+ready_delay = 1
+EOF
+
+  # Get db under way on its own, then start api while db's start still waits
+  # for its ready output. api must not start until db is ready.
+  pitchfork start db >/dev/null 2>&1 &
+  local db_start=$!
+  wait_for_status db running 10
+
+  run pitchfork start api
+  assert_success
+
+  # Checked before reaping db's start, which would let db get ready on its own
+  # and the check could never fail. Had db been skipped as running, api would
+  # be up after its 1s ready_delay with db still sleeping.
+  run pitchfork logs db --raw
+  assert_output --partial "db READY"
+
+  wait "$db_start"
+
+  pitchfork stop --all
+}
+
 @test "circular dependency is rejected" {
   create_pitchfork_toml <<EOF
 [daemons.a]

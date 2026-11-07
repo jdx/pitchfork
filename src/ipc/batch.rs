@@ -807,24 +807,15 @@ impl IpcClient {
             self.claim_daemons(&claimed).await?;
         }
 
-        // Get currently running daemons once and reuse the snapshot for both
-        // restart checks and template context.
+        // The ports of running daemons, for the templates of what depends on
+        // them. A running daemon is still started like the rest rather than
+        // skipped on this snapshot, which records it running from the moment
+        // its process spawns and so cannot tell one that is ready from one
+        // still waiting on its ready check. The supervisor can: it waits for
+        // the run under way when there is one (an in-flight oneshot too), so
+        // dependents start only once it is ready, and otherwise says the
+        // daemon is already running.
         let active_daemons = self.active_daemons().await?;
-        let running_daemons: HashSet<DaemonId> = active_daemons
-            .iter()
-            .filter(|d| d.status.is_running() || d.status.is_waiting())
-            .map(|d| d.id.clone())
-            .collect();
-        // A oneshot that is still running has not finished its work, so its
-        // dependents must keep waiting for it. Letting the start request
-        // through makes the supervisor await the in-flight run instead of
-        // skipping it as "already running".
-        let running_oneshots: HashSet<DaemonId> = active_daemons
-            .iter()
-            .filter(|d| d.oneshot && (d.status.is_running() || d.status.is_waiting()))
-            .map(|d| d.id.clone())
-            .collect();
-
         let running_ports_map: HashMap<DaemonId, Vec<u16>> = active_daemons
             .into_iter()
             .filter(|d| {
@@ -864,27 +855,7 @@ impl IpcClient {
                             warn!("Skipping disabled daemon {id} (dependency)");
                             return false;
                         }
-
-                        // Skip already running daemons unless they are explicitly requested
-                        // with force=true
-                        if running_daemons.contains(id) {
-                            if opts.force && explicitly_requested.contains(id) {
-                                debug!("Force restarting explicitly requested daemon: {id}");
-                                true // Allow restart if force is set AND explicitly requested
-                            } else if running_oneshots.contains(id) {
-                                debug!("Waiting for in-flight oneshot {id} to complete");
-                                true
-                            } else {
-                                if explicitly_requested.contains(id) {
-                                    info!("Daemon {id} is already running, use --force to restart");
-                                } else {
-                                    debug!("Skipping already running daemon {id}");
-                                }
-                                false
-                            }
-                        } else {
-                            true
-                        }
+                        true
                     })
                     .cloned()
                     .collect();
@@ -988,6 +959,10 @@ impl IpcClient {
                                         any_failed = true;
                                         error!("Daemon {} failed to start", id);
                                         failed.push((id.clone(), failure_reason(rr, code)));
+                                    } else if explicitly_requested.contains(&id) {
+                                        info!(
+                                            "Daemon {id} is already running, use --force to restart"
+                                        );
                                     }
                                 }
                                 Err(e) => {
@@ -1027,18 +1002,7 @@ impl IpcClient {
         if !any_failed && !adhoc_ids.is_empty() {
             let mut tasks = Vec::new();
             for id in adhoc_ids {
-                // Skip already running daemons unless force is set
-                if running_daemons.contains(&id) {
-                    if opts.force && explicitly_requested.contains(&id) {
-                        debug!("Force restarting ad-hoc daemon: {id}");
-                    } else {
-                        if explicitly_requested.contains(&id) {
-                            info!("Ad-hoc daemon {id} is already running, use --force to restart");
-                        }
-                        continue;
-                    }
-                }
-
+                // Started even when running, as config daemons are above.
                 if let Some(adhoc_daemon) = adhoc_daemons.get(&id) {
                     if let Some(ref cmd) = adhoc_daemon.cmd {
                         let is_explicit = explicitly_requested.contains(&id);
@@ -1087,6 +1051,10 @@ impl IpcClient {
                                 if let Some(code) = rr.exit_code {
                                     any_failed = true;
                                     failed.push((id.clone(), failure_reason(rr, code)));
+                                } else if explicitly_requested.contains(&id) {
+                                    info!(
+                                        "Ad-hoc daemon {id} is already running, use --force to restart"
+                                    );
                                 }
                             }
                             Err(e) => {

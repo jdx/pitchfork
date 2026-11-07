@@ -380,6 +380,89 @@ EOF
   pitchfork stop ready_both
 }
 
+@test "a start of a daemon that is still starting waits for its ready check" {
+  create_pitchfork_toml <<EOF
+[daemons.slow_ready]
+run = "echo starting && sleep 5 && echo 'Server is READY' && sleep 30"
+ready_output = "READY"
+EOF
+
+  # Start the daemon, then start it again while the first start still waits
+  # for the ready output. The daemon is recorded running from the moment it
+  # spawns, but the second start must wait for the same check rather than
+  # report it already running.
+  pitchfork start slow_ready >/dev/null 2>&1 &
+  local first_start=$!
+  wait_for_status slow_ready running 10
+
+  run pitchfork start slow_ready
+  assert_success
+  refute_output --regexp "slow_ready (is )?already running"
+
+  # Checked before reaping the first start: waiting for it first would let the
+  # daemon get ready on its own, and the check could never fail.
+  run pitchfork logs slow_ready --raw
+  assert_output --partial "Server is READY"
+
+  wait "$first_start"
+
+  pitchfork stop slow_ready
+}
+
+@test "a start waiting on another start's ready check fails with it" {
+  create_pitchfork_toml <<EOF
+[daemons.never_ready]
+run = "echo starting && sleep 5 && exit 3"
+ready_output = "READY"
+retry = 0
+EOF
+
+  pitchfork start never_ready >/dev/null 2>&1 &
+  local first_start=$!
+  wait_for_status never_ready running 10
+
+  # The process exits before its ready output appears, which fails the start
+  # under way, and the start waiting on the same check with it.
+  run pitchfork start never_ready
+  assert_failure
+  assert_output --partial "exit code 3"
+
+  local first_status=0
+  wait "$first_start" || first_status=$?
+  [[ $first_status -ne 0 ]]
+}
+
+@test "a start waiting on another start's ready check follows its retries" {
+  local retry_script key
+  retry_script="$(script_path fail_then_succeed.sh)"
+  key="$(date +%s%N)"
+
+  # The first attempt runs for a few seconds before failing, so the second
+  # start below is already waiting on its ready check when it fails and the
+  # first start's backoff begins. That failure is not the first start's result.
+  create_pitchfork_toml <<TOML
+[daemons.flaky]
+run = 'bash $retry_script $key 3 && sleep 30'
+ready_output = "succeeded"
+retry = 2
+TOML
+
+  pitchfork start flaky >/dev/null 2>&1 &
+  local first_start=$!
+  wait_for_logs flaky "attempt 1 started" 10
+
+  run pitchfork start flaky
+  assert_success
+
+  run pitchfork logs flaky --raw
+  assert_output --partial "failing attempt 1"
+  assert_output --partial "succeeded on attempt 2"
+
+  wait "$first_start"
+
+  pitchfork stop flaky
+}
+
 # ============================================================================
 # Integration tests
 # ============================================================================

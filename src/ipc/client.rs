@@ -458,7 +458,9 @@ impl IpcClient {
                 })
             }
             IpcResponse::DaemonAlreadyRunning => {
-                warn!("Daemon {} already running", opts.id);
+                // Reported by the caller, which knows whether the daemon was
+                // asked for or only reached as a dependency.
+                debug!("Daemon {} already running", opts.id);
                 Ok(RunResult {
                     oneshot: opts.oneshot,
                     started: false,
