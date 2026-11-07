@@ -395,6 +395,18 @@ fn output_line_text(line: &[u8]) -> String {
         .to_string()
 }
 
+/// Wait for the start whose result this is to end, and report that result as
+/// the waiting start's own. A start that ends without one leaves the daemon
+/// reported already running.
+async fn await_start_result(mut start_result: super::StartResult) -> IpcResponse {
+    start_result
+        .wait_for(Option::is_some)
+        .await
+        .ok()
+        .and_then(|result| result.clone())
+        .unwrap_or(IpcResponse::DaemonAlreadyRunning)
+}
+
 /// Send each line of `reader` to `tx` until the output ends or nobody is
 /// listening.
 ///
@@ -552,12 +564,29 @@ impl Supervisor {
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = opts.id.clone();
         let mut restart_mark = None;
-        let result = self.run_inner(opts, None, &mut restart_mark).await;
+        // This start's result, for every start that finds one of its processes
+        // still waiting on its ready check (see `claim_or_defer`). Published
+        // only once the start ends, so that a start waiting through a failed
+        // attempt that is retried gets the outcome of the retries.
+        let (result_tx, result_rx) = tokio::sync::watch::channel(None);
+        let wait_ready = opts.wait_ready;
+        let result = self
+            .run_inner(
+                opts,
+                None,
+                &mut restart_mark,
+                wait_ready.then_some(&result_rx),
+            )
+            .await;
         // A forced start records the daemon it replaces as restarting. If no
         // new process took the record over, the restart did not happen.
         if let Some(mark) = restart_mark {
             self.settle_restarting(&id, mark).await;
         }
+        result_tx.send_replace(Some(match &result {
+            Ok(response) => response.clone(),
+            Err(e) => IpcResponse::Error(e.to_string()),
+        }));
         result
     }
 
@@ -598,7 +627,8 @@ impl Supervisor {
         approved_at: u64,
         restart_mark: &mut Option<u64>,
     ) -> Result<IpcResponse> {
-        self.run_inner(opts, Some(approved_at), restart_mark).await
+        self.run_inner(opts, Some(approved_at), restart_mark, None)
+            .await
     }
 
     /// Reject unsupported options while the caller holds the daemon's stop lock.
@@ -630,11 +660,15 @@ impl Supervisor {
     /// `restart_mark` is set to the stop epoch a forced start's own stop of
     /// the running instance left, if it made one (see
     /// [`Self::settle_restarting`]).
+    ///
+    /// `start_result` is where this start's result will be, registered for
+    /// each process it spawns while that process waits on its ready check.
     async fn run_inner(
         &self,
         opts: RunOptions,
         approved_at: Option<u64>,
         restart_mark: &mut Option<u64>,
+        start_result: Option<&super::StartResult>,
     ) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
@@ -758,7 +792,7 @@ impl Supervisor {
                     // those returned above.
                     return Ok(IpcResponse::DaemonAlreadyRunning);
                 };
-                let result = self.run_once(retry_opts, guard).await?;
+                let result = self.run_once(retry_opts, guard, start_result).await?;
 
                 match result {
                     IpcResponse::DaemonReady { daemon } => {
@@ -829,7 +863,7 @@ impl Supervisor {
             Some(guard) => guard,
             None => self.stop_lock(id).await.lock_owned().await,
         };
-        self.run_once(opts, guard).await
+        self.run_once(opts, guard, start_result).await
     }
 
     /// Wait for a just-failed attempt's monitor to write its terminal state,
@@ -869,9 +903,9 @@ impl Supervisor {
     /// are rejected before a forced claim can stop an existing instance, even
     /// when settings changed during a foreground retry's backoff.
     ///
-    /// `stop_guard` is released before an in-flight oneshot is awaited: that
-    /// wait lasts as long as the task does, and holding the lock would block a
-    /// stop of the very run being waited on.
+    /// `stop_guard` is released before an in-flight oneshot or another start's
+    /// ready check is awaited: that wait lasts as long as the run does, and
+    /// holding the lock would block a stop of the very run being waited on.
     async fn claim_or_defer(
         &self,
         opts: &RunOptions,
@@ -934,6 +968,19 @@ impl Supervisor {
                 self.await_running_oneshot(id, opts.oneshot_wait, pid).await,
             ));
         }
+        if opts.wait_ready
+            && let Some((checked, start_result)) = self.ready_check(id)
+            && checked == pid
+        {
+            // The process is up but its ready check has not passed, so
+            // "already running" would let this caller, and whatever depends
+            // on the daemon, go on before it is ready. Wait for the start under
+            // way instead and report its result as this one's: its check is
+            // the one that decides whether this process is ready.
+            info!("daemon {id} (pid {pid}) has not passed its ready check; waiting for it");
+            drop(stop_guard.take());
+            return Ok(Some(await_start_result(start_result).await));
+        }
         // A record can name a PID that has already exited: `stop` leaves the
         // terminal state to a monitor that still owns the daemon, and that
         // monitor writes it only after draining the process's output. Rejecting
@@ -942,6 +989,8 @@ impl Supervisor {
         // before refusing. The oneshot branch above deliberately comes first: a
         // task whose process has exited is about to be recorded as completed,
         // and starting a second copy of it is exactly what waiting prevents.
+        // So does the ready check's: a process that exited before passing it
+        // is about to be reported as failed by the start waiting on it.
         PROCS.refresh_pids(&[pid]);
         if !PROCS.is_running(pid) {
             debug!(
@@ -1073,6 +1122,39 @@ impl Supervisor {
         }
     }
 
+    /// Record that `id`'s process `pid` is waiting on its ready check, with
+    /// the result of the start that spawned it.
+    fn register_ready_check(&self, id: &DaemonId, pid: u32, start_result: &super::StartResult) {
+        self.ready_checks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone(), (pid, start_result.clone()));
+    }
+
+    /// The process of `id` that is waiting on its ready check, with the result
+    /// of the start that spawned it.
+    fn ready_check(&self, id: &DaemonId) -> Option<(u32, super::StartResult)> {
+        self.ready_checks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .map(|(checked, start_result)| (*checked, start_result.clone()))
+    }
+
+    /// Record that the ready check of `id`'s process `pid` has ended, so a
+    /// start from then on finds the daemon ready, or the process gone. Only
+    /// that process's: a forced start may since have registered its
+    /// successor's under the same id.
+    fn end_ready_check(&self, id: &DaemonId, pid: u32) {
+        let mut ready_checks = self.ready_checks.lock().unwrap_or_else(|e| e.into_inner());
+        if ready_checks
+            .get(id)
+            .is_some_and(|(checked, _)| *checked == pid)
+        {
+            ready_checks.remove(id);
+        }
+    }
+
     /// Run a daemon once (single attempt).
     ///
     /// `stop_guard` is this daemon's stop lock, acquired by `run` before the
@@ -1083,6 +1165,7 @@ impl Supervisor {
         &self,
         opts: RunOptions,
         stop_guard: tokio::sync::OwnedMutexGuard<()>,
+        start_result: Option<&super::StartResult>,
     ) -> Result<IpcResponse> {
         let id = &opts.id;
         // Checked under the daemon's stop lock, which `close()` waits out
@@ -1585,6 +1668,14 @@ impl Supervisor {
                     .build(),
             )
             .await?;
+
+        // Registered while the stop lock is still held, so a start that finds
+        // this process running also finds the start it has to wait for.
+        if ready_rx.is_some()
+            && let Some(start_result) = start_result
+        {
+            self.register_ready_check(id, pid, start_result);
+        }
 
         // Running state and PID are now persisted: concurrent run/stop calls
         // observe a running daemon and behave correctly, so release the stop
@@ -2605,7 +2696,9 @@ impl Supervisor {
 
         // If wait_ready is true, wait for readiness notification
         if let Some(ready_rx) = ready_rx {
-            match ready_rx.await {
+            let ready = ready_rx.await;
+            self.end_ready_check(id, pid);
+            match ready {
                 Ok(Ok(())) => {
                     info!("daemon {id} is ready");
                     // Re-read rather than returning the snapshot taken at

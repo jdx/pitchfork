@@ -4,8 +4,11 @@ description: Wait for output, HTTP, TCP, or a command before marking a daemon re
 # Ready checks
 
 `pitchfork start` and `pitchfork run` wait for readiness before returning.
-Dependent daemons wait for the same signal. Pick a check that shows the service
-can do useful work, such as an HTTP health endpoint or a database query.
+Dependent daemons wait for the same signal. So does a start that finds the
+daemon still starting under another one: it waits for that start's check and
+returns the same result, rather than reporting the daemon already running. Pick
+a check that shows the service can do useful work, such as an HTTP health
+endpoint or a database query.
 
 ## Choose a check
 
