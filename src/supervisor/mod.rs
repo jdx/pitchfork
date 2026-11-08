@@ -73,7 +73,7 @@ pub struct Supervisor {
     pub(crate) state_file: Mutex<StateFile>,
     pub(crate) pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
-    /// Daemons whose retry sequence a foreground `run` is already working
+    /// Daemons whose retry sequence a `run` is already working
     /// through, each with the flag that asks it to stop. The backoff between
     /// its attempts leaves the record errored with no PID, which is exactly
     /// what `check_retry` looks for, so without this the background checker
@@ -143,8 +143,8 @@ pub struct Supervisor {
     /// exit), and starts/orphan-cleanup acquire it first — serializing them
     /// against in-flight stops instead of racing the Stopping window.
     pub(crate) stop_locks: Mutex<HashMap<DaemonId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
-    /// Pending readiness by daemon ID and PID. Foreground starts publish their
-    /// final retry result; background starts publish the attempt's result.
+    /// Pending readiness by daemon ID and PID. Starts handling retries publish
+    /// their final result; other background starts publish the attempt's result.
     /// Concurrent starts await it rather than treating a spawned process as ready.
     pub(crate) ready_checks: std::sync::Mutex<HashMap<DaemonId, (u32, StartResult)>>,
     /// Set when `close()` begins. From then on this supervisor's own

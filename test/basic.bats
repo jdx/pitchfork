@@ -502,6 +502,84 @@ TOML
   pitchfork stop background_retry
 }
 
+@test "a start waits through failed background retry attempts" {
+  cat > background_retries.sh <<'SCRIPT'
+count=0
+test ! -f attempts || count=$(cat attempts)
+count=$((count + 1))
+echo "$count" >attempts
+case "$count" in
+  1)
+    echo READY
+    while test ! -e crash; do sleep 0.1; done
+    exit 3
+    ;;
+  2)
+    echo "first background attempt"
+    while test ! -e release_failure; do sleep 0.1; done
+    exit 4
+    ;;
+  *)
+    echo "last background attempt"
+    while test ! -e ready; do sleep 0.1; done
+    echo READY
+    sleep 30
+    ;;
+esac
+SCRIPT
+  create_pitchfork_toml <<'TOML'
+[daemons.background_retries]
+run = "sh background_retries.sh"
+ready_output = "READY"
+retry = 2
+
+[daemons.background_retries.hooks]
+on_ready = 'echo "$PITCHFORK_RETRY_COUNT" >last_ready_retry'
+TOML
+
+  run pitchfork start background_retries
+  assert_success
+  touch crash
+  wait_for_logs background_retries "first background attempt" 20
+
+  (
+    local start_status=0
+    pitchfork start background_retries >waiting_start.log 2>&1 || start_status=$?
+    echo "$start_status" >result
+  ) &
+  local waiting_start=$!
+  wait_for_readiness_waiter background_retries
+  touch release_failure
+  wait_for_logs background_retries "last background attempt" 20
+  assert_file_not_exist result
+  touch ready
+  wait "$waiting_start"
+  run cat result
+  assert_output "0"
+  wait_for_file_content last_ready_retry "2"
+
+  pitchfork stop background_retries
+}
+
+@test "a stop cancels a background startup during its retry backoff" {
+  create_pitchfork_toml <<'TOML'
+[daemons.stop_background_retry]
+run = "if test -e started; then echo retrying; exit 4; else touch started; echo READY; while ! test -e crash; do sleep 0.1; done; exit 3; fi"
+ready_output = "READY"
+retry = 2
+TOML
+
+  run pitchfork start stop_background_retry
+  assert_success
+  touch crash
+  wait_for_supervisor_log "daemon .*stop_background_retry failed (attempt 2/3), retrying in 2s" 20
+
+  run pitchfork stop stop_background_retry
+  assert_success
+  sleep 3
+  wait_for_status stop_background_retry stopped
+}
+
 # ============================================================================
 # Integration tests
 # ============================================================================

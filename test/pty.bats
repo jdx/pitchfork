@@ -77,6 +77,38 @@ EOF
   pitchfork stop ansi_test || true
 }
 
+@test "continuous PTY output does not starve a readiness deadline" {
+  skip_on_windows "PTY allocation is not supported on Windows"
+  cat > flood.py <<'PYTHON'
+import os
+while True:
+    os.write(1, b"busy\n" * 4096)
+PYTHON
+  create_pitchfork_toml <<'TOML'
+[daemons.flood]
+run = "python3 flood.py"
+pty = true
+ready_output = { pattern = "^READY$", timeout = "1s" }
+
+[daemons.flood_dependent]
+run = "touch dependent_started; sleep 30"
+depends = ["flood"]
+ready_delay = 0
+TOML
+
+  (
+    local start_status=0
+    pitchfork start flood_dependent --quiet >start.log 2>&1 || start_status=$?
+    echo "$start_status" >result
+  ) &
+  local start_pid=$!
+  wait_for_file result 10
+  wait "$start_pid"
+  run cat result
+  refute_output "0"
+  assert_file_not_exist dependent_started
+}
+
 @test "pty = true allocates a pseudo-terminal" {
   skip_on_windows "PTY allocation is not supported on Windows"
   create_pitchfork_toml <<'EOF'

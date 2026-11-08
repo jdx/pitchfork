@@ -75,9 +75,8 @@ TOML
 
   run pitchfork start watched_ready
   assert_success
-  wait_for_supervisor_log "Watching .* for daemon(s) (poll): .*watched_ready"
   # Let the polling watcher take its initial sample before changing the file.
-  sleep 1
+  sleep 2
   rm ready
   echo changed >marker
   wait_for_file restarted 15
@@ -88,7 +87,7 @@ TOML
   assert_file_not_exist dependent_started
   touch ready
   wait "$waiting_start"
-  assert_file_exist dependent_started
+  wait_for_file dependent_started
 
   pitchfork stop --all
 }

@@ -641,8 +641,9 @@ wait_for_logs() {
 # Wait for a supervisor log entry before advancing a concurrent test.
 wait_for_supervisor_log() {
   local pattern="$1"
+  local timeout_secs="${2:-10}"
   local log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
-  for _ in $(seq 1 100); do
+  for _ in $(seq 1 "$((timeout_secs * 10))"); do
     if grep -q "$pattern" "$log" 2>/dev/null; then
       return 0
     fi
