@@ -6,8 +6,8 @@ description: Wait for output, HTTP, TCP, or a command before marking a daemon re
 `pitchfork start` and `pitchfork run` wait for readiness before returning.
 Dependent daemons wait for the same signal. So does a start that finds the
 daemon still starting under another one: it waits for that start's check and
-returns the same result. This also applies during automatic retries and
-file-triggered restarts. The active service's readiness checks set the deadline;
+returns the same result, including retries and backoff. This also applies during
+automatic retries and file-triggered restarts. The active service's readiness checks set the deadline;
 a waiting start's readiness overrides do not shorten it. Pick a check that shows the
 service can do useful work, such as an HTTP health endpoint or a database query.
 
@@ -159,6 +159,9 @@ process remains alive.
 
 If every configured check reaches its deadline, startup fails with exit code
 `124`, the daemon is killed, and normal retry and dependency handling applies.
+It remains a readiness failure if the daemon exits zero during termination.
+If termination fails, startup reports that error and no replacement starts
+while the original process group remains alive.
 One unbounded check keeps startup open. If the process exits with a nonzero code
 before readiness, startup returns that code.
 

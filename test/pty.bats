@@ -109,6 +109,67 @@ TOML
   assert_file_not_exist dependent_started
 }
 
+# Regression: https://github.com/jdx/pitchfork/pull/1108#discussion_r4505580981
+@test "readiness waits for the full local log batch containing its output" {
+  skip_on_windows "PTY allocation is not supported on Windows"
+  cat > batch.py <<'PYTHON'
+import os
+import pathlib
+import time
+
+pathlib.Path("started").touch()
+while not pathlib.Path("emit").exists():
+    time.sleep(0.01)
+os.write(1, ("line\n" * 99 + "READY\n").encode())
+pathlib.Path("emitted").touch()
+time.sleep(30)
+PYTHON
+  cat > lock_logs.py <<'PYTHON'
+import pathlib
+import sqlite3
+import sys
+import time
+
+with sqlite3.connect(sys.argv[1]) as conn:
+    conn.execute("BEGIN IMMEDIATE")
+    pathlib.Path("locked").touch()
+    deadline = time.monotonic() + 5
+    while not pathlib.Path("release_db").exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    conn.rollback()
+PYTHON
+  create_pitchfork_toml <<'TOML'
+[daemons.full_batch]
+run = "python3 batch.py"
+pty = true
+ready_output = "READY"
+
+[daemons.full_batch.hooks]
+on_ready = "touch ready_notified"
+TOML
+
+  pitchfork start full_batch --quiet >start.log 2>&1 &
+  local start_pid=$!
+  wait_for_file started
+  python3 lock_logs.py "$PITCHFORK_LOGS_DIR/logs.db" >lock.log 2>&1 &
+  local lock_pid=$!
+  wait_for_file locked
+  touch emit
+  wait_for_file emitted
+  sleep 1
+  local reported_early=0
+  test ! -e ready_notified || reported_early=1
+  touch release_db
+  wait "$lock_pid"
+  wait "$start_pid"
+  assert_equal "$reported_early" "0"
+  run pitchfork logs full_batch --raw --no-timestamp
+  assert_success
+  assert_output --partial "READY"
+  run bash -c 'pitchfork logs full_batch --raw --no-timestamp 2>/dev/null | grep -c "^line$"'
+  assert_output "99"
+}
+
 @test "pty = true allocates a pseudo-terminal" {
   skip_on_windows "PTY allocation is not supported on Windows"
   create_pitchfork_toml <<'EOF'

@@ -83,8 +83,7 @@ pub struct Supervisor {
     /// back.
     /// One flag per claim: two starts can be working through the same
     /// daemon's retries at once, and a stop has to reach all of them.
-    pub(crate) retrying:
-        std::sync::Mutex<HashMap<DaemonId, Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
+    pub(crate) retrying: std::sync::Mutex<HashMap<DaemonId, Vec<RetryClaim>>>,
     /// How many times each daemon has been stopped. The retry checker reads
     /// this when it decides to run an attempt and again when it is about to
     /// start one, holding the daemon's lock: a stop in between means the
@@ -146,7 +145,7 @@ pub struct Supervisor {
     /// Pending readiness by daemon ID and PID. Starts handling retries publish
     /// their final result; other background starts publish the attempt's result.
     /// Concurrent starts await it rather than treating a spawned process as ready.
-    pub(crate) ready_checks: std::sync::Mutex<HashMap<DaemonId, (u32, StartResult)>>,
+    pub(crate) ready_checks: std::sync::Mutex<HashMap<DaemonId, ReadyCheck>>,
     /// Set when `close()` begins. From then on this supervisor's own
     /// state-file record is on its way out and must not be restored.
     pub(crate) shutting_down: AtomicBool,
@@ -159,6 +158,19 @@ pub struct Supervisor {
 /// The result of a readiness wait: `None` while pending. If the wait ends
 /// without a result, the channel closes.
 pub(crate) type StartResult = tokio::sync::watch::Receiver<Option<crate::ipc::IpcResponse>>;
+
+#[derive(Debug)]
+pub(crate) struct RetryClaim {
+    cancel: std::sync::Arc<AtomicBool>,
+    result: Option<StartResult>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ReadyCheck {
+    pid: u32,
+    result: StartResult,
+    attempt: StartResult,
+}
 
 /// A line of daemon output on its way to the monitoring task.
 #[derive(Debug, Clone)]

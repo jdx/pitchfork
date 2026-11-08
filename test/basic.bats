@@ -604,6 +604,53 @@ TOML
   pitchfork stop mixed_ready
 }
 
+# Regression: https://github.com/jdx/pitchfork/pull/1108#discussion_r4505580969
+@test "a start during background retry backoff joins the existing retry budget" {
+  cat > backoff_start.sh <<'SCRIPT'
+count=0
+test ! -e attempts || count=$(cat attempts)
+count=$((count + 1))
+echo "$count" >attempts
+case "$count" in
+  1)
+    echo READY
+    while test ! -e crash; do sleep 0.1; done
+    exit 3
+    ;;
+  2) exit 4 ;;
+  *)
+    touch final_attempt
+    while test ! -e ready; do sleep 0.1; done
+    echo READY
+    sleep 30
+    ;;
+esac
+SCRIPT
+  create_pitchfork_toml <<'TOML'
+[daemons.backoff_start]
+run = "sh backoff_start.sh"
+ready_output = "READY"
+retry = 2
+
+[daemons.backoff_start.hooks]
+on_ready = 'echo "$PITCHFORK_RETRY_COUNT" >ready_retry_count'
+TOML
+
+  run pitchfork start backoff_start
+  assert_success
+  wait_for_file_content ready_retry_count "0"
+  touch crash
+  wait_for_supervisor_log "daemon .*backoff_start failed (attempt 2/3), retrying in 2s" 20
+  pitchfork start backoff_start >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_file final_attempt 15
+  touch ready
+  wait "$waiting_start"
+  wait_for_file_content ready_retry_count "2"
+  run cat attempts
+  assert_output "3"
+}
+
 @test "a stop cancels a background startup during its retry backoff" {
   create_pitchfork_toml <<'TOML'
 [daemons.stop_background_retry]

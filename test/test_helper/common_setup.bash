@@ -654,7 +654,7 @@ wait_for_supervisor_log() {
 }
 
 wait_for_readiness_waiter() {
-  wait_for_supervisor_log "daemon .*${1} .*has not passed its ready check; waiting for it"
+  wait_for_supervisor_log "daemon .*${1} .*waiting for it"
 }
 
 # Wait for a daemon to have at least N log lines (up to 10s)
