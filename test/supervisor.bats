@@ -1090,8 +1090,11 @@ EOF
   wait "$sup_pid" 2>/dev/null || true
 }
 
-@test "an unchecked boot daemon does not block a dependent start" {
+@test "an unchecked boot daemon is ready after the project's ready delay" {
   create_pitchfork_toml <<'TOML'
+[settings.general]
+ready_delay = "2s"
+
 [daemons.unchecked_boot]
 run = "touch boot_started; sleep 60"
 boot_start = true
@@ -1106,6 +1109,7 @@ TOML
   pitchfork supervisor run --boot >boot.log 2>&1 3>&- 4>&- &
   local sup_pid=$!
   wait_for_file boot_started 10
+  local boot_started_at=$SECONDS
 
   (
     local start_status=0
@@ -1118,6 +1122,8 @@ TOML
   run cat result
   assert_output "0"
   wait_for_file dependent_started
+  # The dependent waited out the delay rather than starting at the spawn.
+  assert [ "$((SECONDS - boot_started_at))" -ge 1 ]
 
   kill "$sup_pid" 2>/dev/null || true
   wait "$sup_pid" 2>/dev/null || true

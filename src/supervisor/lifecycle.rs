@@ -1257,13 +1257,16 @@ impl Supervisor {
             .cloned()
     }
 
-    /// Record that the ready check of `id`'s process `pid` has ended, so a
-    /// start from then on finds the daemon ready, or the process gone. Only
-    /// that process's: a forced start may since have registered its
-    /// successor's under the same id.
-    fn end_ready_check(&self, id: &DaemonId, pid: u32) {
+    /// Record that the ready check of `id`'s attempt has ended, so a start
+    /// from then on finds the daemon ready, or the process gone. Only that
+    /// attempt's: a forced start may since have registered its successor's
+    /// under the same id, possibly with the same PID.
+    fn end_ready_check(&self, id: &DaemonId, attempt: &super::StartResult) {
         let mut ready_checks = self.ready_checks.lock().unwrap_or_else(|e| e.into_inner());
-        if ready_checks.get(id).is_some_and(|check| check.pid == pid) {
+        if ready_checks
+            .get(id)
+            .is_some_and(|check| check.attempt.same_channel(attempt))
+        {
             ready_checks.remove(id);
         }
     }
@@ -2891,7 +2894,7 @@ impl Supervisor {
             let ready = async move {
                 let id = daemon.id.clone();
                 let ready = ready_rx.await;
-                SUPERVISOR.end_ready_check(&id, pid);
+                SUPERVISOR.end_ready_check(&id, &attempt_rx);
                 match ready {
                     Ok(Ok(())) => {
                         info!("daemon {id} is ready");

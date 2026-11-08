@@ -295,7 +295,7 @@ fn not_startable_reason(id: &DaemonId, in_state: bool) -> String {
     }
 }
 
-fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
+pub(crate) fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
     // A oneshot's readiness is its exit, so a delay would only be a second,
     // conflicting answer to the same question.
     !opts.oneshot

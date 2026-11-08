@@ -159,6 +159,7 @@ TOML
   sleep 1
   local reported_early=0
   test ! -e ready_notified || reported_early=1
+  kill -0 "$start_pid" 2>/dev/null || reported_early=1
   touch release_db
   wait "$lock_pid"
   wait "$start_pid"

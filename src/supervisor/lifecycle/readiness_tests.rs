@@ -69,15 +69,21 @@ fn canceling_a_start_keeps_its_pending_readiness_joinable() -> Result<()> {
                 .await;
                 first.abort();
                 let _ = first.await;
-                let joined = tokio::spawn(async move { SUPERVISOR.run(opts).await });
-                tokio::task::yield_now().await;
+                let mut joined = tokio::spawn(async move { SUPERVISOR.run(opts).await });
+                // The daemon is not ready until the release file exists.
+                let early = tokio::time::timeout(Duration::from_millis(500), &mut joined).await;
+                let returned_early = early.is_ok();
                 std::fs::write(release, "").into_diagnostic()?;
-                let result = tokio::time::timeout(Duration::from_secs(10), joined).await;
+                let result = match early {
+                    Ok(result) => Ok(result),
+                    Err(_) => tokio::time::timeout(Duration::from_secs(10), joined).await,
+                };
                 SUPERVISOR.stop(&id).await?;
                 assert!(
                     spawned.is_ok(),
                     "the initiating start did not register readiness: {spawned:?}"
                 );
+                assert!(!returned_early, "joining start returned early: {result:?}");
                 assert!(
                     matches!(result, Ok(Ok(Ok(IpcResponse::DaemonReady { .. })))),
                     "joining start returned {result:?}"

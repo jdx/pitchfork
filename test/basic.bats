@@ -643,7 +643,10 @@ TOML
   wait_for_supervisor_log "daemon .*backoff_start failed (attempt 2/3), retrying in 2s" 20
   pitchfork start backoff_start >waiting_start.log 2>&1 &
   local waiting_start=$!
+  wait_for_supervisor_log "daemon .*backoff_start.*; waiting for it"
   wait_for_file final_attempt 15
+  # Still waiting: the final attempt has not printed READY yet.
+  kill -0 "$waiting_start"
   touch ready
   wait "$waiting_start"
   wait_for_file_content ready_retry_count "2"
