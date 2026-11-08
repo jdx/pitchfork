@@ -561,6 +561,49 @@ TOML
   pitchfork stop background_retries
 }
 
+@test "ready output can satisfy readiness while an HTTP probe is pending" {
+  export PITCHFORK_READY_CHECK_INTERVAL=100ms
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&-
+  local port
+  port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  cat > slow_probe.py <<'PYTHON'
+import sys
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print("READY", flush=True)
+        time.sleep(1)
+        self.send_response(503)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PYTHON
+  create_pitchfork_toml <<TOML
+[daemons.mixed_ready]
+run = "python3 slow_probe.py $port"
+ready_output = { pattern = "^READY$", timeout = "10s" }
+ready_http = "http://127.0.0.1:$port/health"
+TOML
+
+  (
+    local start_status=0
+    pitchfork start mixed_ready --quiet >start.log 2>&1 || start_status=$?
+    echo "$start_status" >result
+  ) &
+  local start_pid=$!
+  wait_for_file result 15
+  wait "$start_pid"
+  run cat result
+  assert_output "0"
+
+  pitchfork stop mixed_ready
+}
+
 @test "a stop cancels a background startup during its retry backoff" {
   create_pitchfork_toml <<'TOML'
 [daemons.stop_background_retry]

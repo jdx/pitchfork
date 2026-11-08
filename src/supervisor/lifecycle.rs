@@ -36,6 +36,13 @@ use tokio::time;
 static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
+type HttpProbe = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = std::result::Result<reqwest::Response, reqwest::Error>>
+            + Send,
+    >,
+>;
+
 fn resolve_configured_ready_port(
     configured_port: u16,
     expected_ports: &[u16],
@@ -1922,6 +1929,7 @@ impl Supervisor {
             } else {
                 None
             };
+            let mut http_probe: Option<HttpProbe> = None;
 
             // Setup TCP port readiness check interval and deadline
             let mut port_check_interval =
@@ -2072,6 +2080,7 @@ impl Supervisor {
                         http_exhausted = true;
                         http_deadline = None;
                         http_check_interval = None;
+                        http_probe = None;
                         warn!("daemon {id}: HTTP readiness check timed out");
                         let any_remaining = any_ready_check_remaining(
                             ready_output.as_ref(),
@@ -2253,9 +2262,21 @@ impl Supervisor {
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
+                    }, if !ready_notified && ready_http.is_some() && !http_exhausted && http_probe.is_none() => {
                         if let (Some(http), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(&http.url).timeout(http_client_timeout).send().await {
+                            http_probe = Some(Box::pin(client.get(&http.url).timeout(http_client_timeout).send()));
+                        }
+                    }
+                    result = async {
+                        if let Some(probe) = http_probe.as_mut() {
+                            probe.as_mut().await
+                        } else {
+                            std::future::pending::<std::result::Result<reqwest::Response, reqwest::Error>>().await
+                        }
+                    }, if !ready_notified && http_probe.is_some() => {
+                        http_probe = None;
+                        if let Some(http) = &ready_http {
+                            match result {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
@@ -2476,7 +2497,11 @@ impl Supervisor {
                         let _ = flush_logs(&mut log_buffer);
                     }
                 }
+                if ready_notified {
+                    http_probe = None;
+                }
             }
+            drop(http_probe);
 
             // Snapshot the daemon state BEFORE draining output.
             //
