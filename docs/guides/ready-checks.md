@@ -6,9 +6,10 @@ description: Wait for output, HTTP, TCP, or a command before marking a daemon re
 `pitchfork start` and `pitchfork run` wait for readiness before returning.
 Dependent daemons wait for the same signal. So does a start that finds the
 daemon still starting under another one: it waits for that start's check and
-returns the same result, rather than reporting the daemon already running. Pick
-a check that shows the service can do useful work, such as an HTTP health
-endpoint or a database query.
+returns the same result. This also applies during automatic retries and
+file-triggered restarts. The active service's readiness checks set the deadline;
+a waiting start's readiness overrides do not shorten it. Pick a check that shows the
+service can do useful work, such as an HTTP health endpoint or a database query.
 
 ## Choose a check
 

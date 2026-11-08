@@ -143,12 +143,9 @@ pub struct Supervisor {
     /// exit), and starts/orphan-cleanup acquire it first — serializing them
     /// against in-flight stops instead of racing the Stopping window.
     pub(crate) stop_locks: Mutex<HashMap<DaemonId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
-    /// For each daemon whose process is waiting on its ready check, that
-    /// process's PID and the result of the start that spawned it, which the
-    /// start publishes when it ends. A daemon is recorded running from the
-    /// moment it spawns, so a concurrent start that finds the process waits
-    /// for that result instead of reporting it already running (see
-    /// `claim_or_defer`).
+    /// Pending readiness by daemon ID and PID. Foreground starts publish their
+    /// final retry result; background starts publish the attempt's result.
+    /// Concurrent starts await it rather than treating a spawned process as ready.
     pub(crate) ready_checks: std::sync::Mutex<HashMap<DaemonId, (u32, StartResult)>>,
     /// Set when `close()` begins. From then on this supervisor's own
     /// state-file record is on its way out and must not be restored.
@@ -159,8 +156,8 @@ pub struct Supervisor {
     starts_frozen: tokio::sync::OnceCell<()>,
 }
 
-/// The result of a start that waits for its daemon to be ready: `None` until
-/// the start ends. If it ends without one, the channel closes.
+/// The result of a readiness wait: `None` while pending. If the wait ends
+/// without a result, the channel closes.
 pub(crate) type StartResult = tokio::sync::watch::Receiver<Option<crate::ipc::IpcResponse>>;
 
 /// A line of daemon output on its way to the monitoring task.

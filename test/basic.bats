@@ -437,12 +437,10 @@ EOF
   retry_script="$(script_path fail_then_succeed.sh)"
   key="$(date +%s%N)"
 
-  # The first attempt runs for a few seconds before failing, so the second
-  # start below is already waiting on its ready check when it fails and the
-  # first start's backoff begins. That failure is not the first start's result.
+  # Hold the first attempt until the supervisor accepts the waiting start.
   create_pitchfork_toml <<TOML
 [daemons.flaky]
-run = 'bash $retry_script $key 3 && sleep 30'
+run = 'bash $retry_script $key 0 release_attempt && sleep 30'
 ready_output = "succeeded"
 retry = 2
 TOML
@@ -451,8 +449,13 @@ TOML
   local first_start=$!
   wait_for_logs flaky "attempt 1 started" 10
 
-  run pitchfork start flaky
-  assert_success
+  pitchfork start flaky >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_readiness_waiter flaky
+  touch release_attempt
+  wait "$waiting_start"
+  run cat waiting_start.log
+  refute_output --regexp "flaky (is )?already running"
 
   run pitchfork logs flaky --raw
   assert_output --partial "failing attempt 1"
@@ -461,6 +464,42 @@ TOML
   wait "$first_start"
 
   pitchfork stop flaky
+}
+
+@test "a start waits for a background retry to become ready" {
+  cat > retry_ready.sh <<'SCRIPT'
+if [ ! -e first_attempt ]; then
+  touch first_attempt
+  echo READY
+  while [ ! -e fail_attempt ]; do sleep 0.1; done
+  exit 3
+fi
+echo "retry started"
+while [ ! -e ready ]; do sleep 0.1; done
+echo READY
+sleep 30
+SCRIPT
+  create_pitchfork_toml <<'TOML'
+[daemons.background_retry]
+run = "sh retry_ready.sh"
+ready_output = "READY"
+retry = 1
+TOML
+
+  run pitchfork start background_retry
+  assert_success
+  touch fail_attempt
+  wait_for_logs background_retry "retry started" 20
+
+  pitchfork start background_retry >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_readiness_waiter background_retry
+  touch ready
+  wait "$waiting_start"
+  run cat waiting_start.log
+  refute_output --regexp "background_retry (is )?already running"
+
+  pitchfork stop background_retry
 }
 
 # ============================================================================

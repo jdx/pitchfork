@@ -9,6 +9,40 @@ teardown() {
   _common_teardown
 }
 
+@test "a dependency started after the snapshot supplies its current ports" {
+  local port http_script
+  port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  http_script="$(script_path http_server.py)"
+  create_pitchfork_toml <<TOML
+[daemons.gate]
+run = "touch gate_started; while ! test -e release_gate; do sleep 0.1; done"
+oneshot = true
+
+[daemons.service]
+run = "python3 -u $http_script 0 $port"
+depends = ["gate"]
+port = $port
+
+[daemons.dependent]
+run = "echo {{ daemons.service.port }} > dependency_port; sleep 30"
+depends = ["service"]
+ready_delay = 0
+TOML
+
+  pitchfork start dependent >dependent_start.log 2>&1 &
+  local dependent_start=$!
+  wait_for_file gate_started
+
+  # `run` starts the dependency while the batch waits at an earlier level.
+  run pitchfork run service --expected-port "$port" --port "$port" -- python3 -u "$http_script" 0 "$port"
+  assert_success
+  touch release_gate
+  wait "$dependent_start"
+  wait_for_file_content dependency_port "$port"
+
+  pitchfork stop --all
+}
+
 @test "start with dependency auto-starts dependency" {
   create_pitchfork_toml <<EOF
 [daemons.db]

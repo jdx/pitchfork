@@ -58,6 +58,41 @@ EOF
   pitchfork stop watch_test
 }
 
+@test "a dependent waits for a file-triggered restart to become ready" {
+  touch ready marker
+  create_pitchfork_toml <<'TOML'
+[daemons.watched_ready]
+run = "if test -e started; then touch restarted; else touch started; fi; while ! test -e ready; do sleep 0.1; done; echo READY; sleep 30"
+ready_output = "READY"
+watch = ["marker"]
+watch_mode = "poll"
+
+[daemons.dependent]
+run = "touch dependent_started; sleep 30"
+depends = ["watched_ready"]
+ready_delay = 0
+TOML
+
+  run pitchfork start watched_ready
+  assert_success
+  wait_for_supervisor_log "Watching .* for daemon(s) (poll): .*watched_ready"
+  # Let the polling watcher take its initial sample before changing the file.
+  sleep 1
+  rm ready
+  echo changed >marker
+  wait_for_file restarted 15
+
+  pitchfork start dependent >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_readiness_waiter watched_ready
+  assert_file_not_exist dependent_started
+  touch ready
+  wait "$waiting_start"
+  assert_file_exist dependent_started
+
+  pitchfork stop --all
+}
+
 # ============================================================================
 # Watch config persistence
 # ============================================================================

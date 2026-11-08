@@ -1122,8 +1122,7 @@ impl Supervisor {
         }
     }
 
-    /// Record that `id`'s process `pid` is waiting on its ready check, with
-    /// the result of the start that spawned it.
+    /// Register a process's pending readiness result.
     fn register_ready_check(&self, id: &DaemonId, pid: u32, start_result: &super::StartResult) {
         self.ready_checks
             .lock()
@@ -1131,8 +1130,7 @@ impl Supervisor {
             .insert(id.clone(), (pid, start_result.clone()));
     }
 
-    /// The process of `id` that is waiting on its ready check, with the result
-    /// of the start that spawned it.
+    /// The process and readiness result currently being checked for `id`.
     fn ready_check(&self, id: &DaemonId) -> Option<(u32, super::StartResult)> {
         self.ready_checks
             .lock()
@@ -1190,8 +1188,8 @@ impl Supervisor {
         }
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
-        // Create channel for readiness notification if wait_ready is true
-        let (ready_tx, ready_rx) = if opts.wait_ready {
+        // Background starts also publish readiness for concurrent callers.
+        let (ready_tx, ready_rx) = if opts.wait_ready || !opts.oneshot {
             let (tx, rx) = oneshot::channel();
             (Some(tx), Some(rx))
         } else {
@@ -1671,10 +1669,9 @@ impl Supervisor {
 
         // Registered while the stop lock is still held, so a start that finds
         // this process running also finds the start it has to wait for.
-        if ready_rx.is_some()
-            && let Some(start_result) = start_result
-        {
-            self.register_ready_check(id, pid, start_result);
+        let (attempt_tx, attempt_rx) = tokio::sync::watch::channel(None);
+        if ready_rx.is_some() {
+            self.register_ready_check(id, pid, start_result.unwrap_or(&attempt_rx));
         }
 
         // Running state and PID are now persisted: concurrent run/stop calls
@@ -2694,69 +2691,87 @@ impl Supervisor {
             }
         });
 
-        // If wait_ready is true, wait for readiness notification
         if let Some(ready_rx) = ready_rx {
-            let ready = ready_rx.await;
-            self.end_ready_check(id, pid);
-            match ready {
-                Ok(Ok(())) => {
-                    info!("daemon {id} is ready");
-                    // Re-read rather than returning the snapshot taken at
-                    // spawn: a completed oneshot has since been finalized, and
-                    // the snapshot would tell the caller it is still running
-                    // under a PID that has exited.
-                    //
-                    // Only when the record still describes this run, though. A
-                    // successor that claimed it carries its own PID and start
-                    // time, and reporting those as the outcome of the process
-                    // this call spawned would misattribute them.
-                    let daemon = match self.get_daemon(id).await {
-                        Some(current) if current.pid.is_none() || current.pid == Some(pid) => {
-                            current
-                        }
-                        // A successor owns the record, so neither it nor the
-                        // spawn snapshot describes this run: one carries
-                        // another process's identity, the other still says
-                        // running under a PID that has exited. A oneshot that
-                        // reported ready did finish, so report that outcome
-                        // directly rather than either misleading record.
-                        _ if opts.oneshot => crate::daemon::Daemon {
-                            status: DaemonStatus::Completed,
-                            pid: None,
-                            start_time: None,
-                            boot_time: None,
-                            last_exit_success: Some(true),
-                            ..daemon
-                        },
-                        _ => daemon,
-                    };
-                    Ok(IpcResponse::DaemonReady { daemon })
-                }
-                Ok(Err(exit_code)) => {
-                    error!("daemon {id} failed before becoming ready");
-                    // The caller reports this by querying the log store for
-                    // what the daemon printed, so wait for the sink's final
-                    // write first. The in-process path got this ordering by
-                    // flushing synchronously before signalling.
-                    //
-                    // Only on the attempt that gives up: `run` retries inline,
-                    // and waiting after every attempt would both delay the
-                    // backoff and widen the window in which the daemon looks
-                    // errored and idle — long enough for the background retry
-                    // checker to start an attempt of its own alongside it.
-                    let last_attempt = opts.retry_count >= opts.retry.count();
-                    if using_sink && last_attempt {
-                        super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+            let wait_ready = opts.wait_ready;
+            let oneshot = opts.oneshot;
+            let last_attempt = opts.retry_count >= opts.retry.count();
+            let started = IpcResponse::DaemonStart {
+                daemon: daemon.clone(),
+            };
+            let ready = async move {
+                let id = daemon.id.clone();
+                let ready = ready_rx.await;
+                SUPERVISOR.end_ready_check(&id, pid);
+                match ready {
+                    Ok(Ok(())) => {
+                        info!("daemon {id} is ready");
+                        // Re-read rather than returning the snapshot taken at
+                        // spawn: a completed oneshot has since been finalized, and
+                        // the snapshot would tell the caller it is still running
+                        // under a PID that has exited.
+                        //
+                        // Only when the record still describes this run, though. A
+                        // successor that claimed it carries its own PID and start
+                        // time, and reporting those as the outcome of the process
+                        // this call spawned would misattribute them.
+                        let daemon = match SUPERVISOR.get_daemon(&id).await {
+                            Some(current) if current.pid.is_none() || current.pid == Some(pid) => {
+                                current
+                            }
+                            // A successor owns the record, so neither it nor the
+                            // spawn snapshot describes this run: one carries
+                            // another process's identity, the other still says
+                            // running under a PID that has exited. A oneshot that
+                            // reported ready did finish, so report that outcome
+                            // directly rather than either misleading record.
+                            _ if oneshot => crate::daemon::Daemon {
+                                status: DaemonStatus::Completed,
+                                pid: None,
+                                start_time: None,
+                                boot_time: None,
+                                last_exit_success: Some(true),
+                                ..daemon
+                            },
+                            _ => daemon,
+                        };
+                        IpcResponse::DaemonReady { daemon }
                     }
-                    Ok(IpcResponse::DaemonFailedWithCode {
-                        exit_code,
-                        resolved_ports: attempt_resolved_ports,
-                    })
+                    Ok(Err(exit_code)) => {
+                        error!("daemon {id} failed before becoming ready");
+                        // The caller reports this by querying the log store for
+                        // what the daemon printed, so wait for the sink's final
+                        // write first. The in-process path got this ordering by
+                        // flushing synchronously before signalling.
+                        //
+                        // Only on the attempt that gives up: `run` retries inline,
+                        // and waiting after every attempt would both delay the
+                        // backoff and widen the window in which the daemon looks
+                        // errored and idle — long enough for the background retry
+                        // checker to start an attempt of its own alongside it.
+                        if using_sink && last_attempt {
+                            super::log_sink::wait_for_output(&id, spawn_time, SINK_OUTPUT_TIMEOUT)
+                                .await;
+                        }
+                        IpcResponse::DaemonFailedWithCode {
+                            exit_code,
+                            resolved_ports: attempt_resolved_ports,
+                        }
+                    }
+                    Err(_) => {
+                        error!("readiness channel closed unexpectedly for daemon {id}");
+                        IpcResponse::DaemonStart { daemon }
+                    }
                 }
-                Err(_) => {
-                    error!("readiness channel closed unexpectedly for daemon {id}");
-                    Ok(IpcResponse::DaemonStart { daemon })
-                }
+            };
+            if wait_ready {
+                let response = ready.await;
+                attempt_tx.send_replace(Some(response.clone()));
+                Ok(response)
+            } else {
+                tokio::spawn(async move {
+                    attempt_tx.send_replace(Some(ready.await));
+                });
+                Ok(started)
             }
         } else {
             Ok(IpcResponse::DaemonStart { daemon })

@@ -959,10 +959,14 @@ impl IpcClient {
                                         any_failed = true;
                                         error!("Daemon {} failed to start", id);
                                         failed.push((id.clone(), failure_reason(rr, code)));
-                                    } else if explicitly_requested.contains(&id) {
-                                        info!(
-                                            "Daemon {id} is already running, use --force to restart"
-                                        );
+                                    } else {
+                                        successful_this_level
+                                            .push((id.clone(), rr.resolved_ports.clone()));
+                                        if explicitly_requested.contains(&id) {
+                                            info!(
+                                                "Daemon {id} is already running, use --force to restart"
+                                            );
+                                        }
                                     }
                                 }
                                 Err(e) => {
