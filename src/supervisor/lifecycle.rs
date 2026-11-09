@@ -1209,6 +1209,25 @@ impl Supervisor {
             // the wrong process.
             if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port())
                 && port > 0
+            {
+                match claim_ports(id, &[port], false, 0).await {
+                    Ok((_, claim)) => port_claim = Some(claim),
+                    Err(e)
+                        if matches!(
+                            e.downcast_ref::<PortError>(),
+                            Some(PortError::Claimed { .. })
+                        ) =>
+                    {
+                        return Ok(IpcResponse::DaemonFailed {
+                            error: e.to_string(),
+                        });
+                    }
+                    // Taken by a process: reported below with its details.
+                    Err(_) => {}
+                }
+            }
+            if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port())
+                && port > 0
                 && let Some((address, pid, process)) = detect_port_conflict(port).await
             {
                 return Ok(IpcResponse::PortConflict {
@@ -1688,8 +1707,9 @@ impl Supervisor {
             // supervisor delivering into a channel nobody is reading. Dropped
             // explicitly once the daemon exits, before the drain below.
             let output_relay = output_relay;
-            // Released once the daemon is ready (it has bound its ports by
-            // then, so the bind check sees them) or this task ends.
+            // Held while the daemon runs, so none of its ports (it may bind
+            // them one at a time) is handed to another start; released as
+            // soon as its exit is observed, or when this task ends.
             let mut port_claim = port_claim;
 
             // Merge all output sources (PTY master OR stdout+stderr, or a
@@ -1928,9 +1948,6 @@ impl Supervisor {
             let mut ready_fail_kill: Option<tokio::task::JoinHandle<()>> = None;
 
             loop {
-                if ready_notified {
-                    port_claim.take();
-                }
                 // biased: evaluate in exit → output → delay order so that
                 // process exit pre-empts both buffered output and the delay
                 // timer, preventing a dead daemon from being marked ready.
@@ -1939,6 +1956,7 @@ impl Supervisor {
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
                         exit_status = Some(result);
+                        port_claim.take();
                         debug!("daemon {id} process exited, exit_status: {exit_status:?}");
                         if !ready_notified {
                             // Check if process exited successfully
@@ -3199,16 +3217,19 @@ fn nix_to_io_error(err: nix::errno::Errno) -> std::io::Error {
 /// Returns an error if any port is in use and auto_bump is disabled,
 /// or if no available ports can be found after max attempts.
 /// Ports resolved for daemons that are still starting, by the daemon holding them.
-static PORT_CLAIMS: Lazy<std::sync::Mutex<HashMap<u16, DaemonId>>> =
+static PORT_CLAIMS: Lazy<std::sync::Mutex<HashMap<u16, (DaemonId, u64)>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Serializes port resolution so two starts cannot both see a port unclaimed.
 static PORT_RESOLUTION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Reserves resolved ports for a starting daemon; releases them on drop.
+/// Source of per-claim generations, so a claim only releases its own entries.
+static PORT_CLAIM_GENERATION: atomic::AtomicU64 = atomic::AtomicU64::new(0);
+
+/// Reserves resolved ports for a daemon attempt; releases them on drop.
 #[derive(Debug)]
 struct PortClaim {
-    owner: DaemonId,
+    generation: u64,
     ports: Vec<u16>,
 }
 
@@ -3216,7 +3237,8 @@ impl Drop for PortClaim {
     fn drop(&mut self) {
         let mut claims = PORT_CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
         for port in &self.ports {
-            if claims.get(port) == Some(&self.owner) {
+            // A restart of the same daemon may have replaced the entry.
+            if claims.get(port).is_some_and(|(_, g)| *g == self.generation) {
                 claims.remove(port);
             }
         }
@@ -3240,24 +3262,19 @@ async fn claim_ports(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .iter()
-        .filter(|(_, owner)| *owner != id)
-        .map(|(port, owner)| (*port, owner.clone()))
+        .filter(|(_, (owner, _))| owner != id)
+        .map(|(port, (owner, _))| (*port, owner.clone()))
         .collect();
     let resolved = check_ports_available(expected_ports, auto_bump, max_attempts, &claimed).await?;
     let ports: Vec<u16> = resolved.iter().copied().filter(|&p| p != 0).collect();
+    let generation = PORT_CLAIM_GENERATION.fetch_add(1, atomic::Ordering::Relaxed);
     {
         let mut claims = PORT_CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
         for port in &ports {
-            claims.insert(*port, id.clone());
+            claims.insert(*port, (id.clone(), generation));
         }
     }
-    Ok((
-        resolved,
-        PortClaim {
-            owner: id.clone(),
-            ports,
-        },
-    ))
+    Ok((resolved, PortClaim { generation, ports }))
 }
 
 async fn check_ports_available(
@@ -3754,6 +3771,24 @@ mod port_conflict_tests {
         drop(claim);
         let (resolved, _claim) = claim_ports(&two, &[port], false, 0).await.unwrap();
         assert_eq!(resolved, vec![port]);
+    }
+
+    #[tokio::test]
+    async fn an_old_attempts_claim_does_not_release_its_replacement() {
+        use crate::daemon_id::DaemonId;
+        let _forks = FORKS.lock().await;
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let one = DaemonId::new("claim-restart", "web");
+        let other = DaemonId::new("claim-other", "web");
+
+        let (_, old) = claim_ports(&one, &[port], false, 0).await.unwrap();
+        let (_, new) = claim_ports(&one, &[port], false, 0).await.unwrap();
+        drop(old);
+        assert!(claim_ports(&other, &[port], false, 0).await.is_err());
+        drop(new);
+        assert!(claim_ports(&other, &[port], false, 0).await.is_ok());
     }
 
     #[cfg(unix)]
