@@ -2715,7 +2715,11 @@ impl Supervisor {
             if let Some(kill) = ready_fail_kill {
                 let result = kill.await.into_diagnostic().and_then(|result| result);
                 let failure = match result {
-                    Ok(_) => ReadyFailure::Exit(Some(124)),
+                    Ok(_) => {
+                        // The process is gone; free its ports before the drain.
+                        port_claim.take();
+                        ReadyFailure::Exit(Some(124))
+                    }
                     Err(error) => {
                         let error = format!(
                             "failed to terminate daemon {id} after readiness failure: {error}"
