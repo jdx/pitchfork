@@ -49,7 +49,7 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
           cache: false
       - name: Build UI assets
@@ -65,7 +65,7 @@ jobs:
           p12-password: ${{ secrets.CERTIFICATES_P12_PASS }}
       - name: Install cross
         if: matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cross
       - name: Setup Rust target
