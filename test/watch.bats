@@ -58,9 +58,141 @@ EOF
   pitchfork stop watch_test
 }
 
+@test "a dependent waits for a file-triggered restart to become ready" {
+  touch ready marker
+  create_pitchfork_toml <<'TOML'
+[daemons.watched_ready]
+run = "if test -e started; then touch restarted; else touch started; fi; while ! test -e ready; do sleep 0.1; done; echo READY; sleep 30"
+ready_output = "READY"
+watch = ["marker"]
+watch_mode = "poll"
+
+[daemons.dependent]
+run = "touch dependent_started; sleep 30"
+depends = ["watched_ready"]
+ready_delay = 0
+TOML
+
+  run pitchfork start watched_ready
+  assert_success
+  # Let the polling watcher take its initial sample before changing the file.
+  sleep 2
+  rm ready
+  echo changed >marker
+  wait_for_file restarted 15
+
+  pitchfork start dependent >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_readiness_waiter watched_ready
+  assert_file_not_exist dependent_started
+  touch ready
+  wait "$waiting_start"
+  wait_for_file dependent_started
+
+  pitchfork stop --all
+}
+
 # ============================================================================
 # Watch config persistence
 # ============================================================================
+
+# Regression: https://github.com/jdx/pitchfork/pull/1108#discussion_r4505580962
+@test "a dependent waits through retries of a file-triggered restart" {
+  touch marker
+  cat > restart_retry.sh <<'SCRIPT'
+count=0
+test ! -e attempts || count=$(cat attempts)
+count=$((count + 1))
+echo "$count" >attempts
+if test "$count" -eq 2; then
+  touch restarting
+  while test ! -e release_failure; do sleep 0.1; done
+  exit 4
+fi
+echo READY
+sleep 60
+SCRIPT
+  create_pitchfork_toml <<'TOML'
+[daemons.restart_retry]
+run = "sh restart_retry.sh"
+ready_output = "READY"
+retry = 1
+watch = ["marker"]
+watch_mode = "poll"
+
+[daemons.restart_dependent]
+run = "touch dependent_started; sleep 30"
+depends = ["restart_retry"]
+ready_delay = 0
+TOML
+
+  run pitchfork start restart_retry
+  assert_success
+  sleep 2
+  echo changed >marker
+  wait_for_file restarting 15
+  (
+    local start_status=0
+    pitchfork start restart_dependent >waiting_start.log 2>&1 || start_status=$?
+    echo "$start_status" >result
+  ) &
+  local waiting_start=$!
+  wait_for_readiness_waiter restart_retry
+  touch release_failure
+  wait_for_file result 15
+  wait "$waiting_start"
+  run cat result
+  assert_output "0"
+  wait_for_file dependent_started
+  run cat attempts
+  assert_output "3"
+}
+
+# Regression: https://github.com/jdx/pitchfork/pull/1108#discussion_r4505580973
+@test "a restart readiness timeout remains a failure after a clean SIGTERM exit" {
+  skip_on_windows "this regression exercises Unix SIGTERM handling"
+  touch marker
+  cat > clean_exit.py <<'PYTHON'
+import pathlib
+import signal
+import sys
+import time
+
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+attempts = pathlib.Path("attempts")
+count = int(attempts.read_text()) + 1 if attempts.exists() else 1
+attempts.write_text(str(count))
+if count == 1:
+    print("READY", flush=True)
+else:
+    pathlib.Path("restarted").touch()
+while True:
+    time.sleep(0.1)
+PYTHON
+  create_pitchfork_toml <<'TOML'
+[daemons.clean_timeout]
+run = ["python3", "-u", "clean_exit.py"]
+ready_output = { pattern = "READY", timeout = "1s" }
+retry = 0
+watch = ["marker"]
+watch_mode = "poll"
+
+[daemons.clean_timeout.hooks]
+on_fail = 'echo "$PITCHFORK_EXIT_CODE" >failure_code'
+TOML
+
+  run pitchfork start clean_timeout
+  assert_success
+  sleep 2
+  echo changed >marker
+  wait_for_file restarted 15
+  run cat attempts
+  assert_output "2"
+  wait_for_file failure_code 15
+  run cat failure_code
+  assert_output "124"
+  wait_for_status clean_timeout errored
+}
 
 @test "watch configuration persists in state across supervisor restart" {
   create_pitchfork_toml <<'EOF'

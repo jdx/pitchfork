@@ -638,6 +638,25 @@ wait_for_logs() {
   return 1
 }
 
+# Wait for a supervisor log entry before advancing a concurrent test.
+wait_for_supervisor_log() {
+  local pattern="$1"
+  local timeout_secs="${2:-10}"
+  local log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+  for _ in $(seq 1 "$((timeout_secs * 10))"); do
+    if grep -q "$pattern" "$log" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for supervisor log: $pattern" >&2
+  return 1
+}
+
+wait_for_readiness_waiter() {
+  wait_for_supervisor_log "daemon .*${1} .*waiting for it"
+}
+
 # Wait for a daemon to have at least N log lines (up to 10s)
 # Usage: wait_for_log_lines <daemon> <min_lines>
 wait_for_log_lines() {
@@ -659,11 +678,11 @@ wait_for_log_lines() {
 # File helpers
 # ---------------------------------------------------------------------------
 
-# Wait up to 5s for a file to exist
-# Usage: wait_for_file <path>
+# Usage: wait_for_file <path> [timeout_secs]
 wait_for_file() {
   local file="$1"
-  for _ in $(seq 1 50); do
+  local timeout_secs="${2:-5}"
+  for _ in $(seq 1 "$((timeout_secs * 10))"); do
     if [[ -e "$file" ]]; then
       return 0
     fi

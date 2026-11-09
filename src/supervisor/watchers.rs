@@ -1597,34 +1597,42 @@ impl Supervisor {
         let mut run_opts = daemon.to_run_options(cmd).await;
         run_opts.force = true;
         run_opts.retry_count = 0;
-        run_opts.wait_ready = false; // Don't block on file-triggered restarts
+        run_opts.wait_ready = true;
 
         // A process started in the meantime (after the check above) is
         // replaced by this forced start, whose own stop then leaves the mark
         // to settle against.
-        let mut restart_mark = None;
-        match self
-            .run_retry(run_opts, approved_at, &mut restart_mark)
-            .await
-        {
-            Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
-                info!("Successfully restarted daemon {id} after file change");
+        let retrying_claim = self.mark_retrying(id);
+        let id = id.clone();
+        // Keep watching other files while this restart waits through readiness
+        // and retries. Concurrent starts join the sequence owned by this task.
+        tokio::spawn(async move {
+            let _retrying_claim = retrying_claim;
+            let mut restart_mark = None;
+            match SUPERVISOR
+                .run_retry(run_opts, approved_at, &mut restart_mark)
+                .await
+            {
+                Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
+                    info!("Successfully restarted daemon {id} after file change");
+                }
+                Ok(IpcResponse::DaemonNotRunning) => {
+                    debug!(
+                        "Daemon {id} was stopped or disabled while restarting; not starting it again"
+                    );
+                }
+                Ok(other) => {
+                    warn!("Unexpected response when restarting daemon {id}: {other:?}");
+                }
+                Err(e) => {
+                    error!("Failed to restart daemon {id}: {e}");
+                }
             }
-            Ok(IpcResponse::DaemonNotRunning) => {
-                debug!(
-                    "Daemon {id} was stopped or disabled while restarting; not starting it again"
-                );
-            }
-            Ok(other) => {
-                warn!("Unexpected response when restarting daemon {id}: {other:?}");
-            }
-            Err(e) => {
-                error!("Failed to restart daemon {id}: {e}");
-            }
-        }
-        // A restart that did not start a process is not left restarting.
-        self.settle_restarting(id, restart_mark.unwrap_or(approved_at))
-            .await;
+            // A restart that did not start a process is not left restarting.
+            SUPERVISOR
+                .settle_restarting(&id, restart_mark.unwrap_or(approved_at))
+                .await;
+        });
 
         Ok(())
     }

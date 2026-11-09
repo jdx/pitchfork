@@ -2,8 +2,8 @@
 //!
 //! Handles automatic retrying of failed daemons based on retry configuration.
 
-use super::Supervisor;
 use super::hooks::{HookType, fire_hook};
+use super::{SUPERVISOR, Supervisor};
 use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::supervisor::state::UpsertDaemonOpts;
@@ -23,7 +23,7 @@ impl Supervisor {
                         && d.pid.is_none()
                         && d.retry.count() > 0
                         && d.retry_count < d.retry.count()
-                        // ...and no foreground run is already working through
+                        // ...and no startup is already working through
                         // its retries. Starting an attempt out from under one
                         // leaves its caller reporting on a run it does not own.
                         && !self.is_retrying(id)
@@ -49,7 +49,7 @@ impl Supervisor {
                             && d.pid.is_none()
                             && d.retry.count() > 0
                             && d.retry_count < d.retry.count()
-                            // Re-checked here as well: a foreground run can
+                            // Re-checked here as well: a startup can
                             // claim these retries while this loop is awaiting
                             // `run` for an earlier daemon.
                             && !self.is_retrying(&id)
@@ -60,6 +60,7 @@ impl Supervisor {
                     _ => continue, // Daemon was removed or no longer needs retry
                 }
             };
+            let retrying_claim = self.mark_retrying(&id);
             info!(
                 "retrying daemon {} ({}/{} attempts)",
                 id,
@@ -100,9 +101,17 @@ impl Supervisor {
             .await;
             let mut retry_opts = daemon.to_run_options(cmd).await;
             retry_opts.retry_count = daemon.retry_count + 1;
-            if let Err(e) = self.run_retry(retry_opts, approved_at, &mut None).await {
-                error!("failed to retry daemon {id}: {e}");
-            }
+            retry_opts.wait_ready = true;
+            // Waiting must not block refreshes or retries for other daemons.
+            tokio::spawn(async move {
+                let _retrying_claim = retrying_claim;
+                if let Err(e) = SUPERVISOR
+                    .run_retry(retry_opts, approved_at, &mut None)
+                    .await
+                {
+                    error!("failed to retry daemon {id}: {e}");
+                }
+            });
         }
 
         Ok(())

@@ -36,6 +36,22 @@ use tokio::time;
 static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
+type HttpProbe = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = std::result::Result<reqwest::Response, reqwest::Error>>
+            + Send,
+    >,
+>;
+
+type PortProbe = std::pin::Pin<
+    Box<dyn std::future::Future<Output = std::io::Result<tokio::net::TcpStream>> + Send>,
+>;
+
+enum ReadyFailure {
+    Exit(Option<i32>),
+    Termination(String),
+}
+
 fn resolve_configured_ready_port(
     configured_port: u16,
     expected_ports: &[u16],
@@ -233,21 +249,18 @@ fn stop_cmd_probe_state(probe: &mut Option<CmdProbe>) {
 }
 
 /// Spawn a detached task that kills a daemon's process group after its
-/// readiness checks are exhausted, logging a failed kill instead of
-/// discarding it. The returned handle is awaited before the readiness
-/// failure is reported so the process group is down by then.
+/// readiness checks are exhausted. A failed kill must be reported before
+/// waiting for the child, which may still be alive.
 fn spawn_ready_fail_kill(
     id: DaemonId,
     pid: u32,
     stop_cfg: crate::config_types::StopConfig,
-) -> tokio::task::JoinHandle<()> {
+) -> tokio::task::JoinHandle<Result<bool>> {
     tokio::spawn(async move {
-        if let Err(e) = PROCS
+        debug!("daemon {id}: terminating pid {pid} after readiness failure");
+        PROCS
             .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
             .await
-        {
-            error!("daemon {id}: failed to kill pid {pid} after readiness failure: {e}");
-        }
     })
 }
 
@@ -395,6 +408,29 @@ fn output_line_text(line: &[u8]) -> String {
         .to_string()
 }
 
+/// Wait for the start whose result this is to end, and report that result as
+/// the waiting start's own. If its caller was canceled, the detached attempt
+/// still owns its readiness result.
+async fn await_start_result(
+    mut start_result: super::StartResult,
+    fallback: Option<super::StartResult>,
+) -> IpcResponse {
+    if let Ok(result) = start_result.wait_for(Option::is_some).await
+        && let Some(result) = result.clone()
+    {
+        return result;
+    }
+    if let Some(mut attempt) = fallback
+        && let Ok(result) = attempt.wait_for(Option::is_some).await
+        && let Some(result) = result.clone()
+    {
+        return result;
+    }
+    IpcResponse::DaemonFailed {
+        error: "start ended without a readiness result".to_string(),
+    }
+}
+
 /// Send each line of `reader` to `tx` until the output ends or nobody is
 /// listening.
 ///
@@ -477,7 +513,7 @@ impl Drop for RetryingGuard {
         // may still be running, and it has to stay both protected from the
         // retry checker and reachable by a stop.
         if let Some(claims) = retrying.get_mut(&self.id) {
-            claims.retain(|flag| !std::sync::Arc::ptr_eq(flag, &self.cancel));
+            claims.retain(|claim| !std::sync::Arc::ptr_eq(&claim.cancel, &self.cancel));
             if claims.is_empty() {
                 retrying.remove(&self.id);
             }
@@ -486,8 +522,7 @@ impl Drop for RetryingGuard {
 }
 
 impl Supervisor {
-    /// Whether a foreground `run` is already working through this daemon's
-    /// retries.
+    /// Whether a start is already handling this daemon's retries.
     pub(crate) fn is_retrying(&self, id: &DaemonId) -> bool {
         self.retrying
             .lock()
@@ -515,21 +550,48 @@ impl Supervisor {
             .or_default() += 1;
     }
 
-    fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
+    pub(super) fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
+        self.mark_retrying_with_result(id, None)
+    }
+
+    fn mark_retrying_with_result(
+        &self,
+        id: &DaemonId,
+        result: Option<&super::StartResult>,
+    ) -> RetryingGuard {
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.retrying
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .entry(id.clone())
             .or_default()
-            .push(cancel.clone());
+            .push(super::RetryClaim {
+                cancel: cancel.clone(),
+                result: result.cloned(),
+            });
         RetryingGuard {
             id: id.clone(),
             cancel,
         }
     }
 
-    /// Ask a foreground retry sequence for this daemon, if there is one, to
+    fn retry_result(
+        &self,
+        id: &DaemonId,
+        own_result: Option<&super::StartResult>,
+    ) -> Option<super::StartResult> {
+        self.retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)?
+            .iter()
+            .filter(|claim| !claim.cancel.load(atomic::Ordering::Acquire))
+            .filter_map(|claim| claim.result.as_ref())
+            .find(|result| own_result.is_none_or(|own| !own.same_channel(result)))
+            .cloned()
+    }
+
+    /// Ask a retry sequence for this daemon, if there is one, to
     /// end. A stop is a decision about the daemon, not about one of its
     /// attempts, so the attempts left must not go ahead behind it.
     pub(crate) fn cancel_retrying(&self, id: &DaemonId) {
@@ -542,8 +604,10 @@ impl Supervisor {
             // Every claim, not just the newest: a start that is sleeping out a
             // backoff is as much a sequence the stop has to end as the one that
             // claimed the daemon last.
-            for cancel in claims {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
+            for claim in claims {
+                claim
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
         }
     }
@@ -552,12 +616,29 @@ impl Supervisor {
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = opts.id.clone();
         let mut restart_mark = None;
-        let result = self.run_inner(opts, None, &mut restart_mark).await;
+        // This start's result, for every start that finds one of its processes
+        // still waiting on its ready check (see `claim_or_defer`). Published
+        // only once the start ends, so that a start waiting through a failed
+        // attempt that is retried gets the outcome of the retries.
+        let (result_tx, result_rx) = tokio::sync::watch::channel(None);
+        let wait_ready = opts.wait_ready;
+        let result = self
+            .run_inner(
+                opts,
+                None,
+                &mut restart_mark,
+                wait_ready.then_some(&result_rx),
+            )
+            .await;
         // A forced start records the daemon it replaces as restarting. If no
         // new process took the record over, the restart did not happen.
         if let Some(mark) = restart_mark {
             self.settle_restarting(&id, mark).await;
         }
+        result_tx.send_replace(Some(match &result {
+            Ok(response) => response.clone(),
+            Err(e) => IpcResponse::Error(e.to_string()),
+        }));
         result
     }
 
@@ -586,7 +667,7 @@ impl Supervisor {
         }
     }
 
-    /// Run an attempt the retry checker decided on while `stop_epoch` read
+    /// Run the remaining retries approved while `stop_epoch` read
     /// `approved_at`. If the daemon has been stopped since, the attempt is
     /// abandoned instead of started.
     ///
@@ -598,7 +679,21 @@ impl Supervisor {
         approved_at: u64,
         restart_mark: &mut Option<u64>,
     ) -> Result<IpcResponse> {
-        self.run_inner(opts, Some(approved_at), restart_mark).await
+        let (result_tx, result_rx) = tokio::sync::watch::channel(None);
+        let wait_ready = opts.wait_ready;
+        let result = self
+            .run_inner(
+                opts,
+                Some(approved_at),
+                restart_mark,
+                wait_ready.then_some(&result_rx),
+            )
+            .await;
+        result_tx.send_replace(Some(match &result {
+            Ok(response) => response.clone(),
+            Err(error) => IpcResponse::Error(error.to_string()),
+        }));
+        result
     }
 
     /// Reject unsupported options while the caller holds the daemon's stop lock.
@@ -630,11 +725,15 @@ impl Supervisor {
     /// `restart_mark` is set to the stop epoch a forced start's own stop of
     /// the running instance left, if it made one (see
     /// [`Self::settle_restarting`]).
+    ///
+    /// `start_result` is where this start's result will be, registered for
+    /// each process it spawns while that process waits on its ready check.
     async fn run_inner(
         &self,
         opts: RunOptions,
         approved_at: Option<u64>,
         restart_mark: &mut Option<u64>,
+        start_result: Option<&super::StartResult>,
     ) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
@@ -678,7 +777,7 @@ impl Supervisor {
             return Ok(IpcResponse::DaemonNotRunning);
         }
         if let Some(response) = self
-            .claim_or_defer(&opts, &mut stop_guard, restart_mark)
+            .claim_or_defer(&opts, &mut stop_guard, restart_mark, start_result)
             .await?
         {
             return Ok(response);
@@ -690,10 +789,15 @@ impl Supervisor {
             // backoff between attempts leaves the record errored with no PID,
             // which is what `check_retry` scans for, and an attempt started
             // there would leave this call reporting on a run it does not own.
-            let retrying_claim = self.mark_retrying(id);
+            let retrying_claim = self.mark_retrying_with_result(id, start_result);
             // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
             let max_attempts = opts.retry.count().saturating_add(1);
-            for attempt in 0..max_attempts {
+            let first_attempt = if approved_at.is_some() {
+                opts.retry_count
+            } else {
+                0
+            };
+            for attempt in first_attempt..max_attempts {
                 let mut retry_opts = opts.clone();
                 retry_opts.retry_count = attempt;
                 retry_opts.cmd = cmd.clone();
@@ -748,7 +852,7 @@ impl Supervisor {
                 // Spawning another process here would replace that attempt's
                 // monitor registration and leave its process unmonitored.
                 if let Some(response) = self
-                    .claim_or_defer(&retry_opts, &mut guard, restart_mark)
+                    .claim_or_defer(&retry_opts, &mut guard, restart_mark, start_result)
                     .await?
                 {
                     return Ok(response);
@@ -758,7 +862,7 @@ impl Supervisor {
                     // those returned above.
                     return Ok(IpcResponse::DaemonAlreadyRunning);
                 };
-                let result = self.run_once(retry_opts, guard).await?;
+                let result = self.run_once(retry_opts, guard, start_result).await?;
 
                 match result {
                     IpcResponse::DaemonReady { daemon } => {
@@ -829,7 +933,7 @@ impl Supervisor {
             Some(guard) => guard,
             None => self.stop_lock(id).await.lock_owned().await,
         };
-        self.run_once(opts, guard).await
+        self.run_once(opts, guard, start_result).await
     }
 
     /// Wait for a just-failed attempt's monitor to write its terminal state,
@@ -869,19 +973,45 @@ impl Supervisor {
     /// are rejected before a forced claim can stop an existing instance, even
     /// when settings changed during a foreground retry's backoff.
     ///
-    /// `stop_guard` is released before an in-flight oneshot is awaited: that
-    /// wait lasts as long as the task does, and holding the lock would block a
-    /// stop of the very run being waited on.
+    /// `stop_guard` is released before an in-flight oneshot or another start's
+    /// ready check is awaited: that wait lasts as long as the run does, and
+    /// holding the lock would block a stop of the very run being waited on.
     async fn claim_or_defer(
         &self,
         opts: &RunOptions,
         stop_guard: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
         restart_mark: &mut Option<u64>,
+        own_result: Option<&super::StartResult>,
     ) -> Result<Option<IpcResponse>> {
         let id = &opts.id;
         #[cfg(windows)]
         if let Some(response) = self.reject_unsupported_windows_options(opts).await? {
             return Ok(Some(response));
+        }
+        if !opts.force
+            && let Some(result) = self.retry_result(id, own_result)
+        {
+            if !opts.wait_ready {
+                return Ok(Some(IpcResponse::DaemonAlreadyRunning));
+            }
+            info!("daemon {id} has a start sequence in progress; waiting for it");
+            let fallback = self
+                .ready_check(id)
+                .filter(|check| check.result.same_channel(&result))
+                .map(|check| check.attempt);
+            let oneshot = self
+                .get_daemon(id)
+                .await
+                .filter(|daemon| daemon.oneshot)
+                .map(|daemon| daemon.pid.unwrap_or(0));
+            drop(stop_guard.take());
+            if let Some(pid) = oneshot {
+                // Preserve the joining caller's oneshot wait budget across backoff.
+                return Ok(Some(
+                    self.await_running_oneshot(id, opts.oneshot_wait, pid).await,
+                ));
+            }
+            return Ok(Some(await_start_result(result, fallback).await));
         }
         let Some(daemon) = self.get_daemon(id).await else {
             return Ok(None);
@@ -934,6 +1064,28 @@ impl Supervisor {
                 self.await_running_oneshot(id, opts.oneshot_wait, pid).await,
             ));
         }
+        if opts.wait_ready
+            && let Some(check) = self.ready_check(id)
+            && check.pid == pid
+        {
+            // The process is up but its ready check has not passed, so
+            // "already running" would let this caller, and whatever depends
+            // on the daemon, go on before it is ready. Wait for the start under
+            // way instead and report its result as this one's: its check is
+            // the one that decides whether this process is ready.
+            info!("daemon {id} (pid {pid}) has not passed its ready check; waiting for it");
+            drop(stop_guard.take());
+            return Ok(Some(
+                await_start_result(check.result, Some(check.attempt)).await,
+            ));
+        }
+        if let DaemonStatus::Failed(error) = &daemon.status
+            && PROCS.process_group_alive(pid)
+        {
+            return Ok(Some(IpcResponse::DaemonFailed {
+                error: error.clone(),
+            }));
+        }
         // A record can name a PID that has already exited: `stop` leaves the
         // terminal state to a monitor that still owns the daemon, and that
         // monitor writes it only after draining the process's output. Rejecting
@@ -942,6 +1094,8 @@ impl Supervisor {
         // before refusing. The oneshot branch above deliberately comes first: a
         // task whose process has exited is about to be recorded as completed,
         // and starting a second copy of it is exactly what waiting prevents.
+        // So does the ready check's: a process that exited before passing it
+        // is about to be reported as failed by the start waiting on it.
         PROCS.refresh_pids(&[pid]);
         if !PROCS.is_running(pid) {
             debug!(
@@ -1073,6 +1227,50 @@ impl Supervisor {
         }
     }
 
+    /// Register a process's pending readiness result.
+    fn register_ready_check(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        start_result: &super::StartResult,
+        attempt: &super::StartResult,
+    ) {
+        self.ready_checks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                id.clone(),
+                super::ReadyCheck {
+                    pid,
+                    result: start_result.clone(),
+                    attempt: attempt.clone(),
+                },
+            );
+    }
+
+    /// The process and readiness result currently being checked for `id`.
+    fn ready_check(&self, id: &DaemonId) -> Option<super::ReadyCheck> {
+        self.ready_checks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
+    }
+
+    /// Record that the ready check of `id`'s attempt has ended, so a start
+    /// from then on finds the daemon ready, or the process gone. Only that
+    /// attempt's: a forced start may since have registered its successor's
+    /// under the same id, possibly with the same PID.
+    fn end_ready_check(&self, id: &DaemonId, attempt: &super::StartResult) {
+        let mut ready_checks = self.ready_checks.lock().unwrap_or_else(|e| e.into_inner());
+        if ready_checks
+            .get(id)
+            .is_some_and(|check| check.attempt.same_channel(attempt))
+        {
+            ready_checks.remove(id);
+        }
+    }
+
     /// Run a daemon once (single attempt).
     ///
     /// `stop_guard` is this daemon's stop lock, acquired by `run` before the
@@ -1083,6 +1281,7 @@ impl Supervisor {
         &self,
         opts: RunOptions,
         stop_guard: tokio::sync::OwnedMutexGuard<()>,
+        start_result: Option<&super::StartResult>,
     ) -> Result<IpcResponse> {
         let id = &opts.id;
         // Checked under the daemon's stop lock, which `close()` waits out
@@ -1107,9 +1306,9 @@ impl Supervisor {
         }
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
-        // Create channel for readiness notification if wait_ready is true
-        let (ready_tx, ready_rx) = if opts.wait_ready {
-            let (tx, rx) = oneshot::channel();
+        // Background starts also publish readiness for concurrent callers.
+        let (ready_tx, ready_rx) = if opts.wait_ready || !opts.oneshot {
+            let (tx, rx) = oneshot::channel::<std::result::Result<(), ReadyFailure>>();
             (Some(tx), Some(rx))
         } else {
             (None, None)
@@ -1615,6 +1814,13 @@ impl Supervisor {
             )
             .await?;
 
+        // Registered while the stop lock is still held, so a start that finds
+        // this process running also finds the start it has to wait for.
+        let (attempt_tx, attempt_rx) = tokio::sync::watch::channel(None);
+        if ready_rx.is_some() {
+            self.register_ready_check(id, pid, start_result.unwrap_or(&attempt_rx), &attempt_rx);
+        }
+
         // Running state and PID are now persisted: concurrent run/stop calls
         // observe a running daemon and behave correctly, so release the stop
         // lock rather than holding it through the readiness wait below, which
@@ -1748,23 +1954,26 @@ impl Supervisor {
             const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
             let mut log_buffer: Vec<crate::log_parse::ParsedLog> =
                 Vec::with_capacity(LOG_BATCH_SIZE);
+            let mut pending_log_writes: Vec<tokio::task::JoinHandle<()>> = Vec::new();
             let mut log_flush_interval = tokio::time::interval(LOG_FLUSH_INTERVAL);
             log_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let flush_logs =
-                |buffer: &mut Vec<crate::log_parse::ParsedLog>| -> Option<tokio::task::JoinHandle<()>> {
+                |buffer: &mut Vec<crate::log_parse::ParsedLog>,
+                 pending: &mut Vec<tokio::task::JoinHandle<()>>| {
+                    pending.retain(|handle| !handle.is_finished());
                     if buffer.is_empty() {
-                        return None;
-                }
-                let store = Arc::clone(&log_store);
-                let id = id.clone();
-                let batch = std::mem::take(buffer);
-                Some(tokio::task::spawn_blocking(move || {
-                    if let Err(e) = store.append_structured_batch(&id, &batch) {
-                        error!("Failed to write batch to log for daemon {id}: {e}");
+                        return;
                     }
-                }))
-            };
+                    let store = Arc::clone(&log_store);
+                    let id = id.clone();
+                    let batch = std::mem::take(buffer);
+                    pending.push(tokio::task::spawn_blocking(move || {
+                        if let Err(e) = store.append_structured_batch(&id, &batch) {
+                            error!("Failed to write batch to log for daemon {id}: {e}");
+                        }
+                    }))
+                };
 
             // SQLite WAL mode provides automatic durability; no explicit flush needed.
 
@@ -1808,6 +2017,15 @@ impl Supervisor {
             // Last time the on_output hook fired; None means it has never fired.
             let mut on_output_last_fired: Option<std::time::Instant> = None;
 
+            // An unchecked service is ready once spawned. Oneshots still wait for exit.
+            let ready_delay = ready_delay.or_else(|| {
+                (!opts.oneshot
+                    && ready_output.is_none()
+                    && ready_http.is_none()
+                    && ready_port.is_none()
+                    && ready_cmd.is_none())
+                .then_some(0)
+            });
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
 
@@ -1841,6 +2059,7 @@ impl Supervisor {
             } else {
                 None
             };
+            let mut http_probe: Option<HttpProbe> = None;
 
             // Setup TCP port readiness check interval and deadline
             let mut port_check_interval =
@@ -1849,6 +2068,7 @@ impl Supervisor {
                 .as_ref()
                 .and_then(|p| p.timeout)
                 .map(|d| Box::pin(time::sleep(d)));
+            let mut port_probe: Option<PortProbe> = None;
 
             // Setup command readiness check state. Probes are spawned one at a time;
             // a non-zero result triggers a respawn delay, and a timeout stops the probe.
@@ -1945,12 +2165,10 @@ impl Supervisor {
             // cleanup would otherwise block on a full pipe and never exit.
             // The ready failure is only sent once the kill task completes,
             // so the retry loop cannot respawn into the dying group.
-            let mut ready_fail_kill: Option<tokio::task::JoinHandle<()>> = None;
+            let mut ready_fail_kill: Option<tokio::task::JoinHandle<Result<bool>>> = None;
 
             loop {
-                // biased: evaluate in exit → output → delay order so that
-                // process exit pre-empts both buffered output and the delay
-                // timer, preventing a dead daemon from being marked ready.
+                // Process exits win; readiness timers precede probes and output.
                 select! {
                     biased;
                     Some(result) = exit_rx.recv() => {
@@ -1976,7 +2194,7 @@ impl Supervisor {
                                         .and_then(|r| r.as_ref().ok())
                                         .and_then(|s| s.code());
                                     debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {exit_code:?}");
-                                    let _ = tx.send(Err(exit_code));
+                                    let _ = tx.send(Err(ReadyFailure::Exit(exit_code)));
                                 }
                             }
                         } else {
@@ -1984,83 +2202,6 @@ impl Supervisor {
                         }
                         break;
                     },
-                    Some(super::OutputLine { text: line, source }) = output_rx.recv() => {
-                        // A line relayed by a sink is already in the store —
-                        // the sink wrote and flushed it before reporting it —
-                        // so it arrives here only to be acted on.
-                        if matches!(source, super::OutputSource::Local) {
-                            let parsed = parse_line(&line);
-                            log_buffer.push(parsed);
-                            if log_buffer.len() >= LOG_BATCH_SIZE {
-                                let _ = flush_logs(&mut log_buffer);
-                            }
-                        }
-                        trace!("output: {id} {line}");
-
-                        // Strip ANSI for pattern matching so user-written patterns
-                        // work regardless of whether the process emits color codes.
-                        let line_clean = console::strip_ansi_codes(&line).to_string();
-
-                        // Check if output matches ready pattern
-                        if !ready_notified
-                            && !output_exhausted
-                            && let Some(ref pattern) = ready_pattern
-                            && pattern.is_match(&line_clean)
-                        {
-                            // Flush buffered logs synchronously before signalling
-                            // readiness, so collect_startup_logs sees the line
-                            // that triggered the match (and any co-buffered lines)
-                            // in SQLite.
-                            if let Some(handle) = flush_logs(&mut log_buffer) {
-                                let _ = handle.await;
-                            }
-                            info!("daemon {id} ready: output matched pattern");
-                            ready_notified = true;
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Ok(()));
-                            }
-                            fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
-                            stop_cmd_probe_state(&mut cmd_probe);
-                            http_deadline = None;
-                            cmd_deadline = None;
-                            port_deadline = None;
-                            output_deadline = None;
-                            if !active_port_spawned && has_port_config {
-                                active_port_spawned = true;
-                                detect_and_store_active_port(id.clone(), daemon_pid);
-                            }
-                        }
-
-                        // Check on_output hook. A sink has already applied the
-                        // filter, and says so per line: a line reported only
-                        // because it announced readiness must not fire a hook
-                        // that filters for something else.
-                        if let Some(ref hook) = on_output_hook {
-                            let matched = match source {
-                                super::OutputSource::Sink { fires_hook } => fires_hook,
-                                super::OutputSource::Local => match (&hook.filter, &on_output_pattern) {
-                                    (Some(substr), _) => line_clean.contains(substr.as_str()),
-                                    (None, Some(re)) => re.is_match(&line_clean),
-                                    (None, None) => true,
-                                },
-                            };
-                            if matched {
-                                // The debounce is applied here as well as in the
-                                // sink. A replacement sink starts with a fresh
-                                // clock, and would otherwise let the hook fire
-                                // twice inside one configured window.
-                                let now = std::time::Instant::now();
-                                let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
-                                if elapsed.is_none_or(|e| e >= on_output_debounce) {
-                                    on_output_last_fired = Some(now);
-                                    hooks::fire_output_hook(id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), hook.run.clone(), line_clean.clone()).await;
-                                }
-                            }
-                        }
-                        // Yield briefly so that the output readiness deadline can be
-                        // evaluated even when output is produced continuously.
-                        tokio::task::yield_now().await;
-                    }
                     _ = async {
                         if let Some(ref mut deadline) = http_deadline {
                             deadline.await;
@@ -2071,6 +2212,7 @@ impl Supervisor {
                         http_exhausted = true;
                         http_deadline = None;
                         http_check_interval = None;
+                        http_probe = None;
                         warn!("daemon {id}: HTTP readiness check timed out");
                         let any_remaining = any_ready_check_remaining(
                             ready_output.as_ref(),
@@ -2125,14 +2267,148 @@ impl Supervisor {
                         }
                     }
                     _ = async {
+                        if let Some(ref mut deadline) = port_deadline {
+                            deadline.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_port.is_some() => {
+                        port_exhausted = true;
+                        port_deadline = None;
+                        port_check_interval = None;
+                        port_probe = None;
+                        warn!("daemon {id}: TCP port readiness check timed out");
+                        let any_remaining = any_ready_check_remaining(
+                            ready_output.as_ref(),
+                            output_exhausted,
+                            ready_port_config.as_ref(),
+                            port_exhausted,
+                            ready_http.as_ref(),
+                            http_exhausted,
+                            ready_cmd.as_ref(),
+                            cmd_exhausted,
+                        );
+                        if !any_remaining {
+                            error!("daemon {id}: all readiness checks exhausted, failing");
+                            stop_cmd_probe_state(&mut cmd_probe);
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
+                            break;
+                        }
+                    }
+                    _ = async {
+                        if let Some(ref mut deadline) = cmd_deadline {
+                            deadline.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_cmd.is_some() => {
+                        cmd_exhausted = true;
+                        cmd_deadline = None;
+                        stop_cmd_probe_state(&mut cmd_probe);
+                        cmd_respawn_delay = None;
+                        warn!("daemon {id}: command readiness check timed out");
+                        let any_remaining = any_ready_check_remaining(
+                            ready_output.as_ref(),
+                            output_exhausted,
+                            ready_port_config.as_ref(),
+                            port_exhausted,
+                            ready_http.as_ref(),
+                            http_exhausted,
+                            ready_cmd.as_ref(),
+                            cmd_exhausted,
+                        );
+                        if !any_remaining {
+                            error!("daemon {id}: all readiness checks exhausted, failing");
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
+                            break;
+                        }
+                    }
+                    _ = async {
+                        if let Some(ref mut timer) = delay_timer {
+                            timer.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        let has_other_ready_check = ready_pattern.is_some()
+                            || ready_http.is_some()
+                            || ready_port.is_some()
+                            || ready_cmd.is_some();
+                        let delay_is_only_readiness = !ready_notified && !has_other_ready_check;
+                        let process_exited = exit_status.is_some();
+                        let process_running = if delay_is_only_readiness && !process_exited {
+                            // A zombie still answers kill(pid, 0), but cannot
+                            // become ready while its exit notification is pending.
+                            PROCS.is_live(daemon_pid)
+                        } else {
+                            false
+                        };
+
+                        if delay_readiness_succeeded(
+                            ready_notified,
+                            has_other_ready_check,
+                            process_exited,
+                            process_running,
+                        ) {
+                            info!("daemon {id} ready: delay elapsed");
+                            ready_notified = true;
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                            fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                            if !active_port_spawned && has_port_config {
+                                active_port_spawned = true;
+                                detect_and_store_active_port(id.clone(), daemon_pid);
+                            }
+                        } else if delay_is_only_readiness {
+                            if process_exited {
+                                debug!("daemon {id} exited during ready_delay, not marking as ready");
+                            } else {
+                                debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
+                            }
+                        }
+
+                        if delay_is_only_readiness {
+                            // Clear all deadlines — no other checks are configured
+                            // when delay fires as readiness, but clear defensively.
+                            output_deadline = None;
+                            http_deadline = None;
+                            cmd_deadline = None;
+                            port_deadline = None;
+                            stop_cmd_probe_state(&mut cmd_probe);
+                        }
+                        // Disable timer after it fires
+                        delay_timer = None;
+                    }
+                    _ = async {
                         if let Some(ref mut interval) = http_check_interval {
                             interval.tick().await;
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
+                    }, if !ready_notified && ready_http.is_some() && !http_exhausted && http_probe.is_none() => {
                         if let (Some(http), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(&http.url).timeout(http_client_timeout).send().await {
+                            http_probe = Some(Box::pin(client.get(&http.url).timeout(http_client_timeout).send()));
+                        }
+                    }
+                    result = async {
+                        if let Some(probe) = http_probe.as_mut() {
+                            probe.as_mut().await
+                        } else {
+                            std::future::pending::<std::result::Result<reqwest::Response, reqwest::Error>>().await
+                        }
+                    }, if !ready_notified && http_probe.is_some() => {
+                        http_probe = None;
+                        if let Some(http) = &ready_http {
+                            match result {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
@@ -2161,46 +2437,26 @@ impl Supervisor {
                         }
                     }
                     _ = async {
-                        if let Some(ref mut deadline) = port_deadline {
-                            deadline.await;
-                        } else {
-                            std::future::pending::<()>().await;
-                        }
-                    }, if !ready_notified && ready_port.is_some() => {
-                        port_exhausted = true;
-                        port_deadline = None;
-                        port_check_interval = None;
-                        warn!("daemon {id}: TCP port readiness check timed out");
-                        let any_remaining = any_ready_check_remaining(
-                            ready_output.as_ref(),
-                            output_exhausted,
-                            ready_port_config.as_ref(),
-                            port_exhausted,
-                            ready_http.as_ref(),
-                            http_exhausted,
-                            ready_cmd.as_ref(),
-                            cmd_exhausted,
-                        );
-                        if !any_remaining {
-                            error!("daemon {id}: all readiness checks exhausted, failing");
-                            stop_cmd_probe_state(&mut cmd_probe);
-                            ready_fail_kill = Some(spawn_ready_fail_kill(
-                                id.clone(),
-                                daemon_pid,
-                                opts.stop_signal.unwrap_or_default(),
-                            ));
-                            break;
-                        }
-                    }
-                    _ = async {
                         if let Some(ref mut interval) = port_check_interval {
                             interval.tick().await;
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if !ready_notified && ready_port.is_some() && !port_exhausted => {
+                    }, if !ready_notified && ready_port.is_some() && !port_exhausted && port_probe.is_none() => {
                         if let Some(port) = ready_port {
-                            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                            port_probe = Some(Box::pin(tokio::net::TcpStream::connect(("127.0.0.1", port))));
+                        }
+                    }
+                    result = async {
+                        if let Some(probe) = port_probe.as_mut() {
+                            probe.as_mut().await
+                        } else {
+                            std::future::pending::<std::io::Result<tokio::net::TcpStream>>().await
+                        }
+                    }, if !ready_notified && port_probe.is_some() => {
+                        port_probe = None;
+                        if let Some(port) = ready_port {
+                            match result {
                                 Ok(_) => {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
@@ -2305,101 +2561,94 @@ impl Supervisor {
                             }
                         }
                     }
-                    _ = async {
-                        if let Some(ref mut deadline) = cmd_deadline {
-                            deadline.await;
-                        } else {
-                            std::future::pending::<()>().await;
+                    Some(super::OutputLine { text: line, source }) = output_rx.recv() => {
+                        // A line relayed by a sink is already in the store —
+                        // the sink wrote and flushed it before reporting it —
+                        // so it arrives here only to be acted on.
+                        if matches!(source, super::OutputSource::Local) {
+                            let parsed = parse_line(&line);
+                            log_buffer.push(parsed);
+                            if log_buffer.len() >= LOG_BATCH_SIZE {
+                                flush_logs(&mut log_buffer, &mut pending_log_writes);
+                            }
                         }
-                    }, if !ready_notified && ready_cmd.is_some() => {
-                        cmd_exhausted = true;
-                        cmd_deadline = None;
-                        stop_cmd_probe_state(&mut cmd_probe);
-                        cmd_respawn_delay = None;
-                        warn!("daemon {id}: command readiness check timed out");
-                        let any_remaining = any_ready_check_remaining(
-                            ready_output.as_ref(),
-                            output_exhausted,
-                            ready_port_config.as_ref(),
-                            port_exhausted,
-                            ready_http.as_ref(),
-                            http_exhausted,
-                            ready_cmd.as_ref(),
-                            cmd_exhausted,
-                        );
-                        if !any_remaining {
-                            error!("daemon {id}: all readiness checks exhausted, failing");
-                            ready_fail_kill = Some(spawn_ready_fail_kill(
-                                id.clone(),
-                                daemon_pid,
-                                opts.stop_signal.unwrap_or_default(),
-                            ));
-                            break;
-                        }
-                    }
-                    _ = async {
-                        if let Some(ref mut timer) = delay_timer {
-                            timer.await;
-                        } else {
-                            std::future::pending::<()>().await;
-                        }
-                    } => {
-                        let has_other_ready_check = ready_pattern.is_some()
-                            || ready_http.is_some()
-                            || ready_port.is_some()
-                            || ready_cmd.is_some();
-                        let delay_is_only_readiness = !ready_notified && !has_other_ready_check;
-                        let process_exited = exit_status.is_some();
-                        let process_running = if delay_is_only_readiness && !process_exited {
-                            // Force-refresh sysinfo for this PID before checking.
-                            // On Windows, the cached process list may be stale.
-                            PROCS.refresh_pids(&[daemon_pid]);
-                            PROCS.is_running(daemon_pid)
-                        } else {
-                            false
-                        };
+                        trace!("output: {id} {line}");
 
-                        if delay_readiness_succeeded(
-                            ready_notified,
-                            has_other_ready_check,
-                            process_exited,
-                            process_running,
-                        ) {
-                            info!("daemon {id} ready: delay elapsed");
+                        // Strip ANSI for pattern matching so user-written patterns
+                        // work regardless of whether the process emits color codes.
+                        let line_clean = console::strip_ansi_codes(&line).to_string();
+
+                        // Check if output matches ready pattern
+                        if !ready_notified
+                            && !output_exhausted
+                            && let Some(ref pattern) = ready_pattern
+                            && pattern.is_match(&line_clean)
+                        {
+                            // Flush buffered logs synchronously before signalling
+                            // readiness, so collect_startup_logs sees the line
+                            // that triggered the match (and any co-buffered lines)
+                            // in SQLite.
+                            flush_logs(&mut log_buffer, &mut pending_log_writes);
+                            for handle in pending_log_writes.drain(..) {
+                                let _ = handle.await;
+                            }
+                            info!("daemon {id} ready: output matched pattern");
                             ready_notified = true;
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
                             fire_hook(HookType::OnReady, id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                            stop_cmd_probe_state(&mut cmd_probe);
+                            http_deadline = None;
+                            cmd_deadline = None;
+                            port_deadline = None;
+                            output_deadline = None;
                             if !active_port_spawned && has_port_config {
                                 active_port_spawned = true;
                                 detect_and_store_active_port(id.clone(), daemon_pid);
                             }
-                        } else if delay_is_only_readiness {
-                            if process_exited {
-                                debug!("daemon {id} exited during ready_delay, not marking as ready");
-                            } else {
-                                debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
-                            }
                         }
 
-                        if delay_is_only_readiness {
-                            // Clear all deadlines — no other checks are configured
-                            // when delay fires as readiness, but clear defensively.
-                            output_deadline = None;
-                            http_deadline = None;
-                            cmd_deadline = None;
-                            port_deadline = None;
-                            stop_cmd_probe_state(&mut cmd_probe);
+                        // Check on_output hook. A sink has already applied the
+                        // filter, and says so per line: a line reported only
+                        // because it announced readiness must not fire a hook
+                        // that filters for something else.
+                        if let Some(ref hook) = on_output_hook {
+                            let matched = match source {
+                                super::OutputSource::Sink { fires_hook } => fires_hook,
+                                super::OutputSource::Local => match (&hook.filter, &on_output_pattern) {
+                                    (Some(substr), _) => line_clean.contains(substr.as_str()),
+                                    (None, Some(re)) => re.is_match(&line_clean),
+                                    (None, None) => true,
+                                },
+                            };
+                            if matched {
+                                // The debounce is applied here as well as in the
+                                // sink. A replacement sink starts with a fresh
+                                // clock, and would otherwise let the hook fire
+                                // twice inside one configured window.
+                                let now = std::time::Instant::now();
+                                let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
+                                if elapsed.is_none_or(|e| e >= on_output_debounce) {
+                                    on_output_last_fired = Some(now);
+                                    hooks::fire_output_hook(id.clone(), hook_dirs.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), hook.run.clone(), line_clean.clone()).await;
+                                }
+                            }
                         }
-                        // Disable timer after it fires
-                        delay_timer = None;
+                        // Let other tasks run during continuous output.
+                        tokio::task::yield_now().await;
                     }
                     _ = log_flush_interval.tick() => {
-                        let _ = flush_logs(&mut log_buffer);
+                        flush_logs(&mut log_buffer, &mut pending_log_writes);
                     }
                 }
+                if ready_notified {
+                    http_probe = None;
+                    port_probe = None;
+                }
             }
+            drop(http_probe);
+            drop(port_probe);
 
             // Snapshot the daemon state BEFORE draining output.
             //
@@ -2450,7 +2699,8 @@ impl Supervisor {
             }
             // Flush any remaining log lines (including drained) before the process exits.
             // Await the flush to guarantee all buffered logs are persisted before cleanup.
-            if let Some(handle) = flush_logs(&mut log_buffer) {
+            flush_logs(&mut log_buffer, &mut pending_log_writes);
+            for handle in pending_log_writes {
                 let _ = handle.await;
             }
 
@@ -2458,6 +2708,44 @@ impl Supervisor {
             {
                 let mut state_file = SUPERVISOR.state_file.lock().await;
                 state_file.clear_active_port(&id);
+            }
+
+            let readiness_failed = ready_fail_kill.is_some();
+            let mut termination_error = None;
+            if let Some(kill) = ready_fail_kill {
+                let result = kill.await.into_diagnostic().and_then(|result| result);
+                let failure = match result {
+                    Ok(_) => ReadyFailure::Exit(Some(124)),
+                    Err(error) => {
+                        let error = format!(
+                            "failed to terminate daemon {id} after readiness failure: {error}"
+                        );
+                        error!("{error}");
+                        let mut state_file = SUPERVISOR.state_file.lock().await;
+                        if state_file.daemons.get(&id).is_some_and(|daemon| {
+                            daemon.pid == Some(pid)
+                                && !daemon.status.is_stopped()
+                                && !daemon.status.is_stopping_or_restarting()
+                        }) {
+                            state_file.set_status(&id, DaemonStatus::Failed(error.clone()));
+                        }
+                        termination_error = Some(error.clone());
+                        ReadyFailure::Termination(error)
+                    }
+                };
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(failure));
+                }
+            }
+
+            // Report a failed kill first, but retain this process's record and
+            // monitor until its entire group is gone. A leader can exit while
+            // an unkillable descendant still holds the daemon's resources.
+            if termination_error.is_some() {
+                while PROCS.process_group_alive(daemon_pid) {
+                    // Match the output flush cadence while waiting for recovery.
+                    time::sleep(Duration::from_millis(100)).await;
+                }
             }
 
             // Get the final exit status
@@ -2473,17 +2761,6 @@ impl Supervisor {
                     }
                 }
             };
-
-            // If the loop exited via readiness exhaustion, wait for the group
-            // kill to finish before reporting the failure so the retry loop
-            // (or a waiting client) cannot start a replacement while the old
-            // process group is still terminating.
-            if let Some(kill) = ready_fail_kill {
-                let _ = kill.await;
-                if let Some(tx) = ready_tx.take() {
-                    let _ = tx.send(Err(Some(124)));
-                }
-            }
 
             let current_daemon = SUPERVISOR.get_daemon(&id).await;
 
@@ -2545,6 +2822,7 @@ impl Supervisor {
                     // distinguish from a clean exit code 0.
                     (status.code().unwrap_or(-1), "stop")
                 }
+                (_, false) if readiness_failed => (124, "fail"),
                 (Ok(status), false) if status.success() => (status.code().unwrap_or(-1), "exit"),
                 (Ok(status), false) => (status.code().unwrap_or(-1), "fail"),
                 (Err(_), true) => {
@@ -2568,12 +2846,15 @@ impl Supervisor {
                 if let Ok(status) = &exit_status {
                     info!("daemon {id} exited with status {status}");
                 }
-                let (new_status, last_exit_success) = terminal_exit_state(
+                let (mut new_status, last_exit_success) = terminal_exit_state(
                     exit_reason,
                     opts.oneshot,
                     exit_code,
                     exit_status.as_ref().map(|s| s.success()).unwrap_or(true),
                 );
+                if !is_stopping && let Some(error) = &termination_error {
+                    new_status = DaemonStatus::Failed(error.clone());
+                }
                 // Revalidate ownership inside the same state-lock section that
                 // performs the write. The snapshot above was taken without
                 // holding the lock, so a restart running on another thread can
@@ -2602,7 +2883,7 @@ impl Supervisor {
                     let _ = tx.send(Ok(()));
                 } else {
                     warn!("daemon {id}: oneshot was stopped before completing");
-                    let _ = tx.send(Err(None));
+                    let _ = tx.send(Err(ReadyFailure::Exit(None)));
                 }
             }
 
@@ -2617,7 +2898,7 @@ impl Supervisor {
                 "stop" => vec![HookType::OnStop, HookType::OnExit],
                 "exit" => vec![HookType::OnExit],
                 // "fail": fire on_fail + on_exit only when retries are exhausted
-                _ if hook_retry_count >= hook_retry.count() => {
+                _ if termination_error.is_some() || hook_retry_count >= hook_retry.count() => {
                     vec![HookType::OnFail, HookType::OnExit]
                 }
                 _ => vec![],
@@ -2637,67 +2918,90 @@ impl Supervisor {
             }
         });
 
-        // If wait_ready is true, wait for readiness notification
         if let Some(ready_rx) = ready_rx {
-            match ready_rx.await {
-                Ok(Ok(())) => {
-                    info!("daemon {id} is ready");
-                    // Re-read rather than returning the snapshot taken at
-                    // spawn: a completed oneshot has since been finalized, and
-                    // the snapshot would tell the caller it is still running
-                    // under a PID that has exited.
-                    //
-                    // Only when the record still describes this run, though. A
-                    // successor that claimed it carries its own PID and start
-                    // time, and reporting those as the outcome of the process
-                    // this call spawned would misattribute them.
-                    let daemon = match self.get_daemon(id).await {
-                        Some(current) if current.pid.is_none() || current.pid == Some(pid) => {
-                            current
-                        }
-                        // A successor owns the record, so neither it nor the
-                        // spawn snapshot describes this run: one carries
-                        // another process's identity, the other still says
-                        // running under a PID that has exited. A oneshot that
-                        // reported ready did finish, so report that outcome
-                        // directly rather than either misleading record.
-                        _ if opts.oneshot => crate::daemon::Daemon {
-                            status: DaemonStatus::Completed,
-                            pid: None,
-                            start_time: None,
-                            boot_time: None,
-                            last_exit_success: Some(true),
-                            ..daemon
-                        },
-                        _ => daemon,
-                    };
-                    Ok(IpcResponse::DaemonReady { daemon })
-                }
-                Ok(Err(exit_code)) => {
-                    error!("daemon {id} failed before becoming ready");
-                    // The caller reports this by querying the log store for
-                    // what the daemon printed, so wait for the sink's final
-                    // write first. The in-process path got this ordering by
-                    // flushing synchronously before signalling.
-                    //
-                    // Only on the attempt that gives up: `run` retries inline,
-                    // and waiting after every attempt would both delay the
-                    // backoff and widen the window in which the daemon looks
-                    // errored and idle — long enough for the background retry
-                    // checker to start an attempt of its own alongside it.
-                    let last_attempt = opts.retry_count >= opts.retry.count();
-                    if using_sink && last_attempt {
-                        super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+            let wait_ready = opts.wait_ready;
+            let oneshot = opts.oneshot;
+            let last_attempt = opts.retry_count >= opts.retry.count();
+            let started = IpcResponse::DaemonStart {
+                daemon: daemon.clone(),
+            };
+            let ready = async move {
+                let id = daemon.id.clone();
+                let ready = ready_rx.await;
+                SUPERVISOR.end_ready_check(&id, &attempt_rx);
+                match ready {
+                    Ok(Ok(())) => {
+                        info!("daemon {id} is ready");
+                        // Re-read rather than returning the snapshot taken at
+                        // spawn: a completed oneshot has since been finalized, and
+                        // the snapshot would tell the caller it is still running
+                        // under a PID that has exited.
+                        //
+                        // Only when the record still describes this run, though. A
+                        // successor that claimed it carries its own PID and start
+                        // time, and reporting those as the outcome of the process
+                        // this call spawned would misattribute them.
+                        let daemon = match SUPERVISOR.get_daemon(&id).await {
+                            Some(current) if current.pid.is_none() || current.pid == Some(pid) => {
+                                current
+                            }
+                            // A successor owns the record, so neither it nor the
+                            // spawn snapshot describes this run: one carries
+                            // another process's identity, the other still says
+                            // running under a PID that has exited. A oneshot that
+                            // reported ready did finish, so report that outcome
+                            // directly rather than either misleading record.
+                            _ if oneshot => crate::daemon::Daemon {
+                                status: DaemonStatus::Completed,
+                                pid: None,
+                                start_time: None,
+                                boot_time: None,
+                                last_exit_success: Some(true),
+                                ..daemon
+                            },
+                            _ => daemon,
+                        };
+                        IpcResponse::DaemonReady { daemon }
                     }
-                    Ok(IpcResponse::DaemonFailedWithCode {
-                        exit_code,
-                        resolved_ports: attempt_resolved_ports,
-                    })
+                    Ok(Err(ReadyFailure::Exit(exit_code))) => {
+                        error!("daemon {id} failed before becoming ready");
+                        // The caller reports this by querying the log store for
+                        // what the daemon printed, so wait for the sink's final
+                        // write first. The in-process path got this ordering by
+                        // flushing synchronously before signalling.
+                        //
+                        // Only on the attempt that gives up: `run` retries inline,
+                        // and waiting after every attempt would both delay the
+                        // backoff and widen the window in which the daemon looks
+                        // errored and idle — long enough for the background retry
+                        // checker to start an attempt of its own alongside it.
+                        if using_sink && last_attempt {
+                            super::log_sink::wait_for_output(&id, spawn_time, SINK_OUTPUT_TIMEOUT)
+                                .await;
+                        }
+                        IpcResponse::DaemonFailedWithCode {
+                            exit_code,
+                            resolved_ports: attempt_resolved_ports,
+                        }
+                    }
+                    Ok(Err(ReadyFailure::Termination(error))) => {
+                        IpcResponse::DaemonFailed { error }
+                    }
+                    Err(_) => {
+                        error!("readiness channel closed unexpectedly for daemon {id}");
+                        IpcResponse::DaemonStart { daemon }
+                    }
                 }
-                Err(_) => {
-                    error!("readiness channel closed unexpectedly for daemon {id}");
-                    Ok(IpcResponse::DaemonStart { daemon })
-                }
+            };
+            let completion = tokio::spawn(async move {
+                let response = ready.await;
+                attempt_tx.send_replace(Some(response.clone()));
+                response
+            });
+            if wait_ready {
+                completion.await.into_diagnostic()
+            } else {
+                Ok(started)
             }
         } else {
             Ok(IpcResponse::DaemonStart { daemon })
@@ -4795,7 +5099,7 @@ mod windows_retry_tests {
         let mut guard = Some(SUPERVISOR.stop_lock(&opts.id).await.lock_owned().await);
         assert!(
             SUPERVISOR
-                .claim_or_defer(&opts, &mut guard, &mut restart_mark)
+                .claim_or_defer(&opts, &mut guard, &mut restart_mark, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -4855,7 +5159,7 @@ mod windows_retry_tests {
         assert_eq!(settings().supervisor.user, "unsupported-account");
         opts.retry_count = 1;
         let response = SUPERVISOR
-            .claim_or_defer(&opts, &mut guard, &mut restart_mark)
+            .claim_or_defer(&opts, &mut guard, &mut restart_mark, None)
             .await
             .unwrap();
 
@@ -4891,7 +5195,7 @@ mod windows_retry_tests {
             .unwrap();
         assert!(matches!(
             SUPERVISOR
-                .claim_or_defer(&opts, &mut guard, &mut restart_mark)
+                .claim_or_defer(&opts, &mut guard, &mut restart_mark, None)
                 .await
                 .unwrap(),
             Some(IpcResponse::DaemonFailed { .. })
@@ -4976,3 +5280,6 @@ mod output_reader_eio_tests {
         assert_eq!(lines, ["first", "last without newline"]);
     }
 }
+
+#[cfg(all(test, unix))] // These tests use Unix shells and process groups.
+mod readiness_tests;

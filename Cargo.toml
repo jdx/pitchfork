@@ -96,7 +96,7 @@ serde_json = { version = "1", features = ["indexmap"] }
 shell-words = "1"
 strum = { version = "0.28", features = ["derive"] }
 tera = "2"
-sysinfo = "0.39"
+sysinfo = "0.40"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }

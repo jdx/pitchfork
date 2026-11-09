@@ -9,6 +9,40 @@ teardown() {
   _common_teardown
 }
 
+@test "a dependency started after the snapshot supplies its current ports" {
+  local port http_script
+  port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  http_script="$(script_path http_server.py)"
+  create_pitchfork_toml <<TOML
+[daemons.gate]
+run = "touch gate_started; while ! test -e release_gate; do sleep 0.1; done"
+oneshot = true
+
+[daemons.service]
+run = "python3 -u $http_script 0 $port"
+depends = ["gate"]
+port = $port
+
+[daemons.dependent]
+run = "echo {{ daemons.service.port }} > dependency_port; sleep 30"
+depends = ["service"]
+ready_delay = 0
+TOML
+
+  pitchfork start dependent >dependent_start.log 2>&1 &
+  local dependent_start=$!
+  wait_for_file gate_started
+
+  # `run` starts the dependency while the batch waits at an earlier level.
+  run pitchfork run service --expected-port "$port" --port "$port" -- python3 -u "$http_script" 0 "$port"
+  assert_success
+  touch release_gate
+  wait "$dependent_start"
+  wait_for_file_content dependency_port "$port"
+
+  pitchfork stop --all
+}
+
 @test "start with dependency auto-starts dependency" {
   create_pitchfork_toml <<EOF
 [daemons.db]
@@ -126,6 +160,38 @@ EOF
 
   assert_success
   [[ $elapsed -lt 3 ]]
+
+  pitchfork stop --all
+}
+
+@test "a dependent waits for a dependency that is still starting" {
+  create_pitchfork_toml <<EOF
+[daemons.db]
+run = "echo db starting && sleep 5 && echo 'db READY' && sleep 30"
+ready_output = "READY"
+
+[daemons.api]
+run = "echo api ready && sleep 30"
+depends = ["db"]
+ready_delay = 1
+EOF
+
+  # Get db under way on its own, then start api while db's start still waits
+  # for its ready output. api must not start until db is ready.
+  pitchfork start db >/dev/null 2>&1 &
+  local db_start=$!
+  wait_for_status db running 10
+
+  run pitchfork start api
+  assert_success
+
+  # Checked before reaping db's start, which would let db get ready on its own
+  # and the check could never fail. Had db been skipped as running, api would
+  # be up after its 1s ready_delay with db still sleeping.
+  run pitchfork logs db --raw
+  assert_output --partial "db READY"
+
+  wait "$db_start"
 
   pitchfork stop --all
 }
