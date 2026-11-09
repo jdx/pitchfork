@@ -197,7 +197,7 @@ pub enum PortError {
     )]
     NoAvailablePort { start_port: u16, attempts: u32 },
 
-    #[error("port {port} is reserved by daemon {daemon}, which is still starting")]
+    #[error("port {port} is reserved by daemon {daemon}")]
     #[diagnostic(
         code(pitchfork::port::claimed),
         url("https://pitchfork.jdx.dev/configuration#port"),
