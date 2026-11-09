@@ -73,7 +73,11 @@ impl Procs {
         // Callers that need process info must call refresh_pids() (for specific
         // PIDs) or refresh_processes() (for full-system stats) explicitly.
         Self {
-            system: Mutex::new(sysinfo::System::new()),
+            // `System::new()` is fallible only for the sake of unsupported
+            // platforms; it does not touch the OS on the ones we build for.
+            system: Mutex::new(
+                sysinfo::System::new().expect("sysinfo is supported on this platform"),
+            ),
             last_full_refresh: Mutex::new(None),
         }
     }
@@ -97,8 +101,15 @@ impl Procs {
     /// daemon's PID makes it possible to tell later whether that record
     /// belongs to the current boot. Note this is *not* comparable with
     /// `start_time`, whose units are platform-specific.
+    ///
+    /// Returns 0 if the OS cannot report it. That never matches a real boot
+    /// time, so a record is treated as belonging to another boot, which is the
+    /// safe direction.
     pub fn boot_time(&self) -> u64 {
-        sysinfo::System::boot_time()
+        sysinfo::System::boot_time().unwrap_or_else(|err| {
+            warn!("could not read the system boot time: {err}");
+            0
+        })
     }
 
     /// High-resolution kernel start token for the process.
