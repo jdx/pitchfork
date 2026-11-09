@@ -1121,16 +1121,21 @@ impl Supervisor {
             .as_ref()
             .map(|p| p.expect.clone())
             .unwrap_or_default();
+        // Holds the resolved ports against other starts until this daemon is
+        // ready or gone. Dropped on every early return below.
+        let mut port_claim: Option<PortClaim> = None;
         let (resolved_ports, effective_ready_port) = if !expected_ports.is_empty() {
             let port_cfg = opts.port.as_ref().unwrap();
-            match check_ports_available(
+            match claim_ports(
+                id,
                 &expected_ports,
                 port_cfg.auto_bump(),
                 port_cfg.max_bump_attempts(),
             )
             .await
             {
-                Ok(resolved) => {
+                Ok((resolved, claim)) => {
+                    port_claim = Some(claim);
                     let ready_port = if let Some(configured_port) =
                         opts.ready_port.as_ref().and_then(|p| p.as_port())
                     {
@@ -1162,6 +1167,11 @@ impl Supervisor {
                     // Convert PortError to structured IPC response
                     if let Some(port_error) = e.downcast_ref::<PortError>() {
                         match port_error {
+                            PortError::Claimed { .. } => {
+                                return Ok(IpcResponse::DaemonFailed {
+                                    error: e.to_string(),
+                                });
+                            }
                             PortError::InUse {
                                 port,
                                 address,
@@ -1678,6 +1688,9 @@ impl Supervisor {
             // supervisor delivering into a channel nobody is reading. Dropped
             // explicitly once the daemon exits, before the drain below.
             let output_relay = output_relay;
+            // Released once the daemon is ready (it has bound its ports by
+            // then, so the bind check sees them) or this task ends.
+            let mut port_claim = port_claim;
 
             // Merge all output sources (PTY master OR stdout+stderr, or a
             // sink's IPC reports) into a single channel.
@@ -1915,6 +1928,9 @@ impl Supervisor {
             let mut ready_fail_kill: Option<tokio::task::JoinHandle<()>> = None;
 
             loop {
+                if ready_notified {
+                    port_claim.take();
+                }
                 // biased: evaluate in exit → output → delay order so that
                 // process exit pre-empts both buffered output and the delay
                 // timer, preventing a dead daemon from being marked ready.
@@ -3182,10 +3198,73 @@ fn nix_to_io_error(err: nix::errno::Errno) -> std::io::Error {
 /// Returns the resolved ports (either the original or bumped ones).
 /// Returns an error if any port is in use and auto_bump is disabled,
 /// or if no available ports can be found after max attempts.
+/// Ports resolved for daemons that are still starting, by the daemon holding them.
+static PORT_CLAIMS: Lazy<std::sync::Mutex<HashMap<u16, DaemonId>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Serializes port resolution so two starts cannot both see a port unclaimed.
+static PORT_RESOLUTION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Reserves resolved ports for a starting daemon; releases them on drop.
+#[derive(Debug)]
+struct PortClaim {
+    owner: DaemonId,
+    ports: Vec<u16>,
+}
+
+impl Drop for PortClaim {
+    fn drop(&mut self) {
+        let mut claims = PORT_CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
+        for port in &self.ports {
+            if claims.get(port) == Some(&self.owner) {
+                claims.remove(port);
+            }
+        }
+    }
+}
+
+/// Resolves ports like `check_ports_available` and claims them for `id`.
+///
+/// A daemon binds its ports only after it has started up, so the bind check
+/// alone lets concurrent starts resolve the same free port. Claims cover that
+/// window: another start sees the port as taken (bumping past it or failing)
+/// until the claim is dropped.
+async fn claim_ports(
+    id: &DaemonId,
+    expected_ports: &[u16],
+    auto_bump: bool,
+    max_attempts: u32,
+) -> Result<(Vec<u16>, PortClaim)> {
+    let _resolution = PORT_RESOLUTION.lock().await;
+    let claimed: HashMap<u16, DaemonId> = PORT_CLAIMS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(_, owner)| *owner != id)
+        .map(|(port, owner)| (*port, owner.clone()))
+        .collect();
+    let resolved = check_ports_available(expected_ports, auto_bump, max_attempts, &claimed).await?;
+    let ports: Vec<u16> = resolved.iter().copied().filter(|&p| p != 0).collect();
+    {
+        let mut claims = PORT_CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
+        for port in &ports {
+            claims.insert(*port, id.clone());
+        }
+    }
+    Ok((
+        resolved,
+        PortClaim {
+            owner: id.clone(),
+            ports,
+        },
+    ))
+}
+
 async fn check_ports_available(
     expected_ports: &[u16],
     auto_bump: bool,
     max_attempts: u32,
+    claimed: &HashMap<u16, DaemonId>,
 ) -> Result<Vec<u16>> {
     if expected_ports.is_empty() {
         return Ok(Vec::new());
@@ -3201,6 +3280,7 @@ async fn check_ports_available(
         // Check if all ports in this set are available
         let mut all_available = true;
         let mut conflicting_port = None;
+        let mut conflicting_claim = None;
 
         for &port in &candidate_ports {
             // Port 0 is a special case - it requests an ephemeral port from the OS.
@@ -3222,6 +3302,11 @@ async fn check_ports_available(
             // Another process could grab the port between our check and the daemon actually
             // binding. This is inherent to the approach and acceptable for our use case
             // since we're primarily detecting conflicts with already-running daemons.
+            if let Some(owner) = claimed.get(&port) {
+                all_available = false;
+                conflicting_claim = Some((port, owner.clone()));
+                break;
+            }
             if let Some(address) = port_bind_conflict(port).await {
                 all_available = false;
                 conflicting_port = Some((port, address));
@@ -3247,6 +3332,16 @@ async fn check_ports_available(
         }
 
         // Port is in use
+        if bump_offset == 0
+            && !auto_bump
+            && let Some((port, daemon)) = conflicting_claim
+        {
+            return Err(PortError::Claimed {
+                port,
+                daemon: daemon.to_string(),
+            }
+            .into());
+        }
         if bump_offset == 0
             && !auto_bump
             && let Some((port, address)) = conflicting_port
@@ -3586,8 +3681,8 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
 #[cfg(test)]
 mod port_conflict_tests {
     use super::{
-        TcpSocket, check_ports_available, listener_match, pick_port_owner, port_bind_conflict,
-        shown_address,
+        TcpSocket, check_ports_available, claim_ports, listener_match, pick_port_owner,
+        port_bind_conflict, shown_address,
     };
     use crate::error::PortError;
     use std::net::{IpAddr, SocketAddr};
@@ -3610,7 +3705,9 @@ mod port_conflict_tests {
             "{address}"
         );
 
-        let err = check_ports_available(&[port], false, 0).await.unwrap_err();
+        let err = check_ports_available(&[port], false, 0, &Default::default())
+            .await
+            .unwrap_err();
         match err.downcast_ref::<PortError>() {
             Some(PortError::InUse {
                 port: p,
@@ -3627,6 +3724,36 @@ mod port_conflict_tests {
         }
         drop(listener);
         assert_eq!(port_bind_conflict(port).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_starting_daemons_ports_are_not_resolved_for_another() {
+        use crate::daemon_id::DaemonId;
+        let _forks = FORKS.lock().await;
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let one = DaemonId::new("claim-one", "web");
+        let two = DaemonId::new("claim-two", "web");
+
+        let (resolved, claim) = claim_ports(&one, &[port], false, 0).await.unwrap();
+        assert_eq!(resolved, vec![port]);
+
+        // Nothing is bound yet, but the port is claimed: without bump the
+        // second start fails, with bump it moves past the claimed port.
+        let err = claim_ports(&two, &[port], false, 0).await.unwrap_err();
+        assert!(
+            matches!(err.downcast_ref::<PortError>(), Some(PortError::Claimed { port: p, .. }) if *p == port),
+            "{err:?}"
+        );
+        let (bumped, bumped_claim) = claim_ports(&two, &[port], true, 10).await.unwrap();
+        assert_ne!(bumped, vec![port]);
+        drop(bumped_claim);
+
+        // Once the first daemon is ready or gone, the port is free again.
+        drop(claim);
+        let (resolved, _claim) = claim_ports(&two, &[port], false, 0).await.unwrap();
+        assert_eq!(resolved, vec![port]);
     }
 
     #[cfg(unix)]

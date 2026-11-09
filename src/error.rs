@@ -196,6 +196,16 @@ pub enum PortError {
         help("manually specify an available port or reduce the number of concurrent services")
     )]
     NoAvailablePort { start_port: u16, attempts: u32 },
+
+    #[error("port {port} is reserved by daemon {daemon}, which is still starting")]
+    #[diagnostic(
+        code(pitchfork::port::claimed),
+        url("https://pitchfork.jdx.dev/configuration#port"),
+        help(
+            "choose a different port or enable auto_bump_port to automatically find an available port"
+        )
+    )]
+    Claimed { port: u16, daemon: String },
 }
 
 /// Error for TOML configuration parse failures with source code highlighting.
