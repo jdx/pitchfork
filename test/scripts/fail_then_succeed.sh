@@ -5,7 +5,7 @@
 # request has a window in which to start waiting on the running daemon before
 # the attempt fails and the retry backoff begins.
 #
-# Usage: fail_then_succeed.sh <key> <seconds>
+# Usage: fail_then_succeed.sh <key> <seconds> [first_attempt_gate]
 # Requires: a key unique to the test run, used to track invocations across
 # separate process starts.
 set -uo pipefail
@@ -22,6 +22,9 @@ count=$((count + 1))
 echo "$count" > "$count_file"
 
 echo "attempt ${count} started"
+if [[ "$count" -lt 2 && -n "${3:-}" ]]; then
+  while [[ ! -e "$3" ]]; do sleep 0.1; done
+fi
 sleep "$secs"
 
 if [[ "$count" -lt 2 ]]; then

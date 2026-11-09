@@ -380,6 +380,299 @@ EOF
   pitchfork stop ready_both
 }
 
+@test "a start of a daemon that is still starting waits for its ready check" {
+  create_pitchfork_toml <<EOF
+[daemons.slow_ready]
+run = "echo starting && sleep 5 && echo 'Server is READY' && sleep 30"
+ready_output = "READY"
+EOF
+
+  # Start the daemon, then start it again while the first start still waits
+  # for the ready output. The daemon is recorded running from the moment it
+  # spawns, but the second start must wait for the same check rather than
+  # report it already running.
+  pitchfork start slow_ready >/dev/null 2>&1 &
+  local first_start=$!
+  wait_for_status slow_ready running 10
+
+  run pitchfork start slow_ready
+  assert_success
+  refute_output --regexp "slow_ready (is )?already running"
+
+  # Checked before reaping the first start: waiting for it first would let the
+  # daemon get ready on its own, and the check could never fail.
+  run pitchfork logs slow_ready --raw
+  assert_output --partial "Server is READY"
+
+  wait "$first_start"
+
+  pitchfork stop slow_ready
+}
+
+@test "a start waiting on another start's ready check fails with it" {
+  create_pitchfork_toml <<EOF
+[daemons.never_ready]
+run = "echo starting && sleep 5 && exit 3"
+ready_output = "READY"
+retry = 0
+EOF
+
+  pitchfork start never_ready >/dev/null 2>&1 &
+  local first_start=$!
+  wait_for_status never_ready running 10
+
+  # The process exits before its ready output appears, which fails the start
+  # under way, and the start waiting on the same check with it.
+  run pitchfork start never_ready
+  assert_failure
+  assert_output --partial "exit code 3"
+
+  local first_status=0
+  wait "$first_start" || first_status=$?
+  [[ $first_status -ne 0 ]]
+}
+
+@test "a start waiting on another start's ready check follows its retries" {
+  local retry_script key
+  retry_script="$(script_path fail_then_succeed.sh)"
+  key="$(date +%s%N)"
+
+  # Hold the first attempt until the supervisor accepts the waiting start.
+  create_pitchfork_toml <<TOML
+[daemons.flaky]
+run = 'bash $retry_script $key 0 release_attempt && sleep 30'
+ready_output = "succeeded"
+retry = 2
+TOML
+
+  pitchfork start flaky >/dev/null 2>&1 &
+  local first_start=$!
+  wait_for_logs flaky "attempt 1 started" 10
+
+  pitchfork start flaky >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_readiness_waiter flaky
+  touch release_attempt
+  wait "$waiting_start"
+  run cat waiting_start.log
+  refute_output --regexp "flaky (is )?already running"
+
+  run pitchfork logs flaky --raw
+  assert_output --partial "failing attempt 1"
+  assert_output --partial "succeeded on attempt 2"
+
+  wait "$first_start"
+
+  pitchfork stop flaky
+}
+
+@test "a start waits for a background retry to become ready" {
+  cat > retry_ready.sh <<'SCRIPT'
+if [ ! -e first_attempt ]; then
+  touch first_attempt
+  echo READY
+  while [ ! -e fail_attempt ]; do sleep 0.1; done
+  exit 3
+fi
+echo "retry started"
+while [ ! -e ready ]; do sleep 0.1; done
+echo READY
+sleep 30
+SCRIPT
+  create_pitchfork_toml <<'TOML'
+[daemons.background_retry]
+run = "sh retry_ready.sh"
+ready_output = "READY"
+retry = 1
+TOML
+
+  run pitchfork start background_retry
+  assert_success
+  touch fail_attempt
+  wait_for_logs background_retry "retry started" 20
+
+  pitchfork start background_retry >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_readiness_waiter background_retry
+  touch ready
+  wait "$waiting_start"
+  run cat waiting_start.log
+  refute_output --regexp "background_retry (is )?already running"
+
+  pitchfork stop background_retry
+}
+
+@test "a start waits through failed background retry attempts" {
+  cat > background_retries.sh <<'SCRIPT'
+count=0
+test ! -f attempts || count=$(cat attempts)
+count=$((count + 1))
+echo "$count" >attempts
+case "$count" in
+  1)
+    echo READY
+    while test ! -e crash; do sleep 0.1; done
+    exit 3
+    ;;
+  2)
+    echo "first background attempt"
+    while test ! -e release_failure; do sleep 0.1; done
+    exit 4
+    ;;
+  *)
+    echo "last background attempt"
+    while test ! -e ready; do sleep 0.1; done
+    echo READY
+    sleep 30
+    ;;
+esac
+SCRIPT
+  create_pitchfork_toml <<'TOML'
+[daemons.background_retries]
+run = "sh background_retries.sh"
+ready_output = "READY"
+retry = 2
+
+[daemons.background_retries.hooks]
+on_ready = 'echo "$PITCHFORK_RETRY_COUNT" >last_ready_retry'
+TOML
+
+  run pitchfork start background_retries
+  assert_success
+  touch crash
+  wait_for_logs background_retries "first background attempt" 20
+
+  (
+    local start_status=0
+    pitchfork start background_retries >waiting_start.log 2>&1 || start_status=$?
+    echo "$start_status" >result
+  ) &
+  local waiting_start=$!
+  wait_for_readiness_waiter background_retries
+  touch release_failure
+  wait_for_logs background_retries "last background attempt" 20
+  assert_file_not_exist result
+  touch ready
+  wait "$waiting_start"
+  run cat result
+  assert_output "0"
+  wait_for_file_content last_ready_retry "2"
+
+  pitchfork stop background_retries
+}
+
+@test "ready output can satisfy readiness while an HTTP probe is pending" {
+  export PITCHFORK_READY_CHECK_INTERVAL=100ms
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&-
+  local port
+  port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  cat > slow_probe.py <<'PYTHON'
+import sys
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print("READY", flush=True)
+        time.sleep(1)
+        self.send_response(503)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PYTHON
+  create_pitchfork_toml <<TOML
+[daemons.mixed_ready]
+run = "python3 slow_probe.py $port"
+ready_output = { pattern = "^READY$", timeout = "10s" }
+ready_http = "http://127.0.0.1:$port/health"
+TOML
+
+  (
+    local start_status=0
+    pitchfork start mixed_ready --quiet >start.log 2>&1 || start_status=$?
+    echo "$start_status" >result
+  ) &
+  local start_pid=$!
+  wait_for_file result 15
+  wait "$start_pid"
+  run cat result
+  assert_output "0"
+
+  pitchfork stop mixed_ready
+}
+
+# Regression: https://github.com/jdx/pitchfork/pull/1108#discussion_r4505580969
+@test "a start during background retry backoff joins the existing retry budget" {
+  cat > backoff_start.sh <<'SCRIPT'
+count=0
+test ! -e attempts || count=$(cat attempts)
+count=$((count + 1))
+echo "$count" >attempts
+case "$count" in
+  1)
+    echo READY
+    while test ! -e crash; do sleep 0.1; done
+    exit 3
+    ;;
+  2) exit 4 ;;
+  *)
+    touch final_attempt
+    while test ! -e ready; do sleep 0.1; done
+    echo READY
+    sleep 30
+    ;;
+esac
+SCRIPT
+  create_pitchfork_toml <<'TOML'
+[daemons.backoff_start]
+run = "sh backoff_start.sh"
+ready_output = "READY"
+retry = 2
+
+[daemons.backoff_start.hooks]
+on_ready = 'echo "$PITCHFORK_RETRY_COUNT" >ready_retry_count'
+TOML
+
+  run pitchfork start backoff_start
+  assert_success
+  wait_for_file_content ready_retry_count "0"
+  touch crash
+  wait_for_supervisor_log "daemon .*backoff_start failed (attempt 2/3), retrying in 2s" 20
+  pitchfork start backoff_start >waiting_start.log 2>&1 &
+  local waiting_start=$!
+  wait_for_supervisor_log "daemon .*backoff_start.*; waiting for it"
+  wait_for_file final_attempt 15
+  # Still waiting: the final attempt has not printed READY yet.
+  kill -0 "$waiting_start"
+  touch ready
+  wait "$waiting_start"
+  wait_for_file_content ready_retry_count "2"
+  run cat attempts
+  assert_output "3"
+}
+
+@test "a stop cancels a background startup during its retry backoff" {
+  create_pitchfork_toml <<'TOML'
+[daemons.stop_background_retry]
+run = "if test -e started; then echo retrying; exit 4; else touch started; echo READY; while ! test -e crash; do sleep 0.1; done; exit 3; fi"
+ready_output = "READY"
+retry = 2
+TOML
+
+  run pitchfork start stop_background_retry
+  assert_success
+  touch crash
+  wait_for_supervisor_log "daemon .*stop_background_retry failed (attempt 2/3), retrying in 2s" 20
+
+  run pitchfork stop stop_background_retry
+  assert_success
+  sleep 3
+  wait_for_status stop_background_retry stopped
+}
+
 # ============================================================================
 # Integration tests
 # ============================================================================

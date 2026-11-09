@@ -367,6 +367,18 @@ impl Supervisor {
             let (mise, mise_bin) = crate::ipc::batch::project_mise_options(&config);
             opts.mise = Some(mise);
             opts.mise_bin = mise_bin;
+            // The project's default delay, which a client's start applies too,
+            // decides when a service without other ready checks is ready.
+            if crate::ipc::batch::should_inject_default_ready_delay(&opts) {
+                let project_dir =
+                    crate::ipc::batch::resolve_config_base_dir(config.path.as_deref());
+                let (settings, _) = crate::settings::Settings::resolve_from_dir(&project_dir);
+                opts.ready_delay = Some(
+                    settings
+                        .general_ready_delay_secs()
+                        .map_err(|e| miette::miette!("{e}"))?,
+                );
+            }
             Ok(opts)
         })
         .await

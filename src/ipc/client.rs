@@ -230,9 +230,7 @@ impl IpcClient {
         Ok(())
     }
 
-    /// Read one response. `timeout` of `None` waits indefinitely, which only a
-    /// oneshot configured for an unlimited wait asks for — a substitute
-    /// duration there would cap a wait the user asked not to be capped.
+    /// Read one response. `None` leaves the deadline to the supervisor.
     async fn read(&self, timeout: Option<Duration>) -> Result<IpcResponse> {
         let mut recv = self.recv.lock().await;
         let mut bytes = Vec::new();
@@ -341,80 +339,16 @@ impl IpcClient {
     /// Run a single daemon with the given options (low-level operation)
     pub async fn run(&self, opts: RunOptions) -> Result<RunResult> {
         let start_time = chrono::Local::now();
-        // Resolve the effective ready delay before computing the timeout. The
-        // global setting is only consulted when no per-run delay is given, and
-        // subsecond values are rejected there rather than silently truncated
-        // by `as_secs()` into a zero delay.
-        // Resolved lazily: a oneshot has no readiness delay, and
-        // `general_ready_delay_secs` rejects a subsecond global value, which
-        // would fail a run that never consults the delay at all.
-        let resolve_ready_delay = || -> Result<u64> {
-            match opts.ready_delay {
-                Some(secs) => Ok(secs),
-                None => crate::settings::settings()
-                    .general_ready_delay_secs()
-                    .map_err(|e| miette::miette!("{e}")),
-            }
-        };
-        // If any configured readiness check is unbounded (no timeout), the
-        // supervisor may wait indefinitely. Use a generous cap so the client
-        // does not disconnect prematurely — e.g. when a bounded ready_cmd
-        // is paired with an unbounded ready_port. When all checks are bounded,
-        // wait through the longest deadline plus a response buffer.
-        let has_unbounded_check = opts
-            .ready_output
-            .as_ref()
-            .is_some_and(|o| o.timeout.is_none())
-            || opts
-                .ready_port
-                .as_ref()
-                .is_some_and(|p| p.timeout.is_none())
-            || opts
-                .ready_http
-                .as_ref()
-                .is_some_and(|h| h.timeout.is_none())
-            || opts.ready_cmd.as_ref().is_some_and(|c| c.timeout.is_none());
-        // `None` waits without a deadline, which only an unlimited oneshot asks
-        // for.
-        let timeout: Option<Duration> = if opts.oneshot {
-            // A oneshot's runtime is the task's runtime, which the user
-            // controls through `supervisor.oneshot_timeout`. `0` there means
-            // no deadline at all, not a distant one.
+        // The supervisor owns readiness deadlines and retries. A joined start
+        // can have different checks or delays from this request.
+        let timeout = if opts.oneshot {
             opts.oneshot_wait
-                .unwrap_or_else(|| crate::settings::settings().supervisor_oneshot_wait())
+                .unwrap_or_else(|| settings().supervisor_oneshot_wait())
                 .duration()
-        } else if has_unbounded_check {
-            Some(Duration::from_secs(3600))
+        } else if opts.wait_ready {
+            None
         } else {
-            let max_deadline = opts
-                .ready_output
-                .as_ref()
-                .and_then(|o| o.timeout)
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
-                .max(
-                    opts.ready_http
-                        .as_ref()
-                        .and_then(|h| h.timeout)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0),
-                )
-                .max(
-                    opts.ready_cmd
-                        .as_ref()
-                        .and_then(|c| c.timeout)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0),
-                )
-                .max(
-                    opts.ready_port
-                        .as_ref()
-                        .and_then(|p| p.timeout)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0),
-                )
-                .max(resolve_ready_delay()?);
-            Some(Duration::from_secs(max_deadline + 60))
+            Some(settings().ipc_request_timeout())
         };
         let rsp = self
             .request_with_timeout(IpcRequest::Run(opts.clone()), timeout)
@@ -458,13 +392,21 @@ impl IpcClient {
                 })
             }
             IpcResponse::DaemonAlreadyRunning => {
-                warn!("Daemon {} already running", opts.id);
+                // Reported by the caller, which knows whether the daemon was
+                // asked for or only reached as a dependency.
+                debug!("Daemon {} already running", opts.id);
                 Ok(RunResult {
                     oneshot: opts.oneshot,
                     started: false,
                     exit_code: None,
                     start_time,
-                    resolved_ports: Vec::new(),
+                    resolved_ports: self
+                        .daemons(std::slice::from_ref(&opts.id))
+                        .await?
+                        .into_iter()
+                        .find(|daemon| daemon.id == opts.id)
+                        .map(|daemon| daemon.resolved_port)
+                        .unwrap_or_default(),
                     error_message: None,
                 })
             }
@@ -863,48 +805,4 @@ fn stop_request_timeout(stop_budget: Duration, request_timeout: Duration) -> Dur
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn records_are_those_of_the_asked_ids_that_state_has() {
-        let mut state = crate::state_file::StateFile::new(PathBuf::from("state.toml"));
-        let known = DaemonId::new("proj", "known");
-        state.daemons.insert(
-            known.clone(),
-            Daemon {
-                id: known.clone(),
-                ..Default::default()
-            },
-        );
-        let records = records_of(&state, &[known.clone(), DaemonId::new("proj", "unknown")]);
-        assert_eq!(
-            records.into_iter().map(|d| d.id).collect::<Vec<_>>(),
-            vec![known]
-        );
-    }
-
-    #[test]
-    fn an_older_supervisor_reports_get_daemons_as_an_unknown_request() {
-        // What the supervisor answers a request it cannot deserialize.
-        assert!(is_unknown_request(
-            "Invalid request: unknown variant `GetDaemons`"
-        ));
-    }
-
-    #[test]
-    fn stop_request_timeout_adds_verification_and_slack() {
-        assert_eq!(
-            stop_request_timeout(Duration::from_secs(5), Duration::from_secs(10)),
-            Duration::from_secs(17)
-        );
-    }
-
-    #[test]
-    fn stop_request_timeout_saturates_for_a_huge_stop_budget() {
-        assert_eq!(
-            stop_request_timeout(Duration::MAX, Duration::from_secs(10)),
-            Duration::MAX
-        );
-    }
-}
+mod tests;

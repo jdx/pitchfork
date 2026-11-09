@@ -73,7 +73,7 @@ pub struct Supervisor {
     pub(crate) state_file: Mutex<StateFile>,
     pub(crate) pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
-    /// Daemons whose retry sequence a foreground `run` is already working
+    /// Daemons whose retry sequence a `run` is already working
     /// through, each with the flag that asks it to stop. The backoff between
     /// its attempts leaves the record errored with no PID, which is exactly
     /// what `check_retry` looks for, so without this the background checker
@@ -83,8 +83,7 @@ pub struct Supervisor {
     /// back.
     /// One flag per claim: two starts can be working through the same
     /// daemon's retries at once, and a stop has to reach all of them.
-    pub(crate) retrying:
-        std::sync::Mutex<HashMap<DaemonId, Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
+    pub(crate) retrying: std::sync::Mutex<HashMap<DaemonId, Vec<RetryClaim>>>,
     /// How many times each daemon has been stopped. The retry checker reads
     /// this when it decides to run an attempt and again when it is about to
     /// start one, holding the daemon's lock: a stop in between means the
@@ -143,6 +142,10 @@ pub struct Supervisor {
     /// exit), and starts/orphan-cleanup acquire it first — serializing them
     /// against in-flight stops instead of racing the Stopping window.
     pub(crate) stop_locks: Mutex<HashMap<DaemonId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    /// Pending readiness by daemon ID and PID. Starts handling retries publish
+    /// their final result; other background starts publish the attempt's result.
+    /// Concurrent starts await it rather than treating a spawned process as ready.
+    pub(crate) ready_checks: std::sync::Mutex<HashMap<DaemonId, ReadyCheck>>,
     /// Set when `close()` begins. From then on this supervisor's own
     /// state-file record is on its way out and must not be restored.
     pub(crate) shutting_down: AtomicBool,
@@ -150,6 +153,23 @@ pub struct Supervisor {
     /// `freeze_starts`). Everyone who needs the final list of daemons waits
     /// on the same freeze.
     starts_frozen: tokio::sync::OnceCell<()>,
+}
+
+/// The result of a readiness wait: `None` while pending. If the wait ends
+/// without a result, the channel closes.
+pub(crate) type StartResult = tokio::sync::watch::Receiver<Option<crate::ipc::IpcResponse>>;
+
+#[derive(Debug)]
+pub(crate) struct RetryClaim {
+    cancel: std::sync::Arc<AtomicBool>,
+    result: Option<StartResult>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ReadyCheck {
+    pid: u32,
+    result: StartResult,
+    attempt: StartResult,
 }
 
 /// A line of daemon output on its way to the monitoring task.
@@ -624,6 +644,7 @@ impl Supervisor {
             monitored: std::sync::Mutex::new(HashMap::new()),
             sink_output: std::sync::Mutex::new(HashMap::new()),
             stop_locks: Mutex::new(HashMap::new()),
+            ready_checks: std::sync::Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             starts_frozen: tokio::sync::OnceCell::new(),
         })
