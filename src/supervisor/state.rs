@@ -403,10 +403,7 @@ impl Supervisor {
         let ready_base = configured.filter(|_| !opts.replaces_ready_checks);
         let process_may_live = matches!(
             opts.status,
-            DaemonStatus::Running
-                | DaemonStatus::Waiting
-                | DaemonStatus::Stopping
-                | DaemonStatus::Restarting
+            DaemonStatus::Running | DaemonStatus::Waiting | DaemonStatus::Stopping
         );
         let daemon = Daemon {
             id: opts.id.clone(),
