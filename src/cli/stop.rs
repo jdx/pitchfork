@@ -109,7 +109,12 @@ impl Stop {
             let ids = ipc.get_stoppable_daemons().await?;
             if !self.force {
                 let local = IpcClient::get_local_configured_daemons()?;
-                confirm_outside_project(&outside_project(&ids, &local))?;
+                let namespace = PitchforkToml::namespace_for_dir(&env::CWD)?;
+                let outside = outside_project(&ids, &local, &namespace);
+                // The prompt reads stdin synchronously.
+                tokio::task::spawn_blocking(move || confirm_outside_project(&outside))
+                    .await
+                    .map_err(|e| miette::miette!("confirmation prompt failed: {e}"))??;
             }
             ids
         } else if self.global || self.local {
@@ -225,11 +230,14 @@ impl Stop {
     }
 }
 
-/// The daemons in `ids` that the current project's config does not define.
-fn outside_project(ids: &[DaemonId], local: &[DaemonId]) -> Vec<DaemonId> {
+/// The daemons in `ids` that belong to neither the current project's config
+/// nor its namespace. The namespace covers ad-hoc daemons from `pitchfork run`,
+/// which no config defines. `global` is not a project namespace, so it never
+/// excuses a daemon.
+fn outside_project(ids: &[DaemonId], local: &[DaemonId], namespace: &str) -> Vec<DaemonId> {
     let mut outside: Vec<DaemonId> = ids
         .iter()
-        .filter(|id| !local.contains(id))
+        .filter(|id| !local.contains(id) && (namespace == "global" || id.namespace() != namespace))
         .cloned()
         .collect();
     outside.sort();
@@ -509,17 +517,28 @@ mod tests {
     #[test]
     fn outside_project_excludes_local_daemons() {
         let local = [id("proj", "api")];
-        let ids = [id("proj", "api"), id("other", "db"), id("global", "dns")];
+        let ids = [
+            id("proj", "api"),
+            id("proj", "adhoc"),
+            id("other", "db"),
+            id("global", "dns"),
+        ];
         assert_eq!(
-            outside_project(&ids, &local),
+            outside_project(&ids, &local, "proj"),
             vec![id("global", "dns"), id("other", "db")]
         );
     }
 
     #[test]
+    fn global_namespace_is_never_a_project() {
+        let ids = [id("global", "dns"), id("other", "db")];
+        assert_eq!(outside_project(&ids, &[], "global").len(), 2);
+    }
+
+    #[test]
     fn outside_project_empty_when_all_local() {
         let local = [id("proj", "api"), id("proj", "web")];
-        assert!(outside_project(&local, &local).is_empty());
+        assert!(outside_project(&local, &local, "proj").is_empty());
     }
 
     #[test]
