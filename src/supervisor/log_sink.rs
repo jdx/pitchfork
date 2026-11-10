@@ -121,12 +121,16 @@ static CURRENT_ATTEMPT: std::sync::LazyLock<
 > = std::sync::LazyLock::new(Default::default);
 
 /// Whether `token` belongs to the newest start attempt of `id`.
+///
+/// A daemon this supervisor never started — one adopted after a supervisor
+/// crash — has no attempt on record, and its surviving sink keeps its old
+/// token: that sink is the only one there can be, so it is accepted.
 pub(crate) fn is_current_attempt(id: &DaemonId, token: u64) -> bool {
     CURRENT_ATTEMPT
         .lock()
         .expect("CURRENT_ATTEMPT lock poisoned")
         .get(id)
-        .is_some_and(|current| *current == token)
+        .is_none_or(|current| *current == token)
 }
 
 /// Record what a daemon reported over the Program Status Protocol.
