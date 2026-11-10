@@ -321,6 +321,38 @@ impl StateFile {
         }
     }
 
+    /// Apply a program status update. Marks the state dirty only on change.
+    pub fn apply_program_status(
+        &mut self,
+        id: &DaemonId,
+        update: crate::program_status::StatusUpdate,
+    ) {
+        use crate::program_status::StatusUpdate;
+        let Some(d) = self.daemons.get_mut(id) else {
+            return;
+        };
+        let new = match update {
+            StatusUpdate::Set(status) => Some(status),
+            StatusUpdate::Clear => None,
+        };
+        if d.program_status != new {
+            d.program_status = new;
+            self.mark_dirty();
+        }
+    }
+
+    /// Drop a `working`/`blocked` program status once the process is gone.
+    pub fn drop_live_program_status(&mut self, id: &DaemonId) {
+        if let Some(d) = self.daemons.get_mut(id)
+            && d.program_status
+                .as_ref()
+                .is_some_and(|s| s.state.ends_with_process())
+        {
+            d.program_status = None;
+            self.mark_dirty();
+        }
+    }
+
     /// Clear the active port for a daemon and mark the state dirty.
     /// Returns true if the daemon was found and updated.
     pub fn clear_active_port(&mut self, id: &DaemonId) -> bool {
@@ -634,6 +666,41 @@ fn normalized_lock_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::daemon_status::DaemonStatus;
+
+    #[test]
+    fn program_status_survives_exit_only_when_finished() {
+        use crate::program_status::{ProgramState, ProgramStatus, StatusUpdate};
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let id = DaemonId::new("project", "job");
+        state.daemons.insert(
+            id.clone(),
+            Daemon {
+                id: id.clone(),
+                ..Daemon::default()
+            },
+        );
+        let set = |state| {
+            StatusUpdate::Set(ProgramStatus {
+                state,
+                progress: None,
+                msg: Some("step".into()),
+            })
+        };
+
+        state.apply_program_status(&id, set(ProgramState::Working));
+        state.drop_live_program_status(&id);
+        assert!(state.daemons[&id].program_status.is_none());
+
+        state.apply_program_status(&id, set(ProgramState::Done));
+        state.drop_live_program_status(&id);
+        assert_eq!(
+            state.daemons[&id].program_status.as_ref().map(|s| s.state),
+            Some(ProgramState::Done)
+        );
+
+        state.apply_program_status(&id, StatusUpdate::Clear);
+        assert!(state.daemons[&id].program_status.is_none());
+    }
 
     #[test]
     fn test_state_file_toml_roundtrip_stopped() {

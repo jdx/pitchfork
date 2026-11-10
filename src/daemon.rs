@@ -208,6 +208,13 @@ pub struct Daemon {
     /// Appended after `scheduled_from_config` for the positional IPC encoding.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub configured_ready_port: Option<ReadyPort>,
+    /// What the daemon last reported over the Program Status Protocol
+    /// (OSC 7501). Dropped when a new run starts, and `working`/`blocked`
+    /// reports are dropped when the process exits (as are `idle` ones).
+    ///
+    /// Appended after `configured_ready_port` for the positional IPC encoding.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub program_status: Option<crate::program_status::ProgramStatus>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]

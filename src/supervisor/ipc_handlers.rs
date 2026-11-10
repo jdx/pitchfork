@@ -148,6 +148,12 @@ impl Supervisor {
                 super::log_sink::deliver_reported_line(&id, token, fires_hook, line).await;
                 IpcResponse::Ok
             }
+            IpcRequest::SinkProgramStatus { id, token, status } => {
+                super::log_sink::deliver_program_status(&id, token, status).await;
+                // Progress can change often and nothing reads it back from disk
+                // right after: leave it to the periodic state flush.
+                return Ok(IpcResponse::Ok);
+            }
             IpcRequest::Clean => {
                 self.clean().await?;
                 IpcResponse::Ok

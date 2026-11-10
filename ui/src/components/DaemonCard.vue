@@ -43,6 +43,7 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
       </span>
     </div>
     <div class="daemon-id">{{ daemon.id.namespace }}</div>
+    <div v-if="daemon.program_status" class="daemon-id" style="overflow-wrap: anywhere; max-width: 100%">{{ daemon.program_status }}</div>
     <div class="metrics" :class="{ 'not-running': daemon.status.type !== 'running' }">
       <div class="metric">
         <div class="metric-label">UPTIME</div>

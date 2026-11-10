@@ -27,6 +27,8 @@ pub struct ApiDaemonEntry {
     retry_count: u32,
     resolved_port: Vec<u16>,
     active_port: Option<u16>,
+    /// Last Program Status Protocol (OSC 7501) report, e.g. `working 40% Syncing`.
+    program_status: Option<String>,
     slug: Option<String>,
     is_disabled: bool,
     is_available: bool,
@@ -208,6 +210,7 @@ fn entry_to_api(
         } else {
             None
         },
+        program_status: d.program_status.as_ref().map(|s| s.summary()),
         slug: d.slug.clone(),
         is_disabled: entry.is_disabled,
         is_available: entry.is_available,

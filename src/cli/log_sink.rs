@@ -141,6 +141,8 @@ impl LogSink {
 enum SinkEvent {
     Line(ParsedLog),
     Report(Report),
+    /// A Program Status Protocol (OSC 7501) report; `None` clears the status.
+    Status(Option<crate::program_status::ProgramStatus>),
 }
 
 /// A line the supervisor needs to see, and why.
@@ -303,11 +305,23 @@ async fn read_lines(
     // because it ended. A newline arriving straight afterwards terminates the
     // line already written, so it must not produce an empty one.
     let mut split_at_cap = false;
+    // Looks at the raw bytes, not the lines: a report ends with a terminator
+    // rather than a newline, and need not wait for one to be seen.
+    let mut scanner = crate::program_status::OscScanner::default();
 
     loop {
         let read = stdin.read(&mut chunk).await?;
         if read == 0 {
             break;
+        }
+        for update in scanner.feed(&chunk[..read]) {
+            let status = match update {
+                crate::program_status::StatusUpdate::Set(s) => Some(s),
+                crate::program_status::StatusUpdate::Clear => None,
+            };
+            tx.send(SinkEvent::Status(status))
+                .await
+                .map_err(|_| std::io::Error::other("log writer stopped"))?;
         }
         for &byte in &chunk[..read] {
             if byte == b'\n' {
@@ -617,8 +631,11 @@ async fn write_batches(
             received = rx.recv_many(&mut events, BATCH_SIZE) => received == 0,
             _ = flush_interval.tick() => false,
         };
+        // Only the newest status in a batch is worth telling the supervisor.
+        let mut status: Option<Option<crate::program_status::ProgramStatus>> = None;
         for event in events.drain(..) {
             match event {
+                SinkEvent::Status(s) => status = Some(s),
                 SinkEvent::Line(parsed) => batch.push(parsed),
                 SinkEvent::Report(report) => {
                     // Everything up to and including the reported line goes to
@@ -630,6 +647,9 @@ async fn write_batches(
             }
         }
         flush(&id, &mut batch).await;
+        if let Some(status) = status {
+            report_status(&id, relay_token, status).await;
+        }
         if closed {
             break;
         }
@@ -654,6 +674,32 @@ async fn report_line(id: &DaemonId, relay_token: u64, report: Report) {
         }
         Err(e) => {
             warn!("log sink for {id} could not reach the supervisor to report output: {e}");
+        }
+    }
+}
+
+/// Tell the supervisor what the daemon says it is doing. Like `report_line`,
+/// a failure is logged and dropped.
+async fn report_status(
+    id: &DaemonId,
+    relay_token: u64,
+    status: Option<crate::program_status::ProgramStatus>,
+) {
+    // Without a token the supervisor cannot tell which run this belongs to.
+    if relay_token == 0 {
+        return;
+    }
+    match crate::ipc::client::IpcClient::connect(false).await {
+        Ok(client) => {
+            if let Err(e) = client
+                .sink_program_status(id.clone(), relay_token, status)
+                .await
+            {
+                warn!("log sink for {id} could not report program status: {e}");
+            }
+        }
+        Err(e) => {
+            warn!("log sink for {id} could not reach the supervisor to report program status: {e}");
         }
     }
 }

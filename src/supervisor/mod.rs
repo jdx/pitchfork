@@ -2368,6 +2368,13 @@ async fn reset_daemon_state(
     daemon.status = status;
     daemon.last_exit_success = observation.last_exit_success();
     daemon.active_port = None;
+    if daemon
+        .program_status
+        .as_ref()
+        .is_some_and(|s| s.state.ends_with_process())
+    {
+        daemon.program_status = None;
+    }
     state_file.clear_active_port(id);
     state_file.insert_daemon(id, daemon);
 }

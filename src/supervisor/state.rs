@@ -401,6 +401,10 @@ impl Supervisor {
         // What unset ready checks fall back to: also nothing when this start's
         // ready checks replace the daemon's; see `replaces_ready_checks`.
         let ready_base = configured.filter(|_| !opts.replaces_ready_checks);
+        let process_may_live = matches!(
+            opts.status,
+            DaemonStatus::Running | DaemonStatus::Waiting | DaemonStatus::Stopping
+        );
         let daemon = Daemon {
             id: opts.id.clone(),
             // title/start_time identify the process for orphan cleanup after a
@@ -550,6 +554,16 @@ impl Supervisor {
                 .or(configured.and_then(|d| d.log_format.clone())),
             pty: opts.pty.or(configured.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
+            // A new run starts without a status; the process reports its own.
+            // Status-only upserts (stop, error, retry bookkeeping) keep it, so
+            // a `done` or `error` report survives them.
+            // A different pid is a new run, wherever the record came from.
+            program_status: existing
+                .filter(|d| !opts.replaces_config && (opts.pid.is_none() || d.pid == opts.pid))
+                .and_then(|d| d.program_status.clone())
+                // Whatever path ends a run (monitored, adopted or unmonitored
+                // stop), the status it leaves is one that outlives the process.
+                .filter(|s| !s.state.ends_with_process() || process_may_live),
             proxy_idle_timeout_ms: opts
                 .proxy_idle_timeout_ms
                 .unwrap_or_else(|| existing.and_then(|d| d.proxy_idle_timeout_ms)),

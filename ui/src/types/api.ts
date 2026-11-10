@@ -23,6 +23,7 @@ export interface DaemonEntry {
   shell_pid: number | null
   uptime_secs: number | null
   active_port: number | null
+  program_status: string | null
   resolved_port: number[]
   slug: string | null
   autostop: boolean | null

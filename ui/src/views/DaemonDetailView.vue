@@ -137,6 +137,10 @@ async function onToggle() {
           <div class="info-label">Shell PID</div>
           <div class="info-value">{{ daemon.shell_pid ?? '—' }}</div>
         </div>
+        <div v-if="daemon.program_status" class="info-card">
+          <div class="info-label">Activity</div>
+          <div class="info-value" style="overflow-wrap: anywhere; max-width: 100%">{{ daemon.program_status }}</div>
+        </div>
         <div class="info-card">
           <div class="info-label">Active Port</div>
           <div class="info-value">{{ daemon.active_port ?? '—' }}</div>

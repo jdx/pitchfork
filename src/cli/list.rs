@@ -195,6 +195,7 @@ impl List {
                         error: entry.daemon.status.error_message(),
                         active_port: entry.daemon.active_port,
                         port: entry.daemon.resolved_port.clone(),
+                        program_status: entry.daemon.program_status.clone(),
                     }
                 })
                 .collect();
@@ -268,6 +269,9 @@ impl List {
                 } else {
                     extra_parts.push(url.clone());
                 }
+            }
+            if let Some(ps) = &entry.daemon.program_status {
+                extra_parts.push(ps.summary());
             }
             if !error_msg.is_empty() {
                 extra_parts.push(error_msg.clone());

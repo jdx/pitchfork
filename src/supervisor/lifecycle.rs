@@ -431,37 +431,78 @@ async fn await_start_result(
     }
 }
 
+/// Where program status reports (OSC 7501) found in a daemon's output go: the
+/// daemon, and the start attempt they belong to.
+#[derive(Clone)]
+struct StatusTarget {
+    id: DaemonId,
+    token: u64,
+}
+
 /// Send each line of `reader` to `tx` until the output ends or nobody is
 /// listening.
 ///
 /// Reading stops only there, never on a line's content: a reader that gave up
 /// would stop draining the daemon's pipe or PTY, and the daemon would block,
 /// or fail, on its next write.
-async fn forward_output_lines<R>(mut reader: R, tx: tokio::sync::mpsc::Sender<super::OutputLine>)
-where
+///
+/// Program status reports are picked out of the raw bytes as they arrive, not
+/// of the lines: a report ends with a terminator, not a newline, so a daemon
+/// that prints one without a newline still has it seen straight away.
+async fn forward_output_lines<R>(
+    mut reader: R,
+    tx: tokio::sync::mpsc::Sender<super::OutputLine>,
+    status: Option<StatusTarget>,
+) where
     R: tokio::io::AsyncBufRead + Unpin,
 {
     use tokio::io::AsyncBufReadExt;
+    let mut scanner = crate::program_status::OscScanner::default();
     let mut line = Vec::new();
     loop {
-        line.clear();
         // A read error ends the output too: a Linux PTY master reports the
         // slave closing, once the daemon is gone, as EIO rather than end of
         // file. Whatever of a last, unterminated line arrived before it is
         // still sent.
-        let last = match reader.read_until(b'\n', &mut line).await {
-            Ok(0) => break,
-            Ok(_) => false,
-            Err(_) if line.is_empty() => break,
-            Err(_) => true,
+        let (consumed, complete, last) = match reader.fill_buf().await {
+            Ok([]) => (0, false, true),
+            Ok(buf) => {
+                let (consumed, complete) = match buf.iter().position(|b| *b == b'\n') {
+                    Some(i) => (i + 1, true),
+                    None => (buf.len(), false),
+                };
+                line.extend_from_slice(&buf[..consumed]);
+                // Only what is consumed is scanned: the rest is offered again
+                // by the next read, and scanning it twice would replay a
+                // partial report.
+                if let Some(status) = &status {
+                    for update in scanner.feed(&buf[..consumed]) {
+                        let update = match update {
+                            crate::program_status::StatusUpdate::Set(s) => Some(s),
+                            crate::program_status::StatusUpdate::Clear => None,
+                        };
+                        super::log_sink::deliver_program_status(&status.id, status.token, update)
+                            .await;
+                    }
+                }
+                (consumed, complete, false)
+            }
+            Err(_) => (0, false, true),
         };
-        let sent = tx
-            .send(super::OutputLine {
-                text: output_line_text(&line),
-                source: super::OutputSource::Local,
-            })
-            .await;
-        if sent.is_err() || last {
+        reader.consume(consumed);
+        if complete || (last && !line.is_empty()) {
+            let sent = tx
+                .send(super::OutputLine {
+                    text: output_line_text(&line),
+                    source: super::OutputSource::Local,
+                })
+                .await;
+            line.clear();
+            if sent.is_err() {
+                break;
+            }
+        }
+        if last {
             break;
         }
     }
@@ -1555,7 +1596,11 @@ impl Supervisor {
         // starts: a daemon whose very first line matches its readiness pattern
         // would otherwise have the match reported with nowhere to deliver it.
         let (output_tx, output_rx) = tokio::sync::mpsc::channel::<super::OutputLine>(256);
-        let mut output_relay = None;
+        // Registered for every attempt, whichever way its output is captured:
+        // the token also tells a daemon's program status reports apart from
+        // those of an earlier run's sink.
+        let output_relay = super::log_sink::OutputRelay::register(id, output_tx.clone());
+        let status_token = output_relay.token();
 
         // Set up out-of-process capture before building the command, so the
         // daemon can be handed the pipe's write end directly.
@@ -1570,14 +1615,7 @@ impl Supervisor {
             let watch_for = super::log_sink::WatchFor::from_opts(id, &opts);
             // The token ties this attempt's sink to this attempt's channel, so
             // a sink still draining a previous attempt cannot report into it.
-            let relay_token = if watch_for.is_empty() {
-                0
-            } else {
-                let relay = super::log_sink::OutputRelay::register(id, output_tx.clone());
-                let token = relay.token();
-                output_relay = Some(relay);
-                token
-            };
+            let relay_token = status_token;
             match super::log_sink::SinkPipe::new(log_format, watch_for, relay_token) {
                 Ok((pipe, writer)) => match pipe.start(id) {
                     Ok(child) => {
@@ -1921,22 +1959,39 @@ impl Supervisor {
             // Merge all output sources (PTY master OR stdout+stderr, or a
             // sink's IPC reports) into a single channel.
             let mut output_rx = output_rx;
+            let status_target = StatusTarget {
+                id: id.clone(),
+                token: status_token,
+            };
+            let status_target = Some(status_target);
 
             if let Some(reader) = pty_reader {
                 // PTY mode: single merged stream from the master.
                 // output_tx is moved into the spawn; when the reader ends the
                 // channel closes automatically.
-                tokio::spawn(forward_output_lines(reader, output_tx));
+                tokio::spawn(forward_output_lines(
+                    reader,
+                    output_tx,
+                    status_target.clone(),
+                ));
             } else {
                 // Pipe mode: stdout and stderr are merged into the same channel.
                 // Both `ready_output` and `on_output_hook` patterns match against
                 // lines from either stream, which is the expected behavior (a
                 // "server ready" message may appear on stderr in some tools).
                 if let Some(stdout) = stdout_reader {
-                    tokio::spawn(forward_output_lines(stdout, output_tx.clone()));
+                    tokio::spawn(forward_output_lines(
+                        stdout,
+                        output_tx.clone(),
+                        status_target.clone(),
+                    ));
                 }
                 if let Some(stderr) = stderr_reader {
-                    tokio::spawn(forward_output_lines(stderr, output_tx.clone()));
+                    tokio::spawn(forward_output_lines(
+                        stderr,
+                        output_tx.clone(),
+                        status_target.clone(),
+                    ));
                 }
                 // Drop the last sender so the channel closes when all readers
                 // finish. The relay holds its own clone, so a sink's reports
@@ -2708,6 +2763,9 @@ impl Supervisor {
             {
                 let mut state_file = SUPERVISOR.state_file.lock().await;
                 state_file.clear_active_port(&id);
+                if super::log_sink::is_current_attempt(&id, status_token) {
+                    state_file.drop_live_program_status(&id);
+                }
             }
 
             let readiness_failed = ready_fail_kill.is_some();
@@ -5232,7 +5290,7 @@ mod output_reader_tests {
         // line, and nothing after it was read.
         let output: &[u8] = b"before\nbad \xff\xfe bytes\nafter 1\nafter 2\nlast";
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        forward_output_lines(tokio::io::BufReader::new(output), tx).await;
+        forward_output_lines(tokio::io::BufReader::new(output), tx, None).await;
 
         let mut lines = Vec::new();
         while let Some(line) = rx.recv().await {
@@ -5275,7 +5333,7 @@ mod output_reader_eio_tests {
     async fn a_last_line_cut_off_by_eio_is_still_forwarded() {
         let reader = tokio::io::BufReader::new(EndsWithEio(Some(b"first\nlast without newline")));
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        forward_output_lines(reader, tx).await;
+        forward_output_lines(reader, tx, None).await;
 
         let mut lines = Vec::new();
         while let Some(line) = rx.recv().await {
