@@ -378,6 +378,8 @@ impl Supervisor {
         d.active_port = None;
         state_file.clear_active_port(id);
         state_file.insert_daemon(id, d);
+        // The process is gone: what it reported as live goes with it.
+        state_file.drop_live_program_status(id);
         true
     }
 
@@ -419,6 +421,8 @@ impl Supervisor {
         d.active_port = None;
         state_file.clear_active_port(id);
         state_file.insert_daemon(id, d);
+        // The process is gone: what it reported as live goes with it.
+        state_file.drop_live_program_status(id);
         true
     }
 
