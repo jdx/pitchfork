@@ -147,7 +147,10 @@ pub(crate) async fn deliver_program_status(
     let Some(daemon) = state_file.daemons.get(id) else {
         return;
     };
-    let alive = matches!(daemon.status, DaemonStatus::Running | DaemonStatus::Waiting);
+    let alive = matches!(
+        daemon.status,
+        DaemonStatus::Running | DaemonStatus::Waiting | DaemonStatus::Stopping
+    );
     if !alive && status.as_ref().is_some_and(|s| s.state.ends_with_process()) {
         return;
     }
