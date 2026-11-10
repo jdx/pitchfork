@@ -139,7 +139,7 @@ async function onToggle() {
         </div>
         <div v-if="daemon.program_status" class="info-card">
           <div class="info-label">Activity</div>
-          <div class="info-value">{{ daemon.program_status }}</div>
+          <div class="info-value" style="overflow-wrap: anywhere; max-width: 100%">{{ daemon.program_status }}</div>
         </div>
         <div class="info-card">
           <div class="info-label">Active Port</div>

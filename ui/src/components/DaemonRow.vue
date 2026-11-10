@@ -45,7 +45,7 @@ function openProxy(e: Event) {
     <td class="cell-name">
       <div class="name-main">{{ daemon.id.name }}</div>
       <div class="name-ns">{{ daemon.id.namespace }}</div>
-      <div v-if="daemon.program_status" class="name-ns">{{ daemon.program_status }}</div>
+      <div v-if="daemon.program_status" class="name-ns" style="overflow-wrap: anywhere; max-width: 100%">{{ daemon.program_status }}</div>
     </td>
     <td class="cell-status">
       <span class="badge" :class="statusClass(daemon.status)">
