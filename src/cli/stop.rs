@@ -100,7 +100,7 @@ impl Stop {
             super::interactive::require_interactive_terminal()?;
         }
 
-        let mut confirmed = false;
+        let mut approved: Vec<DaemonId> = Vec::new();
         if !supervisor_running().await? {
             if self.all {
                 // Before stopping marks anything stopped, so a declined
@@ -113,7 +113,7 @@ impl Stop {
                     .map(|d| d.id)
                     .collect();
                 self.guard_all(&recorded).await?;
-                confirmed = true;
+                approved = recorded;
             }
             if self.stop_without_supervisor()? {
                 return Ok(());
@@ -124,11 +124,15 @@ impl Stop {
 
         let ids: Vec<DaemonId> = if self.all {
             let ids = ipc.get_stoppable_daemons().await?;
-            // A supervisor that appeared after the check above was already
-            // confirmed with the user; do not ask twice.
-            if !confirmed {
-                self.guard_all(&ids).await?;
-            }
+            // A supervisor that appeared after the check above may have
+            // started daemons since. Those already confirmed are not asked
+            // about twice, but any new ones are checked.
+            let new: Vec<DaemonId> = ids
+                .iter()
+                .filter(|id| !approved.contains(id))
+                .cloned()
+                .collect();
+            self.guard_all(&new).await?;
             ids
         } else if self.global || self.local {
             ipc.get_stoppable_configured_daemons(self.global).await?
