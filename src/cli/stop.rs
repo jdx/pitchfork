@@ -3,10 +3,11 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::env;
 use crate::ipc::client::IpcClient;
-use crate::pitchfork_toml::PitchforkToml;
+use crate::pitchfork_toml::{PitchforkToml, is_global_config, project_dir_for_config};
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use miette::WrapErr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -110,7 +111,11 @@ impl Stop {
             if !self.force {
                 let local = IpcClient::get_local_configured_daemons()?;
                 let namespace = PitchforkToml::namespace_for_dir(&env::CWD)?;
-                let outside = outside_project(&ids, &local, &namespace);
+                let project_dir = current_project_dir();
+                let state = StateFile::get();
+                let outside = outside_project(&ids, &local, &namespace, &project_dir, |id| {
+                    state.daemons.get(id).and_then(|d| d.dir.clone())
+                });
                 // The prompt reads stdin synchronously.
                 tokio::task::spawn_blocking(move || confirm_outside_project(&outside))
                     .await
@@ -230,14 +235,40 @@ impl Stop {
     }
 }
 
-/// The daemons in `ids` that belong to neither the current project's config
-/// nor its namespace. The namespace covers ad-hoc daemons from `pitchfork run`,
-/// which no config defines. `global` is not a project namespace, so it never
-/// excuses a daemon.
-fn outside_project(ids: &[DaemonId], local: &[DaemonId], namespace: &str) -> Vec<DaemonId> {
+/// The directory of the project the command runs in: that of the nearest
+/// project config at or above the working directory, else the working
+/// directory itself.
+fn current_project_dir() -> PathBuf {
+    PitchforkToml::list_paths_from(&env::CWD)
+        .into_iter()
+        .filter(|p| p.exists() && !is_global_config(p))
+        .filter_map(|p| project_dir_for_config(&p))
+        .max_by_key(|dir| dir.components().count())
+        .unwrap_or_else(|| env::CWD.clone())
+}
+
+/// The daemons in `ids` that do not belong to the current project.
+///
+/// A daemon belongs to it if its config defines it (`local`), or if it is an
+/// ad-hoc daemon, as `pitchfork run` starts, that shares the project's
+/// `namespace` and was started inside `project_dir`. The directory keeps two
+/// projects that share a directory name, and so a namespace, apart. `global`
+/// is not a project namespace, so it never excuses a daemon.
+fn outside_project(
+    ids: &[DaemonId],
+    local: &[DaemonId],
+    namespace: &str,
+    project_dir: &Path,
+    dir_of: impl Fn(&DaemonId) -> Option<PathBuf>,
+) -> Vec<DaemonId> {
     let mut outside: Vec<DaemonId> = ids
         .iter()
-        .filter(|id| !local.contains(id) && (namespace == "global" || id.namespace() != namespace))
+        .filter(|id| {
+            !local.contains(id)
+                && !(namespace != "global"
+                    && id.namespace() == namespace
+                    && dir_of(id).is_some_and(|dir| dir.starts_with(project_dir)))
+        })
         .cloned()
         .collect();
     outside.sort();
@@ -514,31 +545,42 @@ mod tests {
         DaemonId::try_new(ns, name).unwrap()
     }
 
+    fn dirs(id: &DaemonId) -> Option<PathBuf> {
+        match id.name() {
+            "adhoc" => Some(PathBuf::from("/work/a/dev/sub")),
+            "stranger" => Some(PathBuf::from("/work/b/dev")),
+            _ => None,
+        }
+    }
+
     #[test]
-    fn outside_project_excludes_local_daemons() {
-        let local = [id("proj", "api")];
+    fn outside_project_excludes_local_and_adhoc_daemons() {
+        let local = [id("dev", "api")];
         let ids = [
-            id("proj", "api"),
-            id("proj", "adhoc"),
+            id("dev", "api"),
+            id("dev", "adhoc"),
             id("other", "db"),
             id("global", "dns"),
         ];
+        let project = Path::new("/work/a/dev");
         assert_eq!(
-            outside_project(&ids, &local, "proj"),
+            outside_project(&ids, &local, "dev", project, dirs),
             vec![id("global", "dns"), id("other", "db")]
         );
     }
 
     #[test]
-    fn global_namespace_is_never_a_project() {
-        let ids = [id("global", "dns"), id("other", "db")];
-        assert_eq!(outside_project(&ids, &[], "global").len(), 2);
+    fn same_namespace_in_another_directory_is_outside() {
+        let ids = [id("dev", "stranger"), id("dev", "unknown")];
+        let project = Path::new("/work/a/dev");
+        assert_eq!(outside_project(&ids, &[], "dev", project, dirs).len(), 2);
     }
 
     #[test]
-    fn outside_project_empty_when_all_local() {
-        let local = [id("proj", "api"), id("proj", "web")];
-        assert!(outside_project(&local, &local, "proj").is_empty());
+    fn global_namespace_is_never_a_project() {
+        let ids = [id("global", "adhoc"), id("other", "db")];
+        let project = Path::new("/work/a/dev");
+        assert_eq!(outside_project(&ids, &[], "global", project, dirs).len(), 2);
     }
 
     #[test]
