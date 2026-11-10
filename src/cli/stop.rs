@@ -26,6 +26,12 @@ Most processes exit promptly after the first signal. The escalation
 ensures stubborn processes are eventually terminated while giving well-behaved
 processes time to clean up resources.
 
+--all stops daemons of every project, not only the current one. If that includes
+daemons outside this project's config, they are listed and --all asks for
+confirmation. Without an interactive terminal (scripts, CI, coding agents) it
+refuses instead, unless --force is given. Use --local to stop only this
+project's daemons.
+
 When using --all/--local/--global, daemons are stopped in reverse dependency order:
 dependents are stopped before the daemons they depend on.
 
@@ -41,6 +47,7 @@ Examples:
     pitchfork stop api worker    Stop multiple daemons
     pitchfork stop --group backend Stop all daemons in the 'backend' group
     pitchfork stop --all         Stop all running daemons in dependency order
+    pitchfork stop --all -f      Same, without confirming daemons outside this project
     pitchfork stop -l            Stop all local daemons in pitchfork.toml
     pitchfork stop -g            Stop all global daemons in config.toml
     pitchfork kill api           Same as 'stop' (alias)"
@@ -61,6 +68,9 @@ pub struct Stop {
     /// Stop all running daemons (in reverse dependency order)
     #[usage(long, short, conflicts = "local", conflicts = "global")]
     all: bool,
+    /// Do not ask before stopping daemons outside this project with --all
+    #[usage(long, short = 'f', requires = "--all")]
+    force: bool,
     /// Stop all local daemons in pitchfork.toml
     #[usage(
         long,
@@ -96,7 +106,12 @@ impl Stop {
         let ipc = Arc::new(IpcClient::connect(false).await?);
 
         let ids: Vec<DaemonId> = if self.all {
-            ipc.get_stoppable_daemons().await?
+            let ids = ipc.get_stoppable_daemons().await?;
+            if !self.force {
+                let local = IpcClient::get_local_configured_daemons()?;
+                confirm_outside_project(&outside_project(&ids, &local))?;
+            }
+            ids
         } else if self.global || self.local {
             ipc.get_stoppable_configured_daemons(self.global).await?
         } else if no_target {
@@ -208,6 +223,58 @@ impl Stop {
     fn no_target(&self) -> bool {
         self.id.is_empty() && self.group.is_none() && !self.local && !self.global && !self.all
     }
+}
+
+/// The daemons in `ids` that the current project's config does not define.
+fn outside_project(ids: &[DaemonId], local: &[DaemonId]) -> Vec<DaemonId> {
+    let mut outside: Vec<DaemonId> = ids
+        .iter()
+        .filter(|id| !local.contains(id))
+        .cloned()
+        .collect();
+    outside.sort();
+    outside
+}
+
+/// Guards `stop --all` against taking down other projects' daemons by
+/// mistake: asks on a terminal, refuses elsewhere. Does nothing when every
+/// daemon belongs to this project.
+fn confirm_outside_project(outside: &[DaemonId]) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    if outside.is_empty() {
+        return Ok(());
+    }
+    let list = outside
+        .iter()
+        .map(|id| format!("  * {}", id.qualified()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    if !interactive {
+        miette::bail!(
+            help = "re-run with --force to stop them, or use --local to stop only this \
+                    project's daemons",
+            "--all would stop daemons outside this project:\n{list}"
+        );
+    }
+    eprintln!("This will stop the following daemons outside this project:\n{list}");
+    eprint!("Stop all daemons? [y/N] ");
+    std::io::stderr()
+        .flush()
+        .map_err(|e| miette::miette!("Failed to write prompt: {e}"))?;
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|e| miette::miette!("Failed to read confirmation: {e}"))?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        miette::bail!(
+            help = "use --local to stop only this project's daemons",
+            "Aborted, no daemons were stopped"
+        );
+    }
+    Ok(())
 }
 
 /// How long a supervisor that has recorded itself may take to open its IPC
@@ -433,5 +500,30 @@ mod tests {
         assert!(matches!(sf.daemons[&target].status, DaemonStatus::Stopped));
         assert!(sf.daemons[&exhausted].status.is_errored());
         assert!(sf.daemons[&other].status.is_errored());
+    }
+
+    fn id(ns: &str, name: &str) -> DaemonId {
+        DaemonId::try_new(ns, name).unwrap()
+    }
+
+    #[test]
+    fn outside_project_excludes_local_daemons() {
+        let local = [id("proj", "api")];
+        let ids = [id("proj", "api"), id("other", "db"), id("global", "dns")];
+        assert_eq!(
+            outside_project(&ids, &local),
+            vec![id("global", "dns"), id("other", "db")]
+        );
+    }
+
+    #[test]
+    fn outside_project_empty_when_all_local() {
+        let local = [id("proj", "api"), id("proj", "web")];
+        assert!(outside_project(&local, &local).is_empty());
+    }
+
+    #[test]
+    fn confirm_passes_without_outside_daemons() {
+        assert!(confirm_outside_project(&[]).is_ok());
     }
 }
