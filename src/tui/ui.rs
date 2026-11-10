@@ -287,6 +287,11 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             .unwrap_or_else(|| "-".to_string());
 
         let error = daemon.status.error_message().unwrap_or_default();
+        // An error wins the column; otherwise show what the daemon reports.
+        let (error, error_color) = match (&error.is_empty(), &daemon.program_status) {
+            (true, Some(ps)) => (ps.summary(), theme().cyan),
+            _ => (error, theme().red),
+        };
 
         let row_style = if is_multi_selected {
             theme().marked
@@ -314,7 +319,7 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             cpu_cell,
             mem_cell,
             Cell::from(uptime).style(Style::default().fg(theme().muted)),
-            Cell::from(error).style(Style::default().fg(theme().red)),
+            Cell::from(error).style(Style::default().fg(error_color)),
         ]);
 
         Row::new(cells).style(row_style).height(1)
@@ -1574,6 +1579,13 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
                 }),
             ),
         ]));
+
+        if let Some(ps) = &d.program_status {
+            lines.push(Line::from(vec![
+                Span::styled("Activity: ", Style::default().fg(theme().muted)),
+                Span::styled(ps.summary(), Style::default().fg(theme().cyan)),
+            ]));
+        }
 
         if let Some(pid) = d.pid {
             lines.push(Line::from(vec![

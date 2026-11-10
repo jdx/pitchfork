@@ -87,6 +87,7 @@ export default defineConfig({
         text: "Observe & troubleshoot",
         items: [
           { text: "Logs", link: "/guides/logs" },
+          { text: "Program Status", link: "/guides/program-status" },
           { text: "Terminal dashboard", link: "/guides/tui" },
           { text: "Web dashboard", link: "/guides/web-ui" },
           { text: "Troubleshooting", link: "/troubleshooting" },

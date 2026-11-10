@@ -550,6 +550,8 @@ impl Supervisor {
                 .or(configured.and_then(|d| d.log_format.clone())),
             pty: opts.pty.or(configured.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
+            // A new run starts without a status; the process reports its own.
+            program_status: None,
             proxy_idle_timeout_ms: opts
                 .proxy_idle_timeout_ms
                 .unwrap_or_else(|| existing.and_then(|d| d.proxy_idle_timeout_ms)),

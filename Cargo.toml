@@ -37,6 +37,7 @@ usage_rs = { package = "usage-rs", version = "7", features = ["completions", "di
 # Direct dependency so the "toml" feature (FileLayer's TOML reader) is enabled;
 # usage-rs's "config" feature re-exports this crate as usage_rs::config.
 usage-config = { version = "7", features = ["toml"] }
+base64 = "0.22"
 clx = "3"
 comfy-table = { version = "8", features = ["custom_styling"] }
 console = "0.16"

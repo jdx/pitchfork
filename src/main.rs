@@ -23,6 +23,7 @@ mod log_store;
 mod logger;
 mod pitchfork_toml;
 mod procs;
+mod program_status;
 mod proxy;
 mod settings;
 mod shell;

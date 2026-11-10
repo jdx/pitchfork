@@ -26,6 +26,10 @@ pub struct JsonListEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_port: Option<u16>,
     pub port: Vec<u16>,
+    /// Last status the daemon reported over the Program Status Protocol
+    /// (OSC 7501). Omitted when it has not reported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_status: Option<crate::program_status::ProgramStatus>,
 }
 
 #[derive(Serialize)]
@@ -40,6 +44,9 @@ pub struct JsonStatusEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_port: Option<u16>,
     pub port: Vec<u16>,
+    /// See `JsonListEntry::program_status`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_status: Option<crate::program_status::ProgramStatus>,
     /// Deprecated alias of `url`, kept so existing consumers keep working.
     pub proxy_url: Option<String>,
     /// The daemon's proxy URL.

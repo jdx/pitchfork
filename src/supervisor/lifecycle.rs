@@ -437,6 +437,21 @@ async fn await_start_result(
 /// Reading stops only there, never on a line's content: a reader that gave up
 /// would stop draining the daemon's pipe or PTY, and the daemon would block,
 /// or fail, on its next write.
+/// Record any Program Status Protocol (OSC 7501) report in `line`.
+async fn apply_program_status(id: &DaemonId, line: &str) {
+    if !line.contains("\x1b]7501;") {
+        return;
+    }
+    let updates = crate::program_status::parse_line(line);
+    if updates.is_empty() {
+        return;
+    }
+    let mut state_file = SUPERVISOR.state_file.lock().await;
+    for update in updates {
+        state_file.apply_program_status(id, update);
+    }
+}
+
 async fn forward_output_lines<R>(mut reader: R, tx: tokio::sync::mpsc::Sender<super::OutputLine>)
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -2539,6 +2554,7 @@ impl Supervisor {
                             }
                         }
                         trace!("output: {id} {line}");
+                        apply_program_status(&id, &line).await;
 
                         // Strip ANSI for pattern matching so user-written patterns
                         // work regardless of whether the process emits color codes.
@@ -2662,6 +2678,7 @@ impl Supervisor {
                 if matches!(line.source, super::OutputSource::Local) {
                     log_buffer.push(parse_line(&line.text));
                 }
+                apply_program_status(&id, &line.text).await;
             }
             // Flush any remaining log lines (including drained) before the process exits.
             // Await the flush to guarantee all buffered logs are persisted before cleanup.
@@ -2674,6 +2691,7 @@ impl Supervisor {
             {
                 let mut state_file = SUPERVISOR.state_file.lock().await;
                 state_file.clear_active_port(&id);
+                state_file.drop_live_program_status(&id);
             }
 
             let readiness_failed = ready_fail_kill.is_some();

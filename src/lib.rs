@@ -23,6 +23,7 @@ pub mod log_store;
 pub mod logger;
 pub mod pitchfork_toml;
 pub mod procs;
+pub mod program_status;
 pub mod proxy;
 pub mod settings;
 pub mod shell;

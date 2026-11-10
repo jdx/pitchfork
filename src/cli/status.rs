@@ -121,6 +121,7 @@ impl Status {
                 oneshot: daemon.oneshot,
                 active_port: daemon.active_port,
                 port: daemon.resolved_port.clone(),
+                program_status: daemon.program_status.clone(),
                 proxy_url: proxy_url.clone(),
                 url: proxy_url,
                 proxy_tls,
@@ -152,6 +153,9 @@ impl Status {
                 .collect::<Vec<_>>()
                 .join(", ");
             println!("Port: {ports}");
+        }
+        if let Some(ps) = &daemon.program_status {
+            println!("Activity: {}", ps.summary());
         }
         // Between runs a cron daemon is `stopped`, which says nothing about
         // whether the schedule is still live. These lines are what makes that
