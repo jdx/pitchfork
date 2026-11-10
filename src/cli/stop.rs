@@ -100,27 +100,29 @@ impl Stop {
             super::interactive::require_interactive_terminal()?;
         }
 
-        if !supervisor_running().await? && self.stop_without_supervisor()? {
-            return Ok(());
+        if !supervisor_running().await? {
+            if self.all {
+                // Before stopping marks anything stopped, so a declined
+                // confirmation leaves every record as it was.
+                let recorded: Vec<DaemonId> = read_state()?
+                    .daemons
+                    .into_values()
+                    .filter(|d| d.id != DaemonId::pitchfork())
+                    .filter(|d| d.pid.is_some() || d.status.is_running() || d.status.is_errored())
+                    .map(|d| d.id)
+                    .collect();
+                self.guard_all(&recorded).await?;
+            }
+            if self.stop_without_supervisor()? {
+                return Ok(());
+            }
         }
 
         let ipc = Arc::new(IpcClient::connect(false).await?);
 
         let ids: Vec<DaemonId> = if self.all {
             let ids = ipc.get_stoppable_daemons().await?;
-            if !self.force {
-                let local = IpcClient::get_local_configured_daemons()?;
-                let namespace = PitchforkToml::namespace_for_dir(&env::CWD)?;
-                let project_dir = current_project_dir();
-                let state = StateFile::get();
-                let outside = outside_project(&ids, &local, &namespace, &project_dir, |id| {
-                    state.daemons.get(id).and_then(|d| d.dir.clone())
-                });
-                // The prompt reads stdin synchronously.
-                tokio::task::spawn_blocking(move || confirm_outside_project(&outside))
-                    .await
-                    .map_err(|e| miette::miette!("confirmation prompt failed: {e}"))??;
-            }
+            self.guard_all(&ids).await?;
             ids
         } else if self.global || self.local {
             ipc.get_stoppable_configured_daemons(self.global).await?
@@ -142,6 +144,25 @@ impl Stop {
             std::process::exit(1);
         }
         Ok(())
+    }
+
+    /// Confirms `--all` among `ids` unless `--force` was given: asks, or
+    /// refuses without a terminal, when some are outside the current project.
+    async fn guard_all(&self, ids: &[DaemonId]) -> Result<()> {
+        if self.force {
+            return Ok(());
+        }
+        let local = IpcClient::get_local_configured_daemons()?;
+        let namespace = PitchforkToml::namespace_for_dir(&env::CWD)?;
+        let project_dir = current_project_dir();
+        let state = StateFile::get();
+        let outside = outside_project(ids, &local, &namespace, &project_dir, |id| {
+            state.daemons.get(id).and_then(|d| d.dir.clone())
+        });
+        // The prompt reads stdin synchronously.
+        tokio::task::spawn_blocking(move || confirm_outside_project(&outside))
+            .await
+            .map_err(|e| miette::miette!("confirmation prompt failed: {e}"))?
     }
 
     /// With no supervisor, nothing pitchfork manages is running unless a
