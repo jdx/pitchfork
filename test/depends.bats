@@ -326,7 +326,7 @@ EOF
 
   # The config of stopproj is not visible from here.
   cd "$other"
-  PITCHFORK_LOG=debug run pitchfork stop --all
+  PITCHFORK_LOG=debug run pitchfork stop --all --force
   assert_success
   assert_output --partial 'shutdown order: [[DaemonId { namespace: "stopproj", name: "app" }], [DaemonId { namespace: "stopproj", name: "db" }]]'
 }
@@ -366,7 +366,7 @@ EOF
   wait_for_status web running
 
   cd "$other"
-  PITCHFORK_LOG=debug run pitchfork stop --all
+  PITCHFORK_LOG=debug run pitchfork stop --all --force
   assert_success
   assert_output --partial 'shutdown order: [[DaemonId { namespace: "disabledproj", name: "web" }], [DaemonId { namespace: "disabledproj", name: "db" }]]'
 }
@@ -410,7 +410,7 @@ EOF
   wait_for_status web running
 
   cd "$other"
-  PITCHFORK_LOG=debug run pitchfork stop --all
+  PITCHFORK_LOG=debug run pitchfork stop --all --force
   assert_success
   assert_output --partial 'shutdown order: [[DaemonId { namespace: "webproj", name: "web" }], [DaemonId { namespace: "dbproj", name: "db" }]]'
 }

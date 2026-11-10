@@ -3,10 +3,11 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::env;
 use crate::ipc::client::IpcClient;
-use crate::pitchfork_toml::PitchforkToml;
+use crate::pitchfork_toml::{PitchforkToml, is_global_config, project_dir_for_config};
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use miette::WrapErr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,12 @@ Most processes exit promptly after the first signal. The escalation
 ensures stubborn processes are eventually terminated while giving well-behaved
 processes time to clean up resources.
 
+--all stops daemons of every project, not only the current one. If that includes
+daemons outside this project's config, they are listed and --all asks for
+confirmation. Without an interactive terminal (scripts, CI, coding agents) it
+refuses instead, unless --force is given. Use --local to stop only this
+project's daemons.
+
 When using --all/--local/--global, daemons are stopped in reverse dependency order:
 dependents are stopped before the daemons they depend on.
 
@@ -41,6 +48,7 @@ Examples:
     pitchfork stop api worker    Stop multiple daemons
     pitchfork stop --group backend Stop all daemons in the 'backend' group
     pitchfork stop --all         Stop all running daemons in dependency order
+    pitchfork stop --all -f      Same, without confirming daemons outside this project
     pitchfork stop -l            Stop all local daemons in pitchfork.toml
     pitchfork stop -g            Stop all global daemons in config.toml
     pitchfork kill api           Same as 'stop' (alias)"
@@ -61,6 +69,9 @@ pub struct Stop {
     /// Stop all running daemons (in reverse dependency order)
     #[usage(long, short, conflicts = "local", conflicts = "global")]
     all: bool,
+    /// Do not ask before stopping daemons outside this project with --all
+    #[usage(long, short = 'f', requires = "--all")]
+    force: bool,
     /// Stop all local daemons in pitchfork.toml
     #[usage(
         long,
@@ -89,14 +100,40 @@ impl Stop {
             super::interactive::require_interactive_terminal()?;
         }
 
-        if !supervisor_running().await? && self.stop_without_supervisor()? {
-            return Ok(());
+        let mut approved: Vec<DaemonId> = Vec::new();
+        if !supervisor_running().await? {
+            if self.all {
+                // Before stopping marks anything stopped, so a declined
+                // confirmation leaves every record as it was.
+                let recorded: Vec<DaemonId> = read_state()?
+                    .daemons
+                    .into_values()
+                    .filter(|d| d.id != DaemonId::pitchfork())
+                    .filter(|d| d.pid.is_some() || d.status.is_running() || has_retries_pending(d))
+                    .map(|d| d.id)
+                    .collect();
+                self.guard_all(&recorded).await?;
+                approved = recorded;
+            }
+            if self.stop_without_supervisor()? {
+                return Ok(());
+            }
         }
 
         let ipc = Arc::new(IpcClient::connect(false).await?);
 
         let ids: Vec<DaemonId> = if self.all {
-            ipc.get_stoppable_daemons().await?
+            let ids = ipc.get_stoppable_daemons().await?;
+            // A supervisor that appeared after the check above may have
+            // started daemons since. Those already confirmed are not asked
+            // about twice, but any new ones are checked.
+            let new: Vec<DaemonId> = ids
+                .iter()
+                .filter(|id| !approved.contains(id))
+                .cloned()
+                .collect();
+            self.guard_all(&new).await?;
+            ids
         } else if self.global || self.local {
             ipc.get_stoppable_configured_daemons(self.global).await?
         } else if no_target {
@@ -117,6 +154,36 @@ impl Stop {
             std::process::exit(1);
         }
         Ok(())
+    }
+
+    /// Confirms `--all` among `ids` unless `--force` was given: asks, or
+    /// refuses without a terminal, when some are outside the current project.
+    async fn guard_all(&self, ids: &[DaemonId]) -> Result<()> {
+        if self.force {
+            return Ok(());
+        }
+        let local = IpcClient::get_local_configured_daemons()?;
+        let namespace = PitchforkToml::namespace_for_dir(&env::CWD)?;
+        let project_dir = current_project_dir();
+        // Fresh, so a daemon recorded since an earlier check has its directory.
+        let state = read_state()?;
+        let outside = outside_project(ids, &local, &namespace, &project_dir, |id| {
+            state.daemons.get(id).and_then(|d| {
+                // The defining project for a configured daemon, the start
+                // directory for an ad-hoc one. A configured record without
+                // its project (older ones) has no origin: its working
+                // directory says nothing about where its config lives.
+                match &d.watch_base_dir {
+                    Some(base) => Some(base.clone()),
+                    None if d.is_adhoc() => d.dir.clone(),
+                    None => None,
+                }
+            })
+        });
+        // The prompt reads stdin synchronously.
+        tokio::task::spawn_blocking(move || confirm_outside_project(&outside))
+            .await
+            .map_err(|e| miette::miette!("confirmation prompt failed: {e}"))?
     }
 
     /// With no supervisor, nothing pitchfork manages is running unless a
@@ -210,6 +277,114 @@ impl Stop {
     }
 }
 
+/// The directory of the project the command runs in: that of the nearest
+/// project config at or above the working directory, else the working
+/// directory itself.
+fn current_project_dir() -> PathBuf {
+    PitchforkToml::list_paths_from(&env::CWD)
+        .into_iter()
+        .filter(|p| p.exists() && !is_global_config(p))
+        .filter_map(|p| project_dir_for_config(&p))
+        .max_by_key(|dir| dir.components().count())
+        .unwrap_or_else(|| env::CWD.clone())
+}
+
+/// Whether `dir` is `project_dir` or inside it. The paths as written are
+/// compared first; only when that fails and both exist are they canonicalized
+/// and compared again, so symlinks (`/tmp` against `/private/tmp`) match
+/// without a missing directory being compared in a different form.
+fn is_within(dir: &Path, project_dir: &Path) -> bool {
+    if dir.starts_with(project_dir) {
+        return true;
+    }
+    match (dir.canonicalize(), project_dir.canonicalize()) {
+        (Ok(dir), Ok(project_dir)) => dir.starts_with(project_dir),
+        _ => false,
+    }
+}
+
+/// The daemons in `ids` that do not belong to the current project.
+///
+/// A daemon belongs to it if its config defines it (`local`) or it is an
+/// ad-hoc daemon, as `pitchfork run` starts, sharing the project's
+/// `namespace`. Either way, `origin_of` must place where the daemon came from
+/// (the project that defined a configured daemon, the directory an ad-hoc one
+/// started in) inside `project_dir`: that keeps two projects that share a
+/// directory name, and so a namespace and perhaps daemon names, apart. A
+/// daemon with no recorded origin is judged by `local` alone. `global` is not
+/// a project namespace, so it never excuses a daemon.
+fn outside_project(
+    ids: &[DaemonId],
+    local: &[DaemonId],
+    namespace: &str,
+    project_dir: &Path,
+    origin_of: impl Fn(&DaemonId) -> Option<PathBuf>,
+) -> Vec<DaemonId> {
+    let mut outside: Vec<DaemonId> = ids
+        .iter()
+        .filter(|id| {
+            let claimed =
+                local.contains(id) || (namespace != "global" && id.namespace() == namespace);
+            let inside = match origin_of(id) {
+                // A config inherited from a parent directory is defined above
+                // the project, so for configured daemons an origin that
+                // contains the project counts too.
+                Some(origin) => {
+                    claimed
+                        && (is_within(&origin, project_dir)
+                            || (local.contains(id) && is_within(project_dir, &origin)))
+                }
+                None => local.contains(id),
+            };
+            !inside
+        })
+        .cloned()
+        .collect();
+    outside.sort();
+    outside
+}
+
+/// Guards `stop --all` against taking down other projects' daemons by
+/// mistake: asks on a terminal, refuses elsewhere. Does nothing when every
+/// daemon belongs to this project.
+fn confirm_outside_project(outside: &[DaemonId]) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    if outside.is_empty() {
+        return Ok(());
+    }
+    let list = outside
+        .iter()
+        .map(|id| format!("  * {}", id.qualified()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    if !interactive {
+        miette::bail!(
+            help = "re-run with --force to stop them, or use --local to stop only this \
+                    project's daemons",
+            "--all would stop daemons outside this project:\n{list}"
+        );
+    }
+    eprintln!("This will stop the following daemons outside this project:\n{list}");
+    eprint!("Stop all daemons? [y/N] ");
+    std::io::stderr()
+        .flush()
+        .map_err(|e| miette::miette!("Failed to write prompt: {e}"))?;
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|e| miette::miette!("Failed to read confirmation: {e}"))?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        miette::bail!(
+            help = "use --local to stop only this project's daemons",
+            "Aborted, no daemons were stopped"
+        );
+    }
+    Ok(())
+}
+
 /// How long a supervisor that has recorded itself may take to open its IPC
 /// socket before it is treated as not running.
 const SUPERVISOR_STARTUP_WAIT: Duration = Duration::from_secs(5);
@@ -248,6 +423,11 @@ fn read_state() -> Result<StateFile> {
     StateFile::read(path).wrap_err_with(|| format!("failed to read state file {}", path.display()))
 }
 
+/// Whether a failed daemon with no process would be started again.
+fn has_retries_pending(d: &crate::daemon::Daemon) -> bool {
+    d.status.is_errored() && d.pid.is_none() && d.retry_count < d.retry.count()
+}
+
 /// Mark daemons (restricted to `targets` when given) that a supervisor would
 /// start again as stopped, returning their IDs: failed daemons with retries
 /// left, and records still marked running, which a starting supervisor turns
@@ -263,7 +443,7 @@ fn cancel_pending_retries(sf: &mut StateFile, targets: Option<&[DaemonId]>) -> V
             (d.status.is_running()
                 && d.pid
                     .is_none_or(|pid| recorded_process_is_gone(pid, d.start_time)))
-                || (d.status.is_errored() && d.pid.is_none() && d.retry_count < d.retry.count())
+                || has_retries_pending(d)
         })
         .map(|d| d.id.clone())
         .collect();
@@ -433,5 +613,78 @@ mod tests {
         assert!(matches!(sf.daemons[&target].status, DaemonStatus::Stopped));
         assert!(sf.daemons[&exhausted].status.is_errored());
         assert!(sf.daemons[&other].status.is_errored());
+    }
+
+    fn id(ns: &str, name: &str) -> DaemonId {
+        DaemonId::try_new(ns, name).unwrap()
+    }
+
+    fn dirs(id: &DaemonId) -> Option<PathBuf> {
+        match id.name() {
+            "adhoc" => Some(PathBuf::from("/work/a/dev/sub")),
+            "stranger" => Some(PathBuf::from("/work/b/dev")),
+            "api2" => Some(PathBuf::from("/work/b/dev")),
+            "parent" => Some(PathBuf::from("/work/a")),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn outside_project_excludes_local_and_adhoc_daemons() {
+        let local = [id("dev", "api")];
+        let ids = [
+            id("dev", "api"),
+            id("dev", "adhoc"),
+            id("other", "db"),
+            id("global", "dns"),
+        ];
+        let project = Path::new("/work/a/dev");
+        assert_eq!(
+            outside_project(&ids, &local, "dev", project, dirs),
+            vec![id("global", "dns"), id("other", "db")]
+        );
+    }
+
+    #[test]
+    fn configured_daemon_defined_by_another_project_is_outside() {
+        // Same namespace and name as one the current config defines.
+        let local = [id("dev", "api2")];
+        let project = Path::new("/work/a/dev");
+        assert_eq!(
+            outside_project(&[id("dev", "api2")], &local, "dev", project, dirs).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn config_inherited_from_a_parent_directory_is_inside() {
+        let project = Path::new("/work/a/dev");
+        let configured = [id("dev", "parent")];
+        assert!(outside_project(&configured, &configured, "dev", project, dirs).is_empty());
+        // Only configured daemons get this: an ad-hoc daemon that started in a
+        // parent directory is not this project's.
+        assert_eq!(
+            outside_project(&configured, &[], "dev", project, dirs).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn same_namespace_in_another_directory_is_outside() {
+        let ids = [id("dev", "stranger"), id("dev", "unknown")];
+        let project = Path::new("/work/a/dev");
+        assert_eq!(outside_project(&ids, &[], "dev", project, dirs).len(), 2);
+    }
+
+    #[test]
+    fn global_namespace_is_never_a_project() {
+        let ids = [id("global", "adhoc"), id("other", "db")];
+        let project = Path::new("/work/a/dev");
+        assert_eq!(outside_project(&ids, &[], "global", project, dirs).len(), 2);
+    }
+
+    #[test]
+    fn confirm_passes_without_outside_daemons() {
+        assert!(confirm_outside_project(&[]).is_ok());
     }
 }

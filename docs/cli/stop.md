@@ -16,6 +16,12 @@ Most processes exit promptly after the first signal. The escalation
 ensures stubborn processes are eventually terminated while giving well-behaved
 processes time to clean up resources.
 
+--all stops daemons of every project, not only the current one. If that includes
+daemons outside this project's config, they are listed and --all asks for
+confirmation. Without an interactive terminal (scripts, CI, coding agents) it
+refuses instead, unless --force is given. Use --local to stop only this
+project's daemons.
+
 When using --all/--local/--global, daemons are stopped in reverse dependency order:
 dependents are stopped before the daemons they depend on.
 
@@ -31,6 +37,7 @@ Examples:
     pitchfork stop api worker    Stop multiple daemons
     pitchfork stop --group backend Stop all daemons in the 'backend' group
     pitchfork stop --all         Stop all running daemons in dependency order
+    pitchfork stop --all -f      Same, without confirming daemons outside this project
     pitchfork stop -l            Stop all local daemons in pitchfork.toml
     pitchfork stop -g            Stop all global daemons in config.toml
     pitchfork kill api           Same as 'stop' (alias)
@@ -41,6 +48,7 @@ Examples:
 ## Flags
 - **`--group <GROUP>`** — Stop all daemons in the named group
 - **`-a --all`** — Stop all running daemons (in reverse dependency order)
+- **`-f --force`** — Do not ask before stopping daemons outside this project with --all
 - **`-l --local`** — Stop all local daemons in pitchfork.toml
 
   **Aliases:** `--all-local`
