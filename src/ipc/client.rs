@@ -553,6 +553,22 @@ impl IpcClient {
         }
     }
 
+    /// Report a daemon's program status (OSC 7501). Called by a log sink.
+    pub async fn sink_program_status(
+        &self,
+        id: DaemonId,
+        token: u64,
+        status: Option<crate::program_status::ProgramStatus>,
+    ) -> Result<()> {
+        let rsp = self
+            .request(IpcRequest::SinkProgramStatus { id, token, status })
+            .await?;
+        match rsp {
+            IpcResponse::Ok => Ok(()),
+            rsp => Err(Self::unexpected_response("Ok", &rsp).into()),
+        }
+    }
+
     pub async fn clean(&self) -> Result<()> {
         let rsp = self.request(IpcRequest::Clean).await?;
         match rsp {

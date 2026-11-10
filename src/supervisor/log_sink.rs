@@ -81,20 +81,11 @@ impl WatchFor {
         }
     }
 
-    /// Whether the sink has anything to report, and so whether this attempt
-    /// needs to be reachable from one.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.ready_pattern.is_none() && self.hook.is_none()
-    }
-
     /// The arguments telling a sink what to watch for.
     fn args(&self, relay_token: u64) -> Vec<String> {
-        let mut args = Vec::new();
-        if self.is_empty() {
-            return args;
-        }
-        args.push("--relay-token".into());
-        args.push(relay_token.to_string());
+        // Always quoted: the sink reports program status (OSC 7501) for any
+        // daemon, not only ones with something else to watch for.
+        let mut args = vec!["--relay-token".into(), relay_token.to_string()];
         if let Some(ref pattern) = self.ready_pattern {
             args.push("--ready-pattern".into());
             args.push(pattern.clone());
@@ -119,6 +110,51 @@ impl WatchFor {
 /// Source of relay tokens. Never reused within a supervisor's lifetime, and a
 /// restarted supervisor has no relays to be confused about.
 static NEXT_RELAY_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The newest start attempt's token per daemon. Unlike the relay registration
+/// it outlives the monitoring task's drain, so a `done` a sink reports just
+/// after its daemon exits is still accepted, while any report from a previous
+/// attempt's sink is not.
+static CURRENT_ATTEMPT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<DaemonId, u64>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Whether `token` belongs to the newest start attempt of `id`.
+pub(crate) fn is_current_attempt(id: &DaemonId, token: u64) -> bool {
+    CURRENT_ATTEMPT
+        .lock()
+        .expect("CURRENT_ATTEMPT lock poisoned")
+        .get(id)
+        .is_some_and(|current| *current == token)
+}
+
+/// Record what a daemon reported over the Program Status Protocol.
+///
+/// Ignored when `token` is from an earlier attempt. A report that describes a
+/// live process (`working`, `blocked`, `idle`) is also ignored once the daemon
+/// has stopped, so a sink still draining cannot leave a stale one behind.
+pub(crate) async fn deliver_program_status(
+    id: &DaemonId,
+    token: u64,
+    status: Option<crate::program_status::ProgramStatus>,
+) {
+    if !is_current_attempt(id, token) {
+        debug!("dropping program status reported for {id} by a sink from an earlier start attempt");
+        return;
+    }
+    let mut state_file = SUPERVISOR.state_file.lock().await;
+    let Some(daemon) = state_file.daemons.get(id) else {
+        return;
+    };
+    if daemon.status.is_stopped() && status.as_ref().is_some_and(|s| s.state.ends_with_process()) {
+        return;
+    }
+    let update = match status {
+        Some(status) => crate::program_status::StatusUpdate::Set(status),
+        None => crate::program_status::StatusUpdate::Clear,
+    };
+    state_file.apply_program_status(id, update);
+}
 
 /// A daemon's registration entry: which start attempt it belongs to, and where
 /// that attempt's output should go.
@@ -150,6 +186,10 @@ impl OutputRelay {
         tx: tokio::sync::mpsc::Sender<super::OutputLine>,
     ) -> Self {
         let token = NEXT_RELAY_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        CURRENT_ATTEMPT
+            .lock()
+            .expect("CURRENT_ATTEMPT lock poisoned")
+            .insert(id.clone(), token);
         SUPERVISOR
             .sink_output
             .lock()

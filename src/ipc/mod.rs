@@ -125,6 +125,15 @@ pub enum IpcRequest {
     GetDaemons {
         ids: Vec<DaemonId>,
     },
+    /// A daemon's log sink reporting what the daemon says it is doing over
+    /// the Program Status Protocol (OSC 7501). `status` of `None` clears it.
+    /// Appended to preserve the wire indexes of existing variants.
+    SinkProgramStatus {
+        id: DaemonId,
+        /// The start attempt the sink belongs to; see `SinkOutputLine`.
+        token: u64,
+        status: Option<crate::program_status::ProgramStatus>,
+    },
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {

@@ -28,7 +28,7 @@ A report whose `msg` contains control characters, or breaks a size limit, is ign
 
 ## Lifecycle
 
-- `working` and `blocked` reports are dropped when the process exits.
+- `idle`, `working` and `blocked` reports are dropped when the process exits.
 - `done` and `error` reports are kept after exit until the next run starts.
 - Starting a daemon again begins with no report.
 - Reports are read from the daemon's output, stdout and stderr, or the terminal when `pty = true`. The line stays in the logs as usual.

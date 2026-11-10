@@ -52,10 +52,10 @@ impl ProgramState {
         }
     }
 
-    /// `working` and `blocked` describe a live process; `done` and `error`
-    /// outlive it.
+    /// `idle`, `working` and `blocked` describe a live process; `done` and
+    /// `error` outlive it.
     pub fn ends_with_process(self) -> bool {
-        matches!(self, Self::Working | Self::Blocked)
+        matches!(self, Self::Idle | Self::Working | Self::Blocked)
     }
 }
 
@@ -101,32 +101,94 @@ pub enum StatusUpdate {
 }
 
 /// Every valid root-record report in `line`, in order.
-pub fn parse_line(line: &str) -> Vec<StatusUpdate> {
-    let mut updates = Vec::new();
-    let mut rest = line;
-    while let Some(start) = rest.find(PREFIX) {
-        let after = &rest[start + PREFIX.len()..];
-        // ST is ESC \ or BEL. A sequence with neither is not a report yet.
-        let Some((end, term_len)) = find_terminator(after) else {
-            break;
-        };
-        if PREFIX.len() + end + term_len <= MAX_SEQUENCE
-            && let Some(update) = parse_body(&after[..end])
+#[cfg(test)]
+fn parse_line(line: &str) -> Vec<StatusUpdate> {
+    OscScanner::default().feed(line.as_bytes())
+}
+
+enum ScanState {
+    /// Matching the opening `ESC ] 7501 ;`; holds how many bytes matched.
+    Search(usize),
+    Body,
+    /// Saw `ESC` in the body, which ends it only if `\` follows.
+    BodyEsc,
+}
+
+/// Finds reports in a byte stream, however it is split into reads.
+///
+/// A report ends with ST (`ESC \` or BEL), not a newline, so a daemon that
+/// prints one on its own still has it seen right away. State carries across
+/// calls to `feed`; a report that never terminates is dropped.
+pub struct OscScanner {
+    state: ScanState,
+    body: Vec<u8>,
+}
+
+impl Default for OscScanner {
+    fn default() -> Self {
+        Self {
+            state: ScanState::Search(0),
+            body: Vec::new(),
+        }
+    }
+}
+
+impl OscScanner {
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<StatusUpdate> {
+        let prefix = PREFIX.as_bytes();
+        let mut updates = Vec::new();
+        for &b in bytes {
+            match self.state {
+                ScanState::Search(n) => {
+                    self.state = if b == prefix[n] {
+                        if n + 1 == prefix.len() {
+                            self.body.clear();
+                            ScanState::Body
+                        } else {
+                            ScanState::Search(n + 1)
+                        }
+                    } else if b == prefix[0] {
+                        ScanState::Search(1)
+                    } else {
+                        ScanState::Search(0)
+                    };
+                }
+                ScanState::Body => match b {
+                    0x07 => self.finish(1, &mut updates),
+                    0x1b => self.state = ScanState::BodyEsc,
+                    // The body has no newline, so this is not a report.
+                    b'\n' => self.state = ScanState::Search(0),
+                    _ if self.body.len() >= MAX_SEQUENCE => self.state = ScanState::Search(0),
+                    _ => self.body.push(b),
+                },
+                ScanState::BodyEsc => {
+                    if b == b'\\' {
+                        self.finish(2, &mut updates);
+                    } else {
+                        // An escape that does not end the report starts afresh.
+                        self.state = if b == prefix[0] {
+                            ScanState::Search(1)
+                        } else {
+                            ScanState::Search(0)
+                        };
+                    }
+                }
+            }
+        }
+        updates
+    }
+
+    fn finish(&mut self, term_len: usize, updates: &mut Vec<StatusUpdate>) {
+        self.state = ScanState::Search(0);
+        if PREFIX.len() + self.body.len() + term_len > MAX_SEQUENCE {
+            return;
+        }
+        if let Ok(body) = std::str::from_utf8(&self.body)
+            && let Some(update) = parse_body(body)
         {
             updates.push(update);
         }
-        rest = &after[end + term_len..];
     }
-    updates
-}
-
-fn find_terminator(s: &str) -> Option<(usize, usize)> {
-    let bytes = s.as_bytes();
-    (0..bytes.len()).find_map(|i| match bytes[i] {
-        0x07 => Some((i, 1)),
-        0x1b if bytes.get(i + 1) == Some(&b'\\') => Some((i, 2)),
-        _ => None,
-    })
 }
 
 fn parse_body(body: &str) -> Option<StatusUpdate> {
@@ -357,6 +419,32 @@ mod tests {
     #[test]
     fn unterminated_sequence_is_not_a_report() {
         assert!(parse_line("\x1b]7501;state=working").is_empty());
+    }
+
+    #[test]
+    fn a_report_split_across_reads_and_without_newline_is_seen() {
+        let mut scanner = OscScanner::default();
+        assert!(scanner.feed(b"x\x1b]75").is_empty());
+        assert!(scanner.feed(b"01;state=work").is_empty());
+        assert_eq!(
+            scanner.feed(b"ing\x1b"),
+            vec![],
+            "ESC alone does not end a report"
+        );
+        assert_eq!(
+            scanner.feed(b"\\"),
+            vec![set(ProgramState::Working, None, None)]
+        );
+    }
+
+    #[test]
+    fn a_newline_inside_a_report_abandons_it() {
+        let mut scanner = OscScanner::default();
+        assert!(scanner.feed(b"\x1b]7501;state=working\n\x07").is_empty());
+        assert_eq!(
+            scanner.feed(b"\x1b]7501;state=done\x07"),
+            vec![set(ProgramState::Done, None, None)]
+        );
     }
 
     #[test]
