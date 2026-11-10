@@ -165,12 +165,19 @@ impl Stop {
         let local = IpcClient::get_local_configured_daemons()?;
         let namespace = PitchforkToml::namespace_for_dir(&env::CWD)?;
         let project_dir = current_project_dir();
-        let state = StateFile::get();
+        // Fresh, so a daemon recorded since an earlier check has its directory.
+        let state = read_state()?;
         let outside = outside_project(ids, &local, &namespace, &project_dir, |id| {
             state.daemons.get(id).and_then(|d| {
                 // The defining project for a configured daemon, the start
-                // directory for an ad-hoc one.
-                d.watch_base_dir.clone().or_else(|| d.dir.clone())
+                // directory for an ad-hoc one. A configured record without
+                // its project (older ones) has no origin: its working
+                // directory says nothing about where its config lives.
+                match &d.watch_base_dir {
+                    Some(base) => Some(base.clone()),
+                    None if d.is_adhoc() => d.dir.clone(),
+                    None => None,
+                }
             })
         });
         // The prompt reads stdin synchronously.
@@ -282,15 +289,18 @@ fn current_project_dir() -> PathBuf {
         .unwrap_or_else(|| env::CWD.clone())
 }
 
-/// Whether `dir` is `project_dir` or inside it, comparing canonical forms
-/// (symlinks, `/tmp` against `/private/tmp`) and falling back to the paths as
-/// written for a directory that no longer exists.
+/// Whether `dir` is `project_dir` or inside it. The paths as written are
+/// compared first; only when that fails and both exist are they canonicalized
+/// and compared again, so symlinks (`/tmp` against `/private/tmp`) match
+/// without a missing directory being compared in a different form.
 fn is_within(dir: &Path, project_dir: &Path) -> bool {
-    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    let project_dir = project_dir
-        .canonicalize()
-        .unwrap_or_else(|_| project_dir.to_path_buf());
-    dir.starts_with(project_dir)
+    if dir.starts_with(project_dir) {
+        return true;
+    }
+    match (dir.canonicalize(), project_dir.canonicalize()) {
+        (Ok(dir), Ok(project_dir)) => dir.starts_with(project_dir),
+        _ => false,
+    }
 }
 
 /// The daemons in `ids` that do not belong to the current project.
