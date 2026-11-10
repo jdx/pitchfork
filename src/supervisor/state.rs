@@ -551,7 +551,9 @@ impl Supervisor {
             pty: opts.pty.or(configured.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
             // A new run starts without a status; the process reports its own.
-            program_status: None,
+            // Status-only upserts (stop, error, retry bookkeeping) keep it, so
+            // a `done` or `error` report survives them.
+            program_status: configured.and_then(|d| d.program_status.clone()),
             proxy_idle_timeout_ms: opts
                 .proxy_idle_timeout_ms
                 .unwrap_or_else(|| existing.and_then(|d| d.proxy_idle_timeout_ms)),

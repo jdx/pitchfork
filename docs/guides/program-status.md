@@ -4,7 +4,7 @@ A daemon can tell Pitchfork what it is doing right now, such as a phase or a pro
 
 ```bash
 # in a script run by a daemon
-report() { printf '\033]7501;state=%s:progress=%s:msg=%s\033\\' "$1" "$2" "$(printf %s "$3" | base64)"; }
+report() { printf '\033]7501;state=%s:progress=%s:msg=%s\033\\' "$1" "$2" "$(printf %s "$3" | base64 | tr -d '\n')"; }
 report working 40 "Syncing GitHub issues"
 ```
 
