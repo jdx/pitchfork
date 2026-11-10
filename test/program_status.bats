@@ -43,6 +43,7 @@ EOF
 }
 
 @test "status shows a report from a pty daemon" {
+  skip_on_windows "pty daemons are not supported on Windows"
   create_pitchfork_toml <<'EOF'
 [daemons.pty_reporter]
 run = '''printf '\033]7501;state=blocked:kind=question:msg=U3luY2luZw==\007'; sleep 30'''
