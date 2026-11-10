@@ -467,8 +467,16 @@ async fn forward_output_lines<R>(
         let (consumed, complete, last) = match reader.fill_buf().await {
             Ok([]) => (0, false, true),
             Ok(buf) => {
+                let (consumed, complete) = match buf.iter().position(|b| *b == b'\n') {
+                    Some(i) => (i + 1, true),
+                    None => (buf.len(), false),
+                };
+                line.extend_from_slice(&buf[..consumed]);
+                // Only what is consumed is scanned: the rest is offered again
+                // by the next read, and scanning it twice would replay a
+                // partial report.
                 if let Some(status) = &status {
-                    for update in scanner.feed(buf) {
+                    for update in scanner.feed(&buf[..consumed]) {
                         let update = match update {
                             crate::program_status::StatusUpdate::Set(s) => Some(s),
                             crate::program_status::StatusUpdate::Clear => None,
@@ -477,16 +485,7 @@ async fn forward_output_lines<R>(
                             .await;
                     }
                 }
-                match buf.iter().position(|b| *b == b'\n') {
-                    Some(i) => {
-                        line.extend_from_slice(&buf[..=i]);
-                        (i + 1, true, false)
-                    }
-                    None => {
-                        line.extend_from_slice(buf);
-                        (buf.len(), false, false)
-                    }
-                }
+                (consumed, complete, false)
             }
             Err(_) => (0, false, true),
         };

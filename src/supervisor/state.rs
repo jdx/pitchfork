@@ -553,7 +553,10 @@ impl Supervisor {
             // A new run starts without a status; the process reports its own.
             // Status-only upserts (stop, error, retry bookkeeping) keep it, so
             // a `done` or `error` report survives them.
-            program_status: configured.and_then(|d| d.program_status.clone()),
+            // A different pid is a new run, wherever the record came from.
+            program_status: existing
+                .filter(|d| !opts.replaces_config && (opts.pid.is_none() || d.pid == opts.pid))
+                .and_then(|d| d.program_status.clone()),
             proxy_idle_timeout_ms: opts
                 .proxy_idle_timeout_ms
                 .unwrap_or_else(|| existing.and_then(|d| d.proxy_idle_timeout_ms)),

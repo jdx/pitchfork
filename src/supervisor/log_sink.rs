@@ -30,6 +30,7 @@
 use crate::Result;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
 use crate::inherited_fds::CloseInheritedFds;
 use crate::log_store::LogStore;
 use crate::shell::HideConsoleWindow;
@@ -132,7 +133,7 @@ pub(crate) fn is_current_attempt(id: &DaemonId, token: u64) -> bool {
 ///
 /// Ignored when `token` is from an earlier attempt. A report that describes a
 /// live process (`working`, `blocked`, `idle`) is also ignored once the daemon
-/// has stopped, so a sink still draining cannot leave a stale one behind.
+/// has ended, so a sink still draining cannot leave a stale one behind.
 pub(crate) async fn deliver_program_status(
     id: &DaemonId,
     token: u64,
@@ -146,7 +147,8 @@ pub(crate) async fn deliver_program_status(
     let Some(daemon) = state_file.daemons.get(id) else {
         return;
     };
-    if daemon.status.is_stopped() && status.as_ref().is_some_and(|s| s.state.ends_with_process()) {
+    let alive = matches!(daemon.status, DaemonStatus::Running | DaemonStatus::Waiting);
+    if !alive && status.as_ref().is_some_and(|s| s.state.ends_with_process()) {
         return;
     }
     let update = match status {
