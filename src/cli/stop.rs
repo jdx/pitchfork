@@ -624,6 +624,7 @@ mod tests {
             "adhoc" => Some(PathBuf::from("/work/a/dev/sub")),
             "stranger" => Some(PathBuf::from("/work/b/dev")),
             "api2" => Some(PathBuf::from("/work/b/dev")),
+            "parent" => Some(PathBuf::from("/work/a")),
             _ => None,
         }
     }
@@ -651,6 +652,19 @@ mod tests {
         let project = Path::new("/work/a/dev");
         assert_eq!(
             outside_project(&[id("dev", "api2")], &local, "dev", project, dirs).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn config_inherited_from_a_parent_directory_is_inside() {
+        let project = Path::new("/work/a/dev");
+        let configured = [id("dev", "parent")];
+        assert!(outside_project(&configured, &configured, "dev", project, dirs).is_empty());
+        // Only configured daemons get this: an ad-hoc daemon that started in a
+        // parent directory is not this project's.
+        assert_eq!(
+            outside_project(&configured, &[], "dev", project, dirs).len(),
             1
         );
     }
