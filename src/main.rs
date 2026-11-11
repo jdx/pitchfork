@@ -65,9 +65,23 @@ async fn main() -> Result<()> {
     // Re-apply log levels now that settings (env + config files) are loaded.
     // logger::init() only sees env vars; this picks up pitchfork.toml values.
     logger::apply_settings();
+    init_progress_output();
     #[cfg(unix)]
     handle_epipe();
     cli::run().await
+}
+
+/// Switches progress output to plain lines when stderr is not a terminal.
+///
+/// clx defaults to its animated UI, which redraws in place several times a
+/// second. Without a terminal to interpret the cursor movement, every redraw
+/// lands in the output as new lines. Text mode instead prints one line per
+/// status change.
+fn init_progress_output() {
+    use std::io::IsTerminal;
+    if !std::io::stderr().is_terminal() {
+        clx::progress::set_output(clx::progress::ProgressOutput::Text);
+    }
 }
 
 #[cfg(unix)]
