@@ -6,6 +6,11 @@ description: Set up pitchfork for development, run repository checks, and edit o
 Using AI to help write a Discussion, Issue, reply, or pull request is fine.
 Review it before you post it, and disclose that AI contributed.
 
+Bug reports, in Issues or Discussions, are only for problems you ran into while
+using pitchfork. Say what you were trying to do, what you ran, the relevant
+config, and what happened. Reports found by reading the source or by having an
+agent search the code will be closed.
+
 Pitchfork welcomes focused fixes and improvements. For a non-obvious change,
 discuss the direction first in [GitHub Discussions](https://github.com/jdx/pitchfork/discussions)
 or [Discord](https://discord.gg/UBa7pJUN7Z). The project has a specific scope;
