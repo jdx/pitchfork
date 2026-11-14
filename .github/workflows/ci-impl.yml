@@ -161,16 +161,23 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3]
     steps:
+      - name: Reserve time for diagnostics
+        shell: bash
+        # Leave six minutes for runner overhead, upload, and post-job cleanup.
+        run: echo "BATS_DEADLINE=$(( $(date +%s) + 24 * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 3
         with:
           submodules: true
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        timeout-minutes: 3
         with:
           name: pitchfork-windows
           path: target/debug
       - name: Install sqlite3
         shell: pwsh
+        timeout-minutes: 5
         # The Chocolatey feed sometimes times out; retry rather than fail the
         # shard before any test runs.
         run: |
@@ -185,10 +192,22 @@ jobs:
           exit 1
       - name: Create UI placeholder
         shell: bash
+        timeout-minutes: 1
         run: mkdir -p ui/dist && echo '<html><body>placeholder</body></html>' > ui/dist/index.html
+      - name: Calculate remaining test time
+        id: bats-budget
+        shell: bash
+        timeout-minutes: 1
+        run: |
+          minutes=$(( (BATS_DEADLINE - $(date +%s)) / 60 ))
+          if (( minutes < 1 )); then
+            echo "Setup exhausted the Windows Bats time budget" >&2
+            exit 1
+          fi
+          echo "minutes=$minutes" >> "$GITHUB_OUTPUT"
       - name: Run bats e2e tests (shard ${{ matrix.shard }})
         shell: bash
-        timeout-minutes: 25
+        timeout-minutes: ${{ fromJSON(steps.bats-budget.outputs.minutes || '1') }}
         env:
           SHARD: ${{ matrix.shard }}
           SHARD_COUNT: 4
