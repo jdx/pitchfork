@@ -8,7 +8,32 @@
 # - Temp dirs preserved on failure for post-mortem debugging
 # - Comprehensive wait helpers for async daemon behaviour
 
+_test_phase() {
+  [[ "${PITCHFORK_TEST_TRACE:-0}" == 1 ]] || return 0
+  printf '# %s test=%s try=%s phase=%s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${BATS_TEST_DESCRIPTION:-unknown}" \
+    "${BATS_TEST_TRY_NUMBER:-1}" "$*" >&3
+}
+
+_preserve_test_diagnostics() {
+  [[ -n "${PITCHFORK_TEST_DIAGNOSTICS_DIR:-}" ]] || return 0
+  local dest
+  dest="$(to_shell_path "$PITCHFORK_TEST_DIAGNOSTICS_DIR")/${BATS_TEST_FILENAME##*/}-${BATS_TEST_NUMBER:-unknown}-try${BATS_TEST_TRY_NUMBER:-1}"
+  mkdir -p "$dest"
+  cp -R "$PITCHFORK_STATE_DIR" "$dest/state" 2>/dev/null || true
+  [[ -f "${BATS_OUT:-}" ]] && cp "$BATS_OUT" "$dest/output.log" 2>/dev/null || true
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    PF_DIAGNOSTIC_FILE="$(cygpath -w "$dest/processes.json")" powershell -NoProfile -Command '
+      Get-CimInstance Win32_Process |
+        Where-Object { $_.Name -in @("pitchfork.exe", "bash.exe", "sh.exe", "sleep.exe", "python.exe", "python3.exe") } |
+        Select-Object ProcessId, ParentProcessId, CreationDate, Name, CommandLine |
+        ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $env:PF_DIAGNOSTIC_FILE
+    ' 2>/dev/null || true
+  fi
+}
+
 _common_setup() {
+  _test_phase "setup begin"
   # Resolve project root from test file location
   PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export PROJECT_ROOT
@@ -92,7 +117,9 @@ _common_setup() {
   # the supervisor inherits every descriptor not marked close-on-exec, so if it
   # ever outlived the test it would keep that pipe open and bats would wait on
   # it forever after the last test passed.
+  _test_phase "supervisor start begin"
   pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&- || true
+  _test_phase "supervisor start returned"
 
   # Remember which supervisor this test started, so teardown can still stop it
   # if the test rewrites the state file and loses the record `supervisor stop`
@@ -112,6 +139,7 @@ _common_setup() {
   # On Windows the identity comes from the state file instead, read now in
   # case the test rewrites it (see `_stop_leaked_supervisors_windows`).
   _SETUP_SUPERVISOR_START="$(_recorded_supervisor_start_time)"
+  _test_phase "setup complete state=$PITCHFORK_STATE_DIR temp=$TEST_TEMP_DIR"
 }
 
 # Print an identity token for $1 if it is a `pitchfork supervisor run` process
@@ -544,11 +572,19 @@ to_shell_path() {
 }
 
 _common_teardown() {
+  _test_phase "teardown begin"
+  if [[ -n "${PITCHFORK_TEST_DIAGNOSTICS_DIR:-}" ]] &&
+    [[ "${BATS_TEST_DESCRIPTION:-}" == "restarting an ad-hoc daemon "* ]]; then
+    _preserve_test_diagnostics
+  fi
+  _test_phase "supervisor stop begin"
   # Stop the supervisor if running (swallow errors — it may not be running)
   # Use timeout to prevent hang if supervisor stop is stuck (e.g. daemon
   # cleanup on Windows where POSIX signals are unavailable).
   timeout 10 pitchfork supervisor stop 2>/dev/null || true
+  _test_phase "supervisor stop returned; leaked process cleanup begin"
   _stop_leaked_supervisors
+  _test_phase "leaked process cleanup returned"
 
   # Preserve temp dirs on failure for post-mortem debugging
   if [[ -n "$BATS_TEST_COMPLETED" && "$BATS_TEST_COMPLETED" == "1" ]]; then

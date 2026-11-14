@@ -199,11 +199,21 @@ jobs:
           # (bats resets BATS_TEST_RETRIES to 0 per file, so the env var alone
           # would be ignored).
           PITCHFORK_TEST_RETRIES: 2
+          BATS_TEST_TIMEOUT: "120"
+          PITCHFORK_TEST_TRACE: "1"
+          PITCHFORK_TEST_DIAGNOSTICS_DIR: ${{ runner.temp }}/pitchfork-bats-diagnostics
         run: |
           export PATH="$PWD/target/debug:$PATH"
           tests=$(ls -1 test/*.bats | sort | awk -v t="$SHARD" -v n="$SHARD_COUNT" 'NR % n == t')
           echo "Running shard $SHARD: $tests"
           test/bats/bin/bats $tests
+      - name: Preserve Windows Bats diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-bats-diagnostics-${{ matrix.shard }}
+          path: ${{ runner.temp }}/pitchfork-bats-diagnostics
+          if-no-files-found: ignore
 
   # Aggregator that required-status-checks can target. If any upstream job
   # failed, was cancelled, or was skipped, this step exits non-zero so the PR is

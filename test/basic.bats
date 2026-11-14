@@ -1198,25 +1198,36 @@ EOF
 EOF
 
   local port
+  _test_phase "free_port begin"
   port="$(free_port)"
+  _test_phase "free_port returned port=$port"
+  _test_phase "run adhoc_port begin"
   run pitchfork run adhoc_port --expected-port "$port" --retry 2 --delay 1 -- sh -c 'echo "PORT=[$PORT]"; sleep 60'
+  _test_phase "run adhoc_port returned status=$status"
   assert_success
 
+  _test_phase "restart adhoc_port begin"
   run pitchfork restart adhoc_port
+  _test_phase "restart adhoc_port returned status=$status"
   assert_success
 
   # Logs reach the store asynchronously; wait for the restarted run's line.
   local count=0
   for _ in $(seq 1 50); do
+    _test_phase "logs adhoc_port begin"
     count=$(pitchfork logs adhoc_port --raw 2>/dev/null | grep -c "PORT=\[$port\]" || true)
+    _test_phase "logs adhoc_port returned count=$count"
     [[ "$count" -ge 2 ]] && break
     sleep 0.2
   done
   [[ "$count" -eq 2 ]]
+  _test_phase "state retry assertion begin"
   run awk '/^\[daemons\."[^"]*\/adhoc_port"\]/{on=1; next} /^\[/{on=0} on && /^retry =/' "$PITCHFORK_STATE_DIR/state.toml"
   assert_output "retry = 2"
 
+  _test_phase "stop adhoc_port begin"
   pitchfork stop adhoc_port
+  _test_phase "stop adhoc_port returned"
 }
 
 @test "a readiness flag on an ad-hoc restart replaces the saved ready check" {
