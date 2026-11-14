@@ -356,8 +356,14 @@ pub struct Logs {
     n: Option<usize>,
 
     /// Show logs in real-time
+    // usage-rs 7.3 requires repeated short keys for advertised aliases; it has
+    // no plural short selector. Keep both spellings until that grammar changes.
+    #[allow(
+        clippy::duplicated_attributes,
+        reason = "usage-rs intentionally repeats short to preserve both -t and -f"
+    )]
     #[usage(short = 't', short = 'f', long, visible_alias = "follow")]
-    tail: bool,
+    pub(super) tail: bool,
 
     /// Show logs from this time
     ///

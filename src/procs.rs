@@ -150,27 +150,22 @@ impl Procs {
         }
     }
 
-    /// Walk the /proc tree to find all descendant PIDs.
+    /// Walk the cached process snapshot to find all descendant PIDs.
     /// Kept for diagnostics/status display; no longer used in the kill path.
     #[allow(dead_code)]
     pub fn all_children(&self, pid: u32) -> Vec<u32> {
         let system = self.lock_system();
-        let all = system.processes();
-        let mut children = vec![];
-        for (child_pid, process) in all {
-            let mut process = process;
-            while let Some(parent) = process.parent() {
-                if parent == sysinfo::Pid::from_u32(pid) {
-                    children.push(child_pid.as_u32());
-                    break;
-                }
-                match system.process(parent) {
-                    Some(p) => process = p,
-                    None => break,
-                }
+        let mut children_map: ParentToChildren = HashMap::new();
+        for (child_pid, process) in system.processes() {
+            if let Some(parent) = process.parent() {
+                children_map
+                    .entry(parent.as_u32())
+                    .or_default()
+                    .push(child_pid.as_u32());
             }
         }
-        children
+        drop(system);
+        descendant_pids(pid, &children_map)
     }
     /// Collect minimal process tree information in a single lock.
     ///
@@ -1005,8 +1000,7 @@ impl Procs {
             .unwrap_or(0);
 
         // Build parent → children map once for all daemons
-        let mut children_map: std::collections::HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> =
-            std::collections::HashMap::new();
+        let mut children_map: ParentToChildren = HashMap::new();
         for (child_pid, child) in processes {
             // Skip Linux userland threads: they report the same memory as their parent process,
             // so including them would cause massive double-counting.
@@ -1014,7 +1008,10 @@ impl Procs {
                 continue;
             }
             if let Some(ppid) = child.parent() {
-                children_map.entry(ppid).or_default().push(*child_pid);
+                children_map
+                    .entry(ppid.as_u32())
+                    .or_default()
+                    .push(child_pid.as_u32());
             }
         }
 
@@ -1034,21 +1031,13 @@ impl Procs {
                     disk_write_bytes: root_disk.written_bytes,
                 };
 
-                // BFS from root_pid to find all descendants
-                let mut queue = std::collections::VecDeque::new();
-                if let Some(direct_children) = children_map.get(&root_pid) {
-                    queue.extend(direct_children);
-                }
-                while let Some(child_pid) = queue.pop_front() {
-                    if let Some(child) = processes.get(&child_pid) {
+                for child_pid in descendant_pids(pid, &children_map) {
+                    if let Some(child) = processes.get(&sysinfo::Pid::from_u32(child_pid)) {
                         let disk = child.disk_usage();
                         stats.cpu_percent += child.cpu_usage();
                         stats.memory_bytes += child.memory();
                         stats.disk_read_bytes += disk.read_bytes;
                         stats.disk_write_bytes += disk.written_bytes;
-                    }
-                    if let Some(grandchildren) = children_map.get(&child_pid) {
-                        queue.extend(grandchildren);
                     }
                 }
 
@@ -1529,6 +1518,31 @@ fn linux_process_state(pid: u32) -> Option<char> {
         .next()
 }
 
+/// Walk only the requested descendants, visiting each PID once.
+///
+/// A process snapshot is not necessarily a tree: Windows retains the parent
+/// PID after it exits, and PID reuse can introduce cycles. An ancestry walk
+/// through an unrelated cycle used to spin while holding the system mutex.
+/// See https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process#parentprocessid.
+fn descendant_pids(root: u32, children_map: &ParentToChildren) -> Vec<u32> {
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut queue = std::collections::VecDeque::from([root]);
+    let mut descendants = Vec::new();
+
+    while let Some(parent) = queue.pop_front() {
+        if let Some(children) = children_map.get(&parent) {
+            for &child in children {
+                if seen.insert(child) {
+                    descendants.push(child);
+                    queue.push_back(child);
+                }
+            }
+        }
+    }
+
+    descendants
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessStats {
     pub cpu_percent: f32,
@@ -1672,9 +1686,58 @@ mod format_tests {
     }
 }
 
+#[cfg(test)]
+mod process_tree_tests {
+    use super::{ParentToChildren, descendant_pids};
+    use std::time::Duration;
+
+    // Keep a future traversal regression from hanging the test process itself.
+    fn assert_descendant_walk(root: u32, edges: &[(u32, &[u32])], expected: &[u32]) {
+        let children: ParentToChildren = edges
+            .iter()
+            .map(|&(pid, children)| (pid, children.to_vec()))
+            .collect();
+        let (send, recv) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(descendant_pids(root, &children));
+        });
+        let mut actual = recv
+            .recv_timeout(Duration::from_secs(10))
+            .expect("process snapshot traversal must terminate even when parent PIDs cycle");
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn descendants_ignore_unrelated_parent_cycles() {
+        assert_descendant_walk(
+            1,
+            &[(1, &[2, 3]), (2, &[4]), (9, &[10]), (10, &[9])],
+            &[2, 3, 4],
+        );
+    }
+
+    #[test]
+    fn descendants_do_not_include_the_root_when_parent_pids_cycle() {
+        assert_descendant_walk(1, &[(1, &[2]), (2, &[3]), (3, &[1])], &[2, 3]);
+    }
+
+    #[test]
+    fn descendants_visit_each_pid_once_for_self_links_and_duplicate_edges() {
+        assert_descendant_walk(1, &[(1, &[1, 2, 2]), (2, &[3]), (3, &[3])], &[2, 3]);
+    }
+
+    #[test]
+    fn descendants_keep_live_children_of_an_absent_parent() {
+        assert_descendant_walk(1, &[(1, &[2]), (2, &[3]), (8, &[9])], &[2, 3]);
+        assert_descendant_walk(7, &[(1, &[2])], &[]);
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};

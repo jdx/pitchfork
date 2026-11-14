@@ -133,6 +133,48 @@ fn fallback_failure(argv: &[&OsStr], error: &usage_rs::Error<'_, '_>) -> (String
     )
 }
 
+/// A parsed invocation chooses its runtime before any worker threads start.
+pub struct Invocation {
+    // None is the internal completion protocol, which bypasses command parsing.
+    command: Option<Commands>,
+}
+
+impl Invocation {
+    /// Parse the process arguments, preserving the internal completion protocol.
+    pub fn parse() -> Self {
+        let command =
+            if std::env::args_os().nth(1).as_deref() == Some(OsStr::new("__complete_word__")) {
+                None
+            } else {
+                Some(Cli::parse().command)
+            };
+        Self { command }
+    }
+
+    /// Build the runtime appropriate for this already-parsed invocation.
+    pub fn runtime(&self) -> Result<tokio::runtime::Runtime> {
+        // Starting workers for these generators makes instruction counts depend
+        // on allocator arenas and consolidation during concurrent startup/shutdown.
+        let mut builder = match &self.command {
+            Some(Commands::Schema(_) | Commands::Usage(_) | Commands::ApiSchema(_)) => {
+                tokio::runtime::Builder::new_current_thread()
+            }
+            _ => tokio::runtime::Builder::new_multi_thread(),
+        };
+        builder.enable_all().build().into_diagnostic()
+    }
+
+    /// Execute within a runtime; async library callers may supply their own.
+    pub async fn run(self) -> Result<()> {
+        match self.command {
+            Some(command) => dispatch(command).await,
+            // Preserve the public async entry point and completion protocol,
+            // whose argv format bypasses normal command parsing.
+            None => run().await,
+        }
+    }
+}
+
 pub async fn run() -> Result<()> {
     let argv: Vec<OsString> = std::env::args_os().collect();
     if argv.get(1).and_then(|arg| arg.to_str()) == Some("__complete_word__") {
@@ -143,7 +185,11 @@ pub async fn run() -> Result<()> {
     }
 
     let args = Cli::parse();
-    match args.command {
+    dispatch(args.command).await
+}
+
+async fn dispatch(command: Commands) -> Result<()> {
+    match command {
         Commands::Activate(activate) => activate.run().await,
         Commands::Boot(boot) => boot.run().await,
         Commands::Cd(cd) => cd.run().await,
@@ -235,6 +281,56 @@ pub(crate) async fn drain_notifications(ipc: &crate::ipc::client::IpcClient) {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[test]
+    fn runtime_flavor_follows_the_parsed_command() {
+        use tokio::runtime::RuntimeFlavor::{CurrentThread, MultiThread};
+        for (words, expected) in [
+            (vec!["schema"], CurrentThread),
+            (vec!["usage"], CurrentThread),
+            (vec!["api-schema"], CurrentThread),
+            (vec!["logs", "-f"], MultiThread),
+            (vec!["s", "api"], MultiThread),
+            (vec!["sup", "status"], MultiThread),
+            (vec!["mydaemon", "--force"], MultiThread),
+            (vec!["completion", "bash"], MultiThread),
+        ] {
+            let argv: Vec<_> = words.iter().map(OsStr::new).collect();
+            let invocation = Invocation {
+                command: Some(Cli::parse_from(&argv).unwrap().command),
+            };
+            let runtime = invocation.runtime().unwrap();
+            runtime.block_on(async {
+                assert_eq!(tokio::runtime::Handle::current().runtime_flavor(), expected);
+                assert_eq!(tokio::spawn(async { 7 }).await.unwrap(), 7);
+            });
+        }
+        let invocation = Invocation { command: None };
+        assert_eq!(
+            invocation.runtime().unwrap().handle().runtime_flavor(),
+            MultiThread
+        );
+    }
+
+    #[test]
+    fn log_tail_spellings_and_command_alias_are_preserved() {
+        for command in ["logs", "l"] {
+            for spelling in ["-t", "-f", "--tail", "--follow"] {
+                let argv = [OsStr::new(command), OsStr::new(spelling)];
+                let parsed = Cli::parse_from(&argv).unwrap();
+                let Commands::Logs(logs) = parsed.command else {
+                    panic!("expected logs");
+                };
+                assert!(logs.tail, "{command} {spelling} must enable tail");
+            }
+        }
+        let argv = [OsStr::new("logs")];
+        let Commands::Logs(logs) = Cli::parse_from(&argv).unwrap().command else {
+            panic!("expected logs");
+        };
+        assert!(!logs.tail);
+        assert!(Cli::to_kdl().contains("-t -f --tail --follow"));
+    }
 
     #[test]
     fn bare_invocation_requests_help_instead_of_entering_the_start_fallback() {
