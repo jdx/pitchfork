@@ -43,13 +43,28 @@ use tokio::signal;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // The shell bridge inherits daemon output. Loading normal CLI settings
-    // here would send Pitchfork's warnings into readiness checks and hooks.
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("shell-exec")) {
-        return cli::run().await;
+fn main() -> Result<()> {
+    // The shell bridge inherits daemon output; loading settings would leak
+    // CLI warnings into readiness checks and hooks.
+    let shell_bridge =
+        std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("shell-exec"));
+    if !shell_bridge {
+        initialize()?;
     }
+    let invocation = cli::Invocation::parse();
+    let runtime = invocation.runtime()?;
+    runtime.block_on(async {
+        #[cfg(unix)]
+        if !shell_bridge {
+            handle_epipe();
+        }
+        invocation.run().await
+    })
+}
+
+/// Initialize synchronous CLI state before parsing, so help and parse errors
+/// keep the configured logging without constructing a worker pool.
+fn initialize() -> Result<()> {
     // Install ring as the default rustls crypto provider.
     // Required because reqwest is built with `rustls-tls-*-no-provider`, which
     // avoids pulling in aws-lc-sys but requires the caller to install a provider.
@@ -66,9 +81,7 @@ async fn main() -> Result<()> {
     // logger::init() only sees env vars; this picks up pitchfork.toml values.
     logger::apply_settings();
     init_progress_output();
-    #[cfg(unix)]
-    handle_epipe();
-    cli::run().await
+    Ok(())
 }
 
 /// Switches progress output to plain lines when stderr is not a terminal.
