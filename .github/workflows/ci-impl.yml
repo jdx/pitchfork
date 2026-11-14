@@ -188,6 +188,7 @@ jobs:
         run: mkdir -p ui/dist && echo '<html><body>placeholder</body></html>' > ui/dist/index.html
       - name: Run bats e2e tests (shard ${{ matrix.shard }})
         shell: bash
+        timeout-minutes: 25
         env:
           SHARD: ${{ matrix.shard }}
           SHARD_COUNT: 4
@@ -209,6 +210,7 @@ jobs:
           test/bats/bin/bats $tests
       - name: Preserve Windows Bats diagnostics
         if: ${{ always() }}
+        timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-bats-diagnostics-${{ matrix.shard }}
