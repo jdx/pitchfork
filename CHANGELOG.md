@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.35.0](https://github.com/jdx/pitchfork/compare/v2.34.0...v2.35.0) - 2026-11-14
+
+### Added
+
+- *(supervisor)* show daemon-reported status from OSC 7501 in list, status, TUI and web UI ([#1125](https://github.com/jdx/pitchfork/pull/1125))
+
+### Fixed
+
+- *(cli)* avoid worker startup for output generators ([#1130](https://github.com/jdx/pitchfork/pull/1130))
+- *(start)* print plain progress lines when stderr is not a terminal ([#1127](https://github.com/jdx/pitchfork/pull/1127))
+- *(stop)* confirm before stop --all stops daemons outside the project ([#1123](https://github.com/jdx/pitchfork/pull/1123))
+
+### Other
+
+- *(deps)* lock file maintenance ([#1121](https://github.com/jdx/pitchfork/pull/1121))
+- *(deps)* lock file maintenance ([#1116](https://github.com/jdx/pitchfork/pull/1116))
+
 ## [2.34.0](https://github.com/jdx/pitchfork/compare/v2.33.1...v2.34.0) - 2026-11-09
 
 ### Added
