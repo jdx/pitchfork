@@ -633,6 +633,7 @@ impl ProxyStatus {
                     daemon: daemon_name.to_string(),
                     status: status_str,
                     port,
+                    public_url: entry.public_url.clone(),
                 }
             })
             .collect();
@@ -694,6 +695,9 @@ impl ProxyStatus {
                         "    URL:    (none — another slug differs only by case; \
                          host names are case-insensitive, so neither is routed)"
                     ),
+                }
+                if let Some(public_url) = &entry.public_url {
+                    println!("    Public: {public_url}");
                 }
                 println!("    Dir:    {}", entry.dir);
                 println!("    Daemon: {}", entry.daemon);
@@ -870,12 +874,16 @@ fn collect_projects(
 /// If --dir is not specified, uses the current directory.
 /// If --daemon is not specified, defaults to the slug name.
 ///
+/// Adding a slug that already exists repoints it, keeping its public URL
+/// unless --public-url gives a new one.
+///
 /// Example:
 ///
 /// ```text
 /// pitchfork proxy add api
 /// pitchfork proxy add api --daemon server
 /// pitchfork proxy add api --dir /home/user/my-api --daemon server
+/// pitchfork proxy add api --public-url https://dev.example.com
 /// ```
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
@@ -891,6 +899,11 @@ struct Add {
     /// Namespace to associate with the slug. If not provided, derived from the project directory.
     #[usage(long)]
     namespace: Option<String>,
+    /// Public URL a tunnel or reverse proxy serves this slug under, such as
+    /// https://dev.example.com. Requests for the slug then reach the daemon
+    /// with that host, scheme and port in Host and X-Forwarded-*.
+    #[usage(long)]
+    public_url: Option<String>,
 }
 
 impl Add {
@@ -942,6 +955,15 @@ impl Add {
 
         let daemon = self.daemon.as_deref();
 
+        let public_url = match self.public_url.as_deref() {
+            Some(value) => Some(
+                crate::proxy::public_url::PublicUrl::parse(value)
+                    .map_err(|e| miette::miette!("Invalid --public-url: {e}"))?
+                    .as_url(),
+            ),
+            None => None,
+        };
+
         let resolved_ns = self
             .namespace
             .clone()
@@ -973,7 +995,12 @@ impl Add {
             daemon
         };
 
-        PitchforkToml::add_slug_with_namespace(slug, Some(&resolved_ns), stored_daemon)?;
+        PitchforkToml::add_slug_with_namespace(
+            slug,
+            Some(&resolved_ns),
+            stored_daemon,
+            public_url.as_deref(),
+        )?;
 
         // Notify the supervisor so it can update mDNS records.
         if let Ok(client) = crate::ipc::client::IpcClient::connect(false).await {
@@ -984,6 +1011,12 @@ impl Add {
         let daemon_display = daemon.unwrap_or(slug);
         println!("Added slug '{slug}' → namespace '{resolved_ns}' (daemon: {daemon_display})");
         println!("  Config: {}", global_path.display());
+        if let Some(public_url) = PitchforkToml::read_global_slugs()
+            .get(slug.as_str())
+            .and_then(|e| e.public_url.clone())
+        {
+            println!("  Public: {public_url}");
+        }
 
         let s = crate::settings::settings();
         if s.proxy.enable {

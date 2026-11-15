@@ -69,7 +69,12 @@ fn test_proxy_slug_add_remove_does_not_self_deadlock() -> pitchfork_cli::Result<
     );
 
     let add = std::thread::spawn(|| {
-        PitchforkToml::add_slug_with_namespace("pf-lock-test", Some("pf-lock-ns"), Some("server"))
+        PitchforkToml::add_slug_with_namespace(
+            "pf-lock-test",
+            Some("pf-lock-ns"),
+            Some("server"),
+            None,
+        )
     });
     join_within(add, "add")??;
 

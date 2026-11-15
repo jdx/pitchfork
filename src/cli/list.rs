@@ -360,6 +360,7 @@ mod tests {
                 dir: Some(dir.to_path_buf()),
                 namespace: None,
                 daemon: daemon.map(str::to_string),
+                public_url: None,
             },
         );
         slugs

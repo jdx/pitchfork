@@ -165,6 +165,9 @@ pub struct CachedSlugEntry {
     /// A worktree can configure its own `proxy_tls`, since each checkout has
     /// its own `pitchfork.toml`.
     pub worktree_tls: std::collections::HashMap<String, ProxyTlsRoute>,
+    /// The public URL requests for the slug itself are forwarded under.
+    /// Worktree subdomains of the slug are local names and keep their own.
+    pub public_url: Option<crate::proxy::public_url::PublicUrl>,
 }
 
 impl CachedSlugEntry {
@@ -422,6 +425,16 @@ fn build_slug_entries(
             (vec![], std::collections::HashSet::new())
         };
         let dir = entry.resolve_dir().unwrap_or_default();
+        let public_url = entry.public_url.as_deref().and_then(|value| {
+            crate::proxy::public_url::PublicUrl::parse(value)
+                .map_err(|e| {
+                    crate::proxy::hostname::warn_once(&format!(
+                        "Slug '{slug}' has an invalid public_url, so it is forwarded \
+                         under its local name: {e}"
+                    ))
+                })
+                .ok()
+        });
         let prev = previous.get(&key);
         // The slug's own directory has nothing to inherit from, so silence
         // there is the default route. An unreadable config keeps the last
@@ -460,6 +473,7 @@ fn build_slug_entries(
                 rejected_worktree_prefixes,
                 tls,
                 worktree_tls,
+                public_url,
             },
         );
     }
@@ -2866,7 +2880,15 @@ fn join_cookie_fields(headers: &mut HeaderMap) {
 /// Trusting client-supplied `x-forwarded-for` / `x-forwarded-proto` would
 /// allow a local process to spoof a remote IP or trick a backend's
 /// HTTPS-detection logic (CSRF checks, secure-cookie flags, redirect rules).
-fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) {
+///
+/// A slug with a public URL takes its host, scheme and port from that URL
+/// instead, which comes from the user's own config rather than the client.
+fn inject_forwarded_headers(
+    req: &mut Request,
+    is_tls: bool,
+    host_header: &str,
+    public_url: Option<&crate::proxy::public_url::PublicUrl>,
+) {
     let remote_addr = req
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
@@ -2879,12 +2901,21 @@ fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) 
     // Always set fresh values — we are the edge, never a mid-tier forwarder.
     // Discard any x-forwarded-* headers supplied by the connecting client.
     let forwarded_for = remote_addr.clone();
-    let forwarded_proto = proto.to_string();
-    let forwarded_host = host_header.to_string();
-    let forwarded_port = host_header
-        .rsplit_once(':')
-        .map(|(_, port)| port.to_string())
-        .unwrap_or_else(|| default_port.to_string());
+    let (forwarded_proto, forwarded_host, forwarded_port) = match public_url {
+        Some(public) => (
+            public.proto.to_string(),
+            public.authority.clone(),
+            public.port.to_string(),
+        ),
+        None => (
+            proto.to_string(),
+            host_header.to_string(),
+            host_header
+                .rsplit_once(':')
+                .map(|(_, port)| port.to_string())
+                .unwrap_or_else(|| default_port.to_string()),
+        ),
+    };
 
     // Strip any client-supplied x-forwarded-* and RFC 7239 Forwarded headers
     // before inserting ours, so that no trace of the original values reaches
@@ -2916,6 +2947,22 @@ fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) 
             req.headers_mut().insert(header_name, v);
         }
     }
+}
+
+/// The public URL of the slug `host` names exactly, if it has one.
+///
+/// Only the slug's own hostname qualifies: `<branch>.<slug>.<tld>` names a
+/// worktree, which is browsed locally and keeps its local host.
+fn slug_public_url(
+    host: &str,
+    tld: &str,
+    slugs: &std::collections::HashMap<String, CachedSlugEntry>,
+) -> Option<crate::proxy::public_url::PublicUrl> {
+    let subdomain = strip_tld(host, tld)?;
+    slugs
+        .get(&subdomain.to_ascii_lowercase())
+        .filter(|cached| cached.slug.eq_ignore_ascii_case(&subdomain))
+        .and_then(|cached| cached.public_url.clone())
 }
 
 /// Main proxy request handler.
@@ -3158,16 +3205,22 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         }
     }
 
-    // Update the request URI and Host header
+    // Update the request URI and Host header. A slug with a public URL keeps
+    // that URL's host, so the backend sees the address the user browses.
+    let public_url = slug_public_url(&host, &state.tld, &slug_snapshot());
     *req.uri_mut() = forward_uri;
-    req.headers_mut().insert(
-        HOST,
+    let host_value = match &public_url {
+        Some(public) => HeaderValue::from_str(&public.authority).ok(),
+        None => None,
+    }
+    .unwrap_or_else(|| {
         HeaderValue::from_str(&format!("localhost:{target_port}"))
-            .unwrap_or_else(|_| HeaderValue::from_static("localhost")),
-    );
+            .unwrap_or_else(|_| HeaderValue::from_static("localhost"))
+    });
+    req.headers_mut().insert(HOST, host_value);
 
     // Inject X-Forwarded-* headers
-    inject_forwarded_headers(&mut req, state.is_tls, &raw_host);
+    inject_forwarded_headers(&mut req, state.is_tls, &raw_host, public_url.as_ref());
 
     // Increment hop counter
     if let Ok(v) = HeaderValue::from_str(&(hops + 1).to_string()) {
@@ -4270,6 +4323,7 @@ async fn resolve_registry_daemon(
         rejected_worktree_prefixes: std::collections::HashSet::new(),
         tls: *route,
         worktree_tls: std::collections::HashMap::new(),
+        public_url: None,
     };
     let result = try_auto_start(host, &cached, None, Some(namespace), route, deadline).await;
 
@@ -5317,6 +5371,7 @@ mod tests {
             rejected_worktree_prefixes: std::collections::HashSet::new(),
             tls: ProxyTlsRoute::default(),
             worktree_tls: std::collections::HashMap::new(),
+            public_url: None,
         }
     }
 
@@ -6443,6 +6498,66 @@ mod tests {
 
         daemon.dir = None;
         assert!(!daemon_runs_in(&daemon, &repo_root));
+    }
+
+    fn forwarded(req: &Request, name: &str) -> String {
+        req.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// Without a public URL the proxy reports the connection it received and
+    /// discards whatever the client claimed.
+    #[test]
+    fn test_inject_forwarded_headers_overwrites_client_values() {
+        let mut req = Request::new(Body::empty());
+        req.headers_mut()
+            .insert("x-forwarded-host", HeaderValue::from_static("evil.example"));
+        req.headers_mut()
+            .insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        inject_forwarded_headers(&mut req, false, "api.localhost:7777", None);
+
+        assert_eq!(forwarded(&req, "x-forwarded-host"), "api.localhost:7777");
+        assert_eq!(forwarded(&req, "x-forwarded-proto"), "http");
+        assert_eq!(forwarded(&req, "x-forwarded-port"), "7777");
+    }
+
+    /// A public URL replaces the forwarded host, scheme and port, and still
+    /// discards what the client claimed.
+    #[test]
+    fn test_inject_forwarded_headers_uses_the_public_url() {
+        let public = crate::proxy::public_url::PublicUrl::parse("https://dev.example.com").unwrap();
+        let mut req = Request::new(Body::empty());
+        req.headers_mut()
+            .insert("x-forwarded-host", HeaderValue::from_static("evil.example"));
+        inject_forwarded_headers(&mut req, false, "api.localhost:7777", Some(&public));
+
+        assert_eq!(forwarded(&req, "x-forwarded-host"), "dev.example.com");
+        assert_eq!(forwarded(&req, "x-forwarded-proto"), "https");
+        assert_eq!(forwarded(&req, "x-forwarded-port"), "443");
+    }
+
+    /// The public URL belongs to the slug's own hostname, not to the worktree
+    /// subdomains under it or to other slugs.
+    #[test]
+    fn test_slug_public_url_applies_to_the_slug_only() {
+        let mut entry = make_entry("api");
+        entry.public_url =
+            Some(crate::proxy::public_url::PublicUrl::parse("https://dev.example.com").unwrap());
+        let slugs: std::collections::HashMap<String, CachedSlugEntry> = [
+            ("api".to_string(), entry),
+            ("docs".to_string(), make_entry("docs")),
+        ]
+        .into_iter()
+        .collect();
+
+        let public = slug_public_url("API.localhost", "localhost", &slugs).unwrap();
+        assert_eq!(public.authority, "dev.example.com");
+        assert!(slug_public_url("feature.api.localhost", "localhost", &slugs).is_none());
+        assert!(slug_public_url("docs.localhost", "localhost", &slugs).is_none());
+        assert!(slug_public_url("api.test", "localhost", &slugs).is_none());
     }
 
     /// Only a request known to come from this machine gets the detailed pages;

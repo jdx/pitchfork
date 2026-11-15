@@ -2746,6 +2746,25 @@
                 }
               },
               {
+                "name": "public-url",
+                "usage": "--public-url <PUBLIC_URL>",
+                "help": "Public URL a tunnel or reverse proxy serves this slug under, such as https://dev.example.com. Requests for the slug then reach the daemon with that host, scheme and port in Host and X-Forwarded-*.",
+                "help_first_line": "Public URL a tunnel or reverse proxy serves this slug under, such as https://dev.example.com. Requests for the slug then reach the daemon with that host, scheme and port in Host and X-Forwarded-*.",
+                "short": [],
+                "long": [
+                  "public-url"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "PUBLIC_URL",
+                  "usage": "<PUBLIC_URL>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
                 "name": "help",
                 "usage": "-h --help",
                 "help": "Print help",
@@ -2768,7 +2787,7 @@
             "hide": false,
             "args_override_self": true,
             "help": "Add a slug mapping to the global config (legacy)",
-            "help_long": "Add a slug mapping to the global config (legacy)\n\nRegisters a slug in ~/.config/pitchfork/config.toml that maps to a project\ndirectory and daemon name. The proxy resolves slugs before the automatic\nper-daemon hostnames, such as api.myproject.localhost, which need no\nregistration.\n\nIf --dir is not specified, uses the current directory.\nIf --daemon is not specified, defaults to the slug name.\n\nExample:\n\n```text\npitchfork proxy add api\npitchfork proxy add api --daemon server\npitchfork proxy add api --dir /home/user/my-api --daemon server\n```",
+            "help_long": "Add a slug mapping to the global config (legacy)\n\nRegisters a slug in ~/.config/pitchfork/config.toml that maps to a project\ndirectory and daemon name. The proxy resolves slugs before the automatic\nper-daemon hostnames, such as api.myproject.localhost, which need no\nregistration.\n\nIf --dir is not specified, uses the current directory.\nIf --daemon is not specified, defaults to the slug name.\n\nAdding a slug that already exists repoints it, keeping its public URL\nunless --public-url gives a new one.\n\nExample:\n\n```text\npitchfork proxy add api\npitchfork proxy add api --daemon server\npitchfork proxy add api --dir /home/user/my-api --daemon server\npitchfork proxy add api --public-url https://dev.example.com\n```",
             "name": "add",
             "aliases": [],
             "hidden_aliases": [],

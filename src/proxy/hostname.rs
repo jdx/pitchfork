@@ -1220,6 +1220,7 @@ mod tests {
                 dir: Some(repo.clone()),
                 namespace: Some(id.namespace().to_string()),
                 daemon: Some("api".to_string()),
+                public_url: None,
             },
         );
         assert_eq!(
