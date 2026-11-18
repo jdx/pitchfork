@@ -3037,6 +3037,12 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
     let local_client = is_local_client(&req);
 
+    // Read the slug's public URL now, from the table that routes this
+    // request, rather than after `resolve_target` has possibly waited for the
+    // daemon to start: a config reload in that wait must not give this request
+    // a different public address than the one its backend was chosen under.
+    let public_url = slug_public_url(&host, &state.tld, &slug_snapshot());
+
     // Intercept "pitchfork.<tld>" — route to the built-in web UI
     let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
         if subdomain.eq_ignore_ascii_case("pitchfork") {
@@ -3206,8 +3212,9 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     }
 
     // Update the request URI and Host header. A slug with a public URL keeps
-    // that URL's host, so the backend sees the address the user browses.
-    let public_url = slug_public_url(&host, &state.tld, &slug_snapshot());
+    // that URL's host, so the backend sees the address the user browses. An
+    // h2c backend is the exception for `Host`: HTTP/2 carries `:authority` in
+    // the request URI, which the client also dials, so it stays local there.
     *req.uri_mut() = forward_uri;
     let host_value = match &public_url {
         Some(public) => HeaderValue::from_str(&public.authority).ok(),

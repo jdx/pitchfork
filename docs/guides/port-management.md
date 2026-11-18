@@ -631,6 +631,11 @@ protection against forged `X-Forwarded-*` headers still holds. Worktree
 subdomains of the slug (`<branch>.shop.<tld>`) and automatic hostnames keep
 their local values.
 
+A daemon with `proxy_protocol = "h2c"` is the exception for `Host`: HTTP/2
+sends the request authority in `:authority`, which is also the address the proxy
+connects to, so that daemon still sees its local authority. It does receive the
+public values in `X-Forwarded-*`.
+
 Running `pitchfork proxy add shop` again from another checkout repoints the slug
 and keeps its public URL, so one command moves the public address between
 worktrees. Remove the slug to drop the public URL.
