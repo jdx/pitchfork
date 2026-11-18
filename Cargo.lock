@@ -2846,7 +2846,7 @@ dependencies = [
  "async-stream",
  "auto-launcher",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clx",
  "comfy-table",
