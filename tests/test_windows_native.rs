@@ -581,6 +581,11 @@ fn assert_graceful_ctrl_c_shutdown(cleanup_delay: Duration, deferred: bool) {
 [settings.general]
 log_file_level = 'debug'
 
+# These tests wait out a cleanup delay. A loaded runner can start PowerShell
+# and mise slowly enough that the default 5s would force-kill the tree.
+[settings.supervisor]
+stop_timeout = '30s'
+
 [daemons.demo]
 run = {run}
 mise = true
