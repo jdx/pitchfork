@@ -101,6 +101,17 @@ mod tests {
     }
 
     #[test]
+    fn keeps_ipv6_hosts_bracketed() {
+        let url = PublicUrl::parse("https://[::1]").unwrap();
+        assert_eq!(url.authority, "[::1]");
+        assert_eq!(url.as_url(), "https://[::1]");
+        let url = PublicUrl::parse("https://[::1]:8443").unwrap();
+        assert_eq!(url.authority, "[::1]:8443");
+        assert_eq!(url.port, 8443);
+        assert_eq!(PublicUrl::parse(&url.as_url()).unwrap(), url);
+    }
+
+    #[test]
     fn drops_an_explicit_default_port() {
         let url = PublicUrl::parse("https://dev.example.com:443").unwrap();
         assert_eq!(url.authority, "dev.example.com");
