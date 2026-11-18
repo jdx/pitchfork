@@ -49,6 +49,8 @@ impl PublicUrl {
         // `http` parses an out-of-range port such as `:65536` but cannot report
         // it, so tell an absent port apart from an invalid one.
         let port = match authority.as_str().rsplit_once(':') {
+            // An empty suffix (`https://host:`) means the scheme default.
+            Some((_, "")) => default_port,
             Some((_, p)) if !p.contains(']') => p
                 .parse::<u16>()
                 .map_err(|_| format!("'{value}' has an invalid port"))?,
@@ -109,6 +111,21 @@ mod tests {
         assert_eq!(url.authority, "[::1]:8443");
         assert_eq!(url.port, 8443);
         assert_eq!(PublicUrl::parse(&url.as_url()).unwrap(), url);
+    }
+
+    #[test]
+    fn an_empty_port_means_the_default() {
+        assert_eq!(
+            PublicUrl::parse("https://dev.example.com:").unwrap().port,
+            443
+        );
+        assert_eq!(
+            PublicUrl::parse("http://dev.example.com:").unwrap().port,
+            80
+        );
+        let url = PublicUrl::parse("https://[::1]:").unwrap();
+        assert_eq!(url.authority, "[::1]");
+        assert_eq!(url.port, 443);
     }
 
     #[test]
