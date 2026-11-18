@@ -46,7 +46,14 @@ impl PublicUrl {
                 "'{value}' must be an origin only, without a path or query"
             ));
         }
-        let port = authority.port_u16().unwrap_or(default_port);
+        // `http` parses an out-of-range port such as `:65536` but cannot report
+        // it, so tell an absent port apart from an invalid one.
+        let port = match authority.as_str().rsplit_once(':') {
+            Some((_, p)) if !p.contains(']') => p
+                .parse::<u16>()
+                .map_err(|_| format!("'{value}' has an invalid port"))?,
+            _ => default_port,
+        };
         let authority = if port == default_port {
             host
         } else {
@@ -107,6 +114,7 @@ mod tests {
             "https://dev.example.com/app",
             "https://dev.example.com/?a=1",
             "https://user:pass@dev.example.com",
+            "https://dev.example.com:65536",
             "",
         ] {
             assert!(PublicUrl::parse(value).is_err(), "{value}");

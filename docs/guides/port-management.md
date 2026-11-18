@@ -636,7 +636,7 @@ sends the request authority in `:authority`, which is also the address the proxy
 connects to, so that daemon still sees its local authority. It does receive the
 public values in `X-Forwarded-*`.
 
-Running `pitchfork proxy add shop` again from another checkout repoints the slug
+Running `pitchfork proxy add shop --daemon web` again from another checkout repoints the slug
 and keeps its public URL, so one command moves the public address between
 worktrees. Remove the slug to drop the public URL.
 

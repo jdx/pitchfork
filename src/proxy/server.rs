@@ -2953,16 +2953,17 @@ fn inject_forwarded_headers(
 ///
 /// Only the slug's own hostname qualifies: `<branch>.<slug>.<tld>` names a
 /// worktree, which is browsed locally and keeps its local host.
-fn slug_public_url(
+fn entry_public_url(
     host: &str,
     tld: &str,
-    slugs: &std::collections::HashMap<String, CachedSlugEntry>,
+    cached: &CachedSlugEntry,
 ) -> Option<crate::proxy::public_url::PublicUrl> {
     let subdomain = strip_tld(host, tld)?;
-    slugs
-        .get(&subdomain.to_ascii_lowercase())
-        .filter(|cached| cached.slug.eq_ignore_ascii_case(&subdomain))
-        .and_then(|cached| cached.public_url.clone())
+    cached
+        .slug
+        .eq_ignore_ascii_case(&subdomain)
+        .then(|| cached.public_url.clone())
+        .flatten()
 }
 
 /// Main proxy request handler.
@@ -3037,12 +3038,6 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
     let local_client = is_local_client(&req);
 
-    // Read the slug's public URL now, from the table that routes this
-    // request, rather than after `resolve_target` has possibly waited for the
-    // daemon to start: a config reload in that wait must not give this request
-    // a different public address than the one its backend was chosen under.
-    let public_url = slug_public_url(&host, &state.tld, &slug_snapshot());
-
     // Intercept "pitchfork.<tld>" — route to the built-in web UI
     let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
         if subdomain.eq_ignore_ascii_case("pitchfork") {
@@ -3065,8 +3060,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         None
     };
 
-    let (target_port, activity, protocol) = if let Some(port) = target_port {
-        (port, None, ProxyProtocol::Http1)
+    let (target_port, activity, protocol, public_url) = if let Some(port) = target_port {
+        (port, None, ProxyProtocol::Http1, None)
     } else {
         // A passthrough hostname must never be forwarded as plain HTTP: the
         // daemon expects a TLS handshake on that port, so the request would
@@ -3077,8 +3072,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 &passthrough_unroutable_message(&host, state.is_tls),
             );
         }
-        match resolve_target(&host, &state.tld).await {
-            ResolveResult::Ready(port, activity, protocol) => (port, activity, protocol),
+        let (resolved, public_url) = resolve_target_with_public_url(&host, &state.tld).await;
+        match resolved {
+            ResolveResult::Ready(port, activity, protocol) => {
+                (port, activity, protocol, public_url)
+            }
             ResolveResult::Starting { slug } => {
                 return starting_html_response(&slug, &raw_host);
             }
@@ -3434,13 +3432,31 @@ fn passthrough_unroutable_message(host: &str, is_tls: bool) -> String {
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
 async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
+    resolve_target_with_public_url(host, tld).await.0
+}
+
+/// [`resolve_target`], also returning the public URL of the slug entry the
+/// route was resolved from.
+///
+/// The public URL comes from the same entry that picks the daemon, so a slug
+/// reload while the request waits for a daemon start cannot pair that daemon
+/// with another registration's public address.
+async fn resolve_target_with_public_url(
+    host: &str,
+    tld: &str,
+) -> (ResolveResult, Option<crate::proxy::public_url::PublicUrl>) {
+    let ctx = match resolve_route_context(host, tld).await {
+        Ok(ctx) => ctx,
+        Err(result) => return (result, None),
+    };
+    let public_url = entry_public_url(host, tld, &ctx.cached);
+    (resolve_with_context(ctx).await, public_url)
+}
+
+async fn resolve_with_context(ctx: RouteContext) -> ResolveResult {
     // One budget for everything this request may wait on: an idle stop under
     // way and then the start after it.
     let deadline = auto_start_deadline();
-    let ctx = match resolve_route_context(host, tld).await {
-        Ok(ctx) => ctx,
-        Err(result) => return result,
-    };
 
     let daemons = {
         let state_file = SUPERVISOR.state_file.lock().await;
@@ -6553,18 +6569,13 @@ mod tests {
         let mut entry = make_entry("api");
         entry.public_url =
             Some(crate::proxy::public_url::PublicUrl::parse("https://dev.example.com").unwrap());
-        let slugs: std::collections::HashMap<String, CachedSlugEntry> = [
-            ("api".to_string(), entry),
-            ("docs".to_string(), make_entry("docs")),
-        ]
-        .into_iter()
-        .collect();
+        let docs = make_entry("docs");
 
-        let public = slug_public_url("API.localhost", "localhost", &slugs).unwrap();
+        let public = entry_public_url("API.localhost", "localhost", &entry).unwrap();
         assert_eq!(public.authority, "dev.example.com");
-        assert!(slug_public_url("feature.api.localhost", "localhost", &slugs).is_none());
-        assert!(slug_public_url("docs.localhost", "localhost", &slugs).is_none());
-        assert!(slug_public_url("api.test", "localhost", &slugs).is_none());
+        assert!(entry_public_url("feature.api.localhost", "localhost", &entry).is_none());
+        assert!(entry_public_url("docs.localhost", "localhost", &docs).is_none());
+        assert!(entry_public_url("api.test", "localhost", &entry).is_none());
     }
 
     /// Only a request known to come from this machine gets the detailed pages;
