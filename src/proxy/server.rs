@@ -3215,8 +3215,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     // the request URI, which the client also dials, so it stays local there.
     *req.uri_mut() = forward_uri;
     let host_value = match &public_url {
-        Some(public) => HeaderValue::from_str(&public.authority).ok(),
-        None => None,
+        Some(public) if !h2c => HeaderValue::from_str(&public.authority).ok(),
+        _ => None,
     }
     .unwrap_or_else(|| {
         HeaderValue::from_str(&format!("localhost:{target_port}"))
