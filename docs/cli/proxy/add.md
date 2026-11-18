@@ -14,12 +14,16 @@ registration.
 If --dir is not specified, uses the current directory.
 If --daemon is not specified, defaults to the slug name.
 
+Adding a slug that already exists repoints it, keeping its public URL
+unless --public-url gives a new one.
+
 Example:
 
 ```text
 pitchfork proxy add api
 pitchfork proxy add api --daemon server
 pitchfork proxy add api --dir /home/user/my-api --daemon server
+pitchfork proxy add api --public-url https://dev.example.com
 ```
 
 ## Arguments
@@ -29,4 +33,5 @@ pitchfork proxy add api --dir /home/user/my-api --daemon server
 - **`--dir <DIR>`** — Project directory (defaults to current directory)
 - **`--daemon <DAEMON>`** — Daemon name within the project (defaults to slug name)
 - **`--namespace <NAMESPACE>`** — Namespace to associate with the slug. If not provided, derived from the project directory.
+- **`--public-url <PUBLIC_URL>`** — Public URL a tunnel or reverse proxy serves this slug under, such as https://dev.example.com. Requests for the slug then reach the daemon with that host, scheme and port in Host and X-Forwarded-*.
 - **`-h --help`** — Print help

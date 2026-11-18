@@ -658,6 +658,65 @@ EOF
   refute_output --partial "api.wt-raw.labelproj.localhost"
 }
 
+@test "a slug with a public URL forwards that URL's host, scheme and port" {
+  local proj="$TEST_TEMP_DIR/slug-public"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local echo_script daemon_port proxy_port
+  echo_script="$(to_shell_path "$(script_path header_echo_server.py)")"
+  daemon_port=$(free_port)
+  proxy_port=$(free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.api]
+run = 'python3 -u $echo_script $daemon_port'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/"
+EOF
+
+  run pitchfork proxy add shop --daemon api --public-url https://Dev.Example.com
+  assert_success
+  assert_output --partial "Public: https://dev.example.com"
+
+  # Repointing the slug without --public-url keeps the public URL.
+  run pitchfork proxy add shop --daemon api
+  assert_success
+  assert_output --partial "Public: https://dev.example.com"
+
+  run pitchfork proxy add shop --public-url /not-a-url
+  assert_failure
+
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=$proxy_port \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  run pitchfork start api
+  assert_success
+  sleep 2
+
+  # The slug's own hostname reaches the daemon under the public URL, whatever
+  # the client claimed.
+  run curl -s -H "Host: shop.localhost" -H "X-Forwarded-Host: evil.example" \
+    "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_line "host=dev.example.com"
+  assert_line "x-forwarded-host=dev.example.com"
+  assert_line "x-forwarded-proto=https"
+  assert_line "x-forwarded-port=443"
+
+  # The automatic hostname is not the slug and keeps its local values.
+  run curl -s -H "Host: api.slug-public.localhost" "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_line "x-forwarded-host=api.slug-public.localhost"
+  assert_line "x-forwarded-proto=http"
+
+  run pitchfork stop api || true
+  kill_port "$daemon_port"
+}
+
 @test "a slugged daemon receives the slug URL as PITCHFORK_URL" {
   local proj="$TEST_TEMP_DIR/slug-url"
   mkdir -p "$proj"

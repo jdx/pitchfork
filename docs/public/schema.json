@@ -1886,6 +1886,13 @@
             "string",
             "null"
           ]
+        },
+        "public_url": {
+          "description": "Public URL an upstream tunnel or reverse proxy serves this slug under,\nsuch as `https://dev.example.com`. Requests for the slug reach the\ndaemon with that URL's host, scheme and port in `Host` and\n`X-Forwarded-*`, so the backend builds links for the public address.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

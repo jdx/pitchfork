@@ -18,6 +18,7 @@ pub mod hosts;
 pub mod lan_ip;
 pub mod mdns;
 pub mod pac;
+pub mod public_url;
 pub mod server;
 pub mod setup;
 pub mod sni;

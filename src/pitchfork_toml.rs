@@ -41,6 +41,12 @@ pub struct SlugEntryRaw {
     /// Daemon name within that project (defaults to slug name if omitted)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub daemon: Option<String>,
+    /// Public URL an upstream tunnel or reverse proxy serves this slug under,
+    /// such as `https://dev.example.com`. Requests for the slug reach the
+    /// daemon with that URL's host, scheme and port in `Host` and
+    /// `X-Forwarded-*`, so the backend builds links for the public address.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub public_url: Option<String>,
 }
 
 /// Resolved slug entry with PathBuf.
@@ -52,6 +58,8 @@ pub struct SlugEntry {
     pub namespace: Option<String>,
     /// Daemon name within that project (defaults to slug name if omitted)
     pub daemon: Option<String>,
+    /// Public URL the slug is served under upstream (see [`SlugEntryRaw::public_url`]).
+    pub public_url: Option<String>,
 }
 
 impl SlugEntry {
@@ -1716,6 +1724,7 @@ impl PitchforkToml {
                     dir: entry.dir.map(env::expand_tilde),
                     namespace: entry.namespace,
                     daemon: entry.daemon,
+                    public_url: entry.public_url,
                 },
             );
         }
@@ -1910,6 +1919,7 @@ impl PitchforkToml {
                         dir: entry.dir.as_ref().map(|d| d.to_string_lossy().to_string()),
                         namespace: entry.namespace.clone(),
                         daemon: entry.daemon.clone(),
+                        public_url: entry.public_url.clone(),
                     },
                 );
             }
@@ -2071,10 +2081,14 @@ impl PitchforkToml {
     /// Reads the global config, adds/updates the slug entry, and writes it back.
     /// If `namespace` is provided but not yet registered in `[namespaces]`,
     /// also registers it at `dir` (acquired via `resolve_dir()` on the slug entry).
+    /// Add or repoint a slug. `public_url` replaces the slug's public URL when
+    /// given; when omitted, a public URL the slug already has is kept, so a
+    /// slug can be moved to another checkout without restating it.
     pub fn add_slug_with_namespace(
         slug: &str,
         namespace: Option<&str>,
         daemon: Option<&str>,
+        public_url: Option<&str>,
     ) -> Result<()> {
         let global_path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
 
@@ -2134,12 +2148,16 @@ impl PitchforkToml {
             }
         }
 
+        let public_url = public_url
+            .map(str::to_string)
+            .or_else(|| pt.slugs.get(slug).and_then(|e| e.public_url.clone()));
         pt.slugs.insert(
             slug.to_string(),
             SlugEntry {
                 dir: None,
                 namespace: namespace.map(str::to_string),
                 daemon: daemon.map(str::to_string),
+                public_url,
             },
         );
         pt.write_unlocked()?;
@@ -3374,6 +3392,7 @@ dir = "~/projects/web"
             dir: None,
             namespace: Some(namespace.to_string()),
             daemon: daemon.map(str::to_string),
+            public_url: None,
         }
     }
 
@@ -3439,6 +3458,7 @@ dir = "~/projects/web"
                 dir: None,
                 namespace: Some("myproject".to_string()),
                 daemon: None,
+                public_url: None,
             },
         );
         pt.namespaces.insert(

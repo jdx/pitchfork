@@ -607,6 +607,39 @@ Slugs are resolved before automatic hostnames, so an existing slug wins a
 matching route. Use them for existing integrations, global daemons, or LAN
 mDNS discovery. Project daemons can use automatic hostnames without a slug.
 
+#### Public URL behind a tunnel {#slug-public-url}
+
+A tunnel such as `cloudflared` can send a public hostname to the proxy by
+rewriting the request's `Host` to the slug (`httpHostHeader = "shop.localhost"`).
+The backend would then see the slug's local name over plain HTTP, and build
+redirects, absolute links and CSRF origin checks for that instead of the public
+address. Give the slug the public URL it is served under:
+
+```bash
+pitchfork proxy add shop --daemon web --public-url https://dev.example.com
+```
+
+```toml
+[slugs]
+shop = { dir = "/home/user/shop", daemon = "web", public_url = "https://dev.example.com" }
+```
+
+Requests for `shop.<tld>` then reach the daemon with `Host`,
+`X-Forwarded-Host`, `X-Forwarded-Proto` and `X-Forwarded-Port` taken from that
+URL. The values come from your config, never from the client, so the usual
+protection against forged `X-Forwarded-*` headers still holds. Worktree
+subdomains of the slug (`<branch>.shop.<tld>`) and automatic hostnames keep
+their local values.
+
+A daemon with `proxy_protocol = "h2c"` is the exception for `Host`: HTTP/2
+sends the request authority in `:authority`, which is also the address the proxy
+connects to, so that daemon still sees its local authority. It does receive the
+public values in `X-Forwarded-*`.
+
+Running `pitchfork proxy add shop --daemon web` again from another checkout repoints the slug
+and keeps its public URL, so one command moves the public address between
+worktrees. Remove the slug to drop the public URL.
+
 ## HTTPS Support
 
 ### Local Certificate Authority {#auto-generated-certificate}
