@@ -267,21 +267,15 @@ enum DependencyRaw {
     },
 }
 
-/// Schema-only description of a `depends` entry.
+/// Schema-only shape of a `depends` entry.
 #[derive(JsonSchema)]
 #[serde(untagged)]
 #[allow(dead_code)]
 enum DependencySchema {
-    /// A daemon name (same namespace) or a qualified `namespace/name` ID.
     Id(DaemonId),
-    /// A daemon ID with a local name for templates.
     Named {
-        /// The daemon name (same namespace) or qualified `namespace/name` ID.
         id: DaemonId,
-        /// A name templates can use for this dependency, as in
-        /// `{{ daemons.<as>.url }}`, in addition to its qualified key. It
-        /// must not match a daemon in this namespace or another dependency's
-        /// name.
+        /// Local template name: `{{ daemons.<as> }}`.
         #[serde(rename = "as")]
         alias: String,
     },

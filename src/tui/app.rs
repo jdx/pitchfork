@@ -16,6 +16,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use indexmap::IndexMap;
 use listeners::Listener;
+use miette::IntoDiagnostic;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1941,33 +1942,28 @@ impl App {
         }
 
         // Insert/update daemon
-        config
-            .daemons
-            .insert(daemon_id.clone(), daemon_config.clone());
+        config.daemons.insert(daemon_id, daemon_config);
 
-        // A rename can make a dependency's `as` name clash with a daemon, in
-        // this file or in a sibling file of the same project.
+        // A rename can make a dependency's `as` name clash with a daemon.
         if let Err(e) = config.validate_dependency_aliases() {
             self.set_message(format!("{e}"));
             return Ok(false);
         }
-        if let Some(dir) = editor.config_path.parent()
-            && let Ok(mut merged) = PitchforkToml::all_merged_from(dir)
-        {
-            if let EditMode::Edit { original_id } = &editor.mode
-                && let Ok(original) = DaemonId::parse(original_id)
-            {
-                merged.daemons.shift_remove(&original);
-            }
-            merged.daemons.insert(daemon_id, daemon_config);
-            if let Err(e) = merged.validate_dependency_aliases() {
-                self.set_message(format!("{e}"));
-                return Ok(false);
-            }
-        }
 
-        // Write back
+        // Write back, then check that the project still loads: an `as` name
+        // can also clash with a daemon in a sibling file or one that the
+        // rename un-overrides. Undo the write if the save broke it.
+        let previous = std::fs::read(&editor.config_path).ok();
+        let loaded_before = PitchforkToml::all_merged().is_ok();
         config.write()?;
+        if loaded_before && let Err(e) = PitchforkToml::all_merged() {
+            match previous {
+                Some(bytes) => std::fs::write(&editor.config_path, bytes).into_diagnostic()?,
+                None => std::fs::remove_file(&editor.config_path).into_diagnostic()?,
+            }
+            self.set_message(format!("Not saved: {e}"));
+            return Ok(false);
+        }
 
         editor.unsaved_changes = false;
         let daemon_id = editor.daemon_id.clone();
