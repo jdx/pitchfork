@@ -178,9 +178,11 @@ a `url`.
 
 ### Declared URL
 
-When the proxy doesn't serve a daemon (`proxy = false`, the proxy is off, or the
-daemon doesn't speak HTTP), <code v-pre>{{ url }}</code> is null. A daemon can
-declare the URL it answers on with `url`, so consumers don't have to guess the
+When the proxy doesn't serve a daemon (`proxy = false`, the proxy is off, the
+daemon sets no `port`, or no hostname can be derived for it),
+<code v-pre>{{ url }}</code> is null. The proxy doesn't check a daemon's
+protocol, so a non-HTTP daemon with a `port` must set `proxy = false` to get its
+declared URL. A daemon can declare the URL it answers on with `url`, so consumers don't have to guess the
 scheme and host from the port:
 
 ```toml
@@ -203,7 +205,8 @@ port when it changes. When another daemon reads
 <code v-pre>{{ daemons.cache.url }}</code>, they are the ports the daemon
 actually got, including a bump. The proxy URL wins whenever there is one, because
 it's stable across checkouts. To always get the direct address, set
-`proxy = false`. A daemon without `url` behaves as before.
+`proxy = false` and remove any legacy slug mapping for the daemon, since a slug
+still gets a proxy URL. A daemon without `url` behaves as before.
 
 ::: tip
 Elsewhere in a daemon's own config, <code v-pre>{{ port }}</code> is the port it
