@@ -14,6 +14,7 @@ use crate::procs::{PROCS, ProcessStats};
 use crate::settings::settings;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use indexmap::IndexMap;
 use listeners::Listener;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -466,6 +467,7 @@ pub struct EditorState {
     preserved_health_http: Option<HealthHttp>,
     /// Preserved health_port parameters (only the port has form UI)
     preserved_health_port: Option<HealthPort>,
+    preserved_depends_as: IndexMap<String, DaemonId>,
 }
 
 impl EditorState {
@@ -490,6 +492,7 @@ impl EditorState {
             preserved_health_cmd: None,
             preserved_health_http: None,
             preserved_health_port: None,
+            preserved_depends_as: IndexMap::new(),
         }
     }
 
@@ -519,6 +522,7 @@ impl EditorState {
             preserved_health_cmd: config.health_cmd.clone(),
             preserved_health_http: config.health_http.clone(),
             preserved_health_port: config.health_port.clone(),
+            preserved_depends_as: config.depends_as.clone(),
         }
     }
 
@@ -809,7 +813,14 @@ impl EditorState {
                 }
                 ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
                 ("depends", FormFieldValue::StringList(v)) => {
-                    config.depends = v.iter().filter_map(|s| DaemonId::parse(s).ok()).collect()
+                    config.depends = v.iter().filter_map(|s| DaemonId::parse(s).ok()).collect();
+                    // Keep the template names of dependencies still listed.
+                    config.depends_as = self
+                        .preserved_depends_as
+                        .iter()
+                        .filter(|(_, id)| config.depends.contains(id))
+                        .map(|(alias, id)| (alias.clone(), id.clone()))
+                        .collect();
                 }
                 ("watch", FormFieldValue::StringList(v)) => config.watch = v.clone(),
                 ("cron_schedule", FormFieldValue::OptionalText(s)) => cron_schedule = s.clone(),
@@ -1932,7 +1943,21 @@ impl App {
         // Insert/update daemon
         config.daemons.insert(daemon_id, daemon_config);
 
-        // Write back
+        // A rename can make a dependency's `as` name clash with a daemon.
+        if let Err(e) = config.validate_dependency_aliases() {
+            self.set_message(format!("{e}"));
+            return Ok(false);
+        }
+
+        // An `as` name can also clash with a daemon in a sibling file, or with
+        // one a rename un-overrides. Check the merged config as it will load
+        // after the save, before writing. A project that already fails to load
+        // can still be saved, so it can be repaired.
+        if let Err(e) = PitchforkToml::validate_aliases_after_save(&crate::env::CWD, &config) {
+            self.set_message(format!("Not saved: {e}"));
+            return Ok(false);
+        }
+
         config.write()?;
 
         editor.unsaved_changes = false;
@@ -1993,6 +2018,22 @@ mod run_argv_editor_tests {
     fn set_run(editor: &mut EditorState, text: &str) {
         let field = editor.fields.iter_mut().find(|f| f.name == "run").unwrap();
         field.set_text(text.to_string());
+    }
+
+    #[test]
+    fn saving_keeps_dependency_template_names() {
+        let dep = DaemonId::new("search-abc", "app");
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".into(),
+            depends: vec![dep.clone()],
+            ..PitchforkTomlDaemon::default()
+        };
+        config.depends_as.insert("search".to_string(), dep.clone());
+        let editor =
+            EditorState::new_edit("api".to_string(), &config, PathBuf::from("pitchfork.toml"));
+        let saved = editor.to_daemon_config();
+        assert_eq!(saved.depends, vec![dep.clone()]);
+        assert_eq!(saved.depends_as["search"], dep);
     }
 
     #[test]

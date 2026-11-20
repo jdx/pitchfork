@@ -574,6 +574,15 @@ run = "npm run server"
 depends = ["postgres", "redis"]
 ```
 
+An entry can also be a table that gives the dependency a local name for
+[templates](/guides/configuration-templates#naming-a-dependency):
+
+```toml
+[daemons.api]
+run = "npm run server"
+depends = [{ id = "search-bd9126f3bbca47d/app", as = "search" }]
+```
+
 **Behavior:**
 
 - **Readiness**: Dependencies must become ready before their dependents start

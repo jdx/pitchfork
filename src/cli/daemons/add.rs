@@ -9,6 +9,7 @@ use crate::pitchfork_toml::{
 use crate::settings::settings;
 use indexmap::IndexMap;
 use miette::{IntoDiagnostic, bail};
+use std::path::PathBuf;
 
 /// Add a new daemon to pitchfork.toml
 #[derive(Debug, usage_rs::Args)]
@@ -296,10 +297,15 @@ impl Add {
                 ..PitchforkTomlDaemon::default()
             },
         );
-        tokio::task::spawn_blocking(move || pt.write())
-            .await
-            .into_diagnostic()?
-            .map_err(|e| miette::miette!("{e}"))?;
+        let project_dir = crate::pitchfork_toml::project_dir_for_config(&config_path)
+            .unwrap_or_else(|| PathBuf::from("."));
+        tokio::task::spawn_blocking(move || {
+            PitchforkToml::validate_aliases_after_save(&project_dir, &pt)?;
+            pt.write()
+        })
+        .await
+        .into_diagnostic()?
+        .map_err(|e| miette::miette!("{e}"))?;
         let path_display = config_path.display();
         println!("added {daemon_id} to {path_display}");
         Ok(())

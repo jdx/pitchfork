@@ -129,6 +129,13 @@ impl TemplateContext {
             }
         }
 
+        // Names the daemon chose for its dependencies with `depends = [{ id, as }]`.
+        for (alias, dep_id) in &daemon_config.depends_as {
+            if let Some(state) = daemon_states.get(&qualified_key(dep_id)).cloned() {
+                daemon_states.insert(alias.clone(), state);
+            }
+        }
+
         Self {
             self_state,
             daemon_states,
@@ -731,6 +738,33 @@ mod tests {
         assert_eq!(
             render_template("{{ daemons[\"myproj.redis\"].port }}", &ctx).unwrap(),
             "6379"
+        );
+    }
+
+    #[test]
+    fn test_depends_as_gives_local_name() {
+        let self_id = DaemonId::new("app", "api");
+        let other_id = DaemonId::new("search-bd9126f3bbca47d", "app");
+        let mut self_config = make_daemon_config("echo");
+        self_config.depends = vec![other_id.clone()];
+        self_config
+            .depends_as
+            .insert("search".to_string(), other_id.clone());
+
+        let mut resolved = HashMap::new();
+        resolved.insert(other_id.clone(), vec![8080]);
+        let mut configs = IndexMap::new();
+        configs.insert(other_id.clone(), make_daemon_config("echo"));
+
+        let ctx = TemplateContext::new(&self_id, &self_config, &resolved, &configs);
+
+        assert_eq!(
+            render_template("{{ daemons.search.port }}", &ctx).unwrap(),
+            "8080"
+        );
+        assert_eq!(
+            render_template("{{ daemons[\"search-bd9126f3bbca47d.app\"].port }}", &ctx).unwrap(),
+            "8080"
         );
     }
 

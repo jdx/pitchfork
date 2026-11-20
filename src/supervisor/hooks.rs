@@ -411,7 +411,13 @@ mod tests {
         )
         .unwrap();
         let pt = PitchforkToml::all_merged_from(&project).unwrap();
-        let id = pt.daemons.keys().next().unwrap().clone();
+        // The user's own config can define daemons too, so pick this project's.
+        let id = pt
+            .daemons
+            .keys()
+            .find(|id| id.name() == "api" && id.namespace() != "global")
+            .unwrap()
+            .clone();
 
         let project = project.canonicalize().unwrap();
         let found = defining_project_dir(&pt, &id).map(|d| d.canonicalize().unwrap());
