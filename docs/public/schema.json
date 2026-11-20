@@ -741,7 +741,7 @@
           ]
         },
         "url": {
-          "description": "The URL this daemon answers on, for `{{ url }}` and `{{ daemons.<name>.url }}`\nwhen the proxy isn't serving it (`proxy = false`, the proxy is off, or the\ndaemon doesn't speak HTTP). A Tera template that can use `{{ port }}` and\n`{{ ports }}`, such as `redis://127.0.0.1:{{ port }}/0`. The proxy URL wins\nwhen there is one.",
+          "description": "The URL this daemon answers on, for `{{ url }}` and `{{ daemons.<name>.url }}`\nwhen the proxy isn't serving it (`proxy = false`, the proxy is off, or the\ndaemon has no `port` or routable hostname). A Tera template that can use `{{ port }}` and\n`{{ ports }}`, such as `redis://127.0.0.1:{{ port }}/0`. The proxy URL wins\nwhen there is one.",
           "type": [
             "string",
             "null"

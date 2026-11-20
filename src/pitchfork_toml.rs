@@ -2533,7 +2533,7 @@ pub struct PitchforkTomlDaemon {
     pub dir: Option<String>,
     /// The URL this daemon answers on, for `{{ url }}` and `{{ daemons.<name>.url }}`
     /// when the proxy isn't serving it (`proxy = false`, the proxy is off, or the
-    /// daemon doesn't speak HTTP). A Tera template that can use `{{ port }}` and
+    /// daemon has no `port` or routable hostname). A Tera template that can use `{{ port }}` and
     /// `{{ ports }}`, such as `redis://127.0.0.1:{{ port }}/0`. The proxy URL wins
     /// when there is one.
     pub url: Option<String>,
