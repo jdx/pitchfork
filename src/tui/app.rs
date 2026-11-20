@@ -16,7 +16,6 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use indexmap::IndexMap;
 use listeners::Listener;
-use miette::IntoDiagnostic;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1950,20 +1949,18 @@ impl App {
             return Ok(false);
         }
 
-        // Write back, then check that the project still loads: an `as` name
-        // can also clash with a daemon in a sibling file or one that the
-        // rename un-overrides. Undo the write if the save broke it.
-        let previous = std::fs::read(&editor.config_path).ok();
-        let loaded_before = PitchforkToml::all_merged().is_ok();
-        config.write()?;
-        if loaded_before && let Err(e) = PitchforkToml::all_merged() {
-            match previous {
-                Some(bytes) => std::fs::write(&editor.config_path, bytes).into_diagnostic()?,
-                None => std::fs::remove_file(&editor.config_path).into_diagnostic()?,
-            }
+        // An `as` name can also clash with a daemon in a sibling file, or with
+        // one a rename un-overrides. Check the merged config as it will load
+        // after the save, before writing. A project that already fails to load
+        // can still be saved, so it can be repaired.
+        if PitchforkToml::all_merged().is_ok()
+            && let Err(e) = PitchforkToml::validate_aliases_after_save(&crate::env::CWD, &config)
+        {
             self.set_message(format!("Not saved: {e}"));
             return Ok(false);
         }
+
+        config.write()?;
 
         editor.unsaved_changes = false;
         let daemon_id = editor.daemon_id.clone();

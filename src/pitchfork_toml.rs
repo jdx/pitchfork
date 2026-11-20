@@ -1421,6 +1421,31 @@ impl PitchforkToml {
         Ok(pt)
     }
 
+    /// Check `depends` `as` names in the project's merged configuration as it
+    /// will load once `edited` is written, without writing anything.
+    ///
+    /// `edited` replaces the file it was read from; if that file is not one of
+    /// the project's config files, it is merged last.
+    pub(crate) fn validate_aliases_after_save(cwd: &Path, edited: &PitchforkToml) -> Result<()> {
+        let mut merged = Self::default();
+        let mut replaced = false;
+        for p in Self::list_paths_from(cwd) {
+            let is_edited = edited.path.as_deref().is_some_and(|e| {
+                e == p || matches!((e.canonicalize(), p.canonicalize()), (Ok(a), Ok(b)) if a == b)
+            });
+            if is_edited {
+                replaced = true;
+                merged.merge(edited.clone());
+            } else if let Ok(pt) = Self::read(&p) {
+                merged.merge(pt);
+            }
+        }
+        if !replaced {
+            merged.merge(edited.clone());
+        }
+        merged.validate_dependency_aliases()
+    }
+
     /// Reject a `depends` `as` name that hides a daemon of the same namespace.
     ///
     /// Parsing checks one file; a daemon in another file of the merged
@@ -3018,6 +3043,32 @@ depends = [{ id = "other/db", as = "read" }, { id = "other/db", as = "write" }]
         )
         .unwrap();
         assert!(PitchforkToml::all_merged_from_uncached(&[a, b]).is_err());
+    }
+
+    #[test]
+    fn test_validate_aliases_after_save_sees_overridden_base_and_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("pitchfork.toml");
+        let local = dir.path().join("pitchfork.local.toml");
+        // The base `app` has an alias; local overrides `app`, hiding it.
+        std::fs::write(
+            &base,
+            "[daemons.app]\nrun = \"a\"\ndepends = [{ id = \"other/x\", as = \"search\" }]\n",
+        )
+        .unwrap();
+        std::fs::write(&local, "[daemons.app]\nrun = \"b\"\n").unwrap();
+
+        let unchanged = PitchforkToml::read(&local).unwrap();
+        assert!(PitchforkToml::validate_aliases_after_save(dir.path(), &unchanged).is_ok());
+
+        // Renaming local's `app` to `search` un-overrides the base `app`,
+        // whose alias now clashes with the renamed daemon.
+        let mut renamed = PitchforkToml::read(&local).unwrap();
+        let (id, daemon) = renamed.daemons.shift_remove_index(0).unwrap();
+        renamed
+            .daemons
+            .insert(DaemonId::new(id.namespace(), "search"), daemon);
+        assert!(PitchforkToml::validate_aliases_after_save(dir.path(), &renamed).is_err());
     }
 
     #[test]
