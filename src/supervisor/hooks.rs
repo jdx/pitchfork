@@ -415,7 +415,7 @@ mod tests {
         let id = pt
             .daemons
             .keys()
-            .find(|id| id.name() == "api")
+            .find(|id| id.name() == "api" && id.namespace() != "global")
             .unwrap()
             .clone();
 

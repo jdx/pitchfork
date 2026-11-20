@@ -1943,6 +1943,12 @@ impl App {
         // Insert/update daemon
         config.daemons.insert(daemon_id, daemon_config);
 
+        // A rename can make a dependency's `as` name clash with a daemon.
+        if let Err(e) = config.validate_dependency_aliases() {
+            self.set_message(format!("{e}"));
+            return Ok(false);
+        }
+
         // Write back
         config.write()?;
 

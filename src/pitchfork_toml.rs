@@ -1431,7 +1431,7 @@ impl PitchforkToml {
     ///
     /// Parsing checks one file; a daemon in another file of the merged
     /// configuration can only be seen here.
-    fn validate_dependency_aliases(&self) -> Result<()> {
+    pub(crate) fn validate_dependency_aliases(&self) -> Result<()> {
         for (id, daemon) in &self.daemons {
             for (alias, target) in &daemon.depends_as {
                 let Ok(clash) = DaemonId::try_new(id.namespace(), alias) else {
