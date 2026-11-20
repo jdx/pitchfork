@@ -1451,6 +1451,9 @@ impl PitchforkToml {
     /// `edited` replaces the file it was read from; if that file is not one of
     /// the project's config files, it is merged last.
     pub(crate) fn validate_aliases_after_save(cwd: &Path, edited: &PitchforkToml) -> Result<()> {
+        // The file is parsed on its own on the next load, so it must be valid
+        // by itself even when another file overrides the clashing daemon.
+        edited.validate_dependency_aliases()?;
         Self::merge_paths(&Self::list_paths_from(cwd), Some(edited)).map(|_| ())
     }
 
@@ -3071,6 +3074,17 @@ depends = [{ id = "other/db", as = "read" }, { id = "other/db", as = "write" }]
 
         // Renaming local's `app` to `search` un-overrides the base `app`,
         // whose alias now clashes with the renamed daemon.
+        let mut standalone = PitchforkToml::read(&base).unwrap();
+        let (id, daemon) = standalone
+            .daemons
+            .first()
+            .map(|(i, d)| (i.clone(), d.clone()))
+            .unwrap();
+        standalone
+            .daemons
+            .insert(DaemonId::new(id.namespace(), "search"), daemon);
+        assert!(PitchforkToml::validate_aliases_after_save(dir.path(), &standalone).is_err());
+
         let mut renamed = PitchforkToml::read(&local).unwrap();
         let (id, daemon) = renamed.daemons.shift_remove_index(0).unwrap();
         renamed
