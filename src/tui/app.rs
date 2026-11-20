@@ -1941,12 +1941,29 @@ impl App {
         }
 
         // Insert/update daemon
-        config.daemons.insert(daemon_id, daemon_config);
+        config
+            .daemons
+            .insert(daemon_id.clone(), daemon_config.clone());
 
-        // A rename can make a dependency's `as` name clash with a daemon.
+        // A rename can make a dependency's `as` name clash with a daemon, in
+        // this file or in a sibling file of the same project.
         if let Err(e) = config.validate_dependency_aliases() {
             self.set_message(format!("{e}"));
             return Ok(false);
+        }
+        if let Some(dir) = editor.config_path.parent()
+            && let Ok(mut merged) = PitchforkToml::all_merged_from(dir)
+        {
+            if let EditMode::Edit { original_id } = &editor.mode
+                && let Ok(original) = DaemonId::parse(original_id)
+            {
+                merged.daemons.shift_remove(&original);
+            }
+            merged.daemons.insert(daemon_id, daemon_config);
+            if let Err(e) = merged.validate_dependency_aliases() {
+                self.set_message(format!("{e}"));
+                return Ok(false);
+            }
         }
 
         // Write back
