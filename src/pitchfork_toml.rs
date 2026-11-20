@@ -1454,7 +1454,13 @@ impl PitchforkToml {
         // The file is parsed on its own on the next load, so it must be valid
         // by itself even when another file overrides the clashing daemon.
         edited.validate_dependency_aliases()?;
-        Self::merge_paths(&Self::list_paths_from(cwd), Some(edited)).map(|_| ())
+        // A project that already fails to load can still be saved, so it can be
+        // repaired: only a clash this save introduces is rejected.
+        let paths = Self::list_paths_from(cwd);
+        if Self::merge_paths(&paths, None).is_err() {
+            return Ok(());
+        }
+        Self::merge_paths(&paths, Some(edited)).map(|_| ())
     }
 
     /// Reject a `depends` `as` name that hides a daemon of the same namespace.
@@ -3074,23 +3080,27 @@ depends = [{ id = "other/db", as = "read" }, { id = "other/db", as = "write" }]
 
         // Renaming local's `app` to `search` un-overrides the base `app`,
         // whose alias now clashes with the renamed daemon.
-        let mut standalone = PitchforkToml::read(&base).unwrap();
-        let (id, daemon) = standalone
-            .daemons
-            .first()
-            .map(|(i, d)| (i.clone(), d.clone()))
-            .unwrap();
-        standalone
-            .daemons
-            .insert(DaemonId::new(id.namespace(), "search"), daemon);
-        assert!(PitchforkToml::validate_aliases_after_save(dir.path(), &standalone).is_err());
-
         let mut renamed = PitchforkToml::read(&local).unwrap();
         let (id, daemon) = renamed.daemons.shift_remove_index(0).unwrap();
         renamed
             .daemons
             .insert(DaemonId::new(id.namespace(), "search"), daemon);
         assert!(PitchforkToml::validate_aliases_after_save(dir.path(), &renamed).is_err());
+
+        // Adding `search` next to the base `app` is invalid in that file on its
+        // own, even though the local `app` hides the alias in the merged config.
+        let mut standalone = PitchforkToml::read(&base).unwrap();
+        let ns = standalone
+            .daemons
+            .keys()
+            .next()
+            .unwrap()
+            .namespace()
+            .to_string();
+        standalone
+            .daemons
+            .insert(DaemonId::new(&ns, "search"), PitchforkTomlDaemon::default());
+        assert!(PitchforkToml::validate_aliases_after_save(dir.path(), &standalone).is_err());
     }
 
     #[test]

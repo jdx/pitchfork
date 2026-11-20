@@ -1953,9 +1953,7 @@ impl App {
         // one a rename un-overrides. Check the merged config as it will load
         // after the save, before writing. A project that already fails to load
         // can still be saved, so it can be repaired.
-        if PitchforkToml::all_merged().is_ok()
-            && let Err(e) = PitchforkToml::validate_aliases_after_save(&crate::env::CWD, &config)
-        {
+        if let Err(e) = PitchforkToml::validate_aliases_after_save(&crate::env::CWD, &config) {
             self.set_message(format!("Not saved: {e}"));
             return Ok(false);
         }
