@@ -129,6 +129,27 @@ Here, `server.js` must read `REDIS_URL` from its environment. See the
 [namespace registry](/reference/configuration#namespace-registry) to make the
 `infra` project available from other directories.
 
+### Naming a dependency
+
+A qualified key such as `daemons["infra.redis"]` is awkward when the namespace
+is generated or changes between checkouts. Give the dependency a local name with
+`as` in `depends`, and use that name in templates:
+
+```toml
+[daemons.app]
+run = "node server.js"
+depends = [{ id = "search-bd9126f3bbca47d/app", as = "search" }]
+
+[daemons.app.env]
+SEARCH_API_URL = "{{ daemons.search.url }}"
+```
+
+The dependency stays available under its qualified key too. Plain string
+entries in `depends` work as before. An `as` name may use letters, digits, `_`
+and `-`, and config parsing fails if it matches a daemon in the same namespace
+or names two different dependencies. Pointing `id` at another checkout of the
+dependency then changes nothing else in the config.
+
 ### Settings
 
 Global proxy settings are available:

@@ -254,6 +254,39 @@ pub struct PitchforkTomlDaemonLogs {
     pub archive_hook: Option<String>,
 }
 
+/// One `depends` entry as written in a config file: a daemon ID, or a table
+/// that also gives the dependency a local template name.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum DependencyRaw {
+    Id(String),
+    Named {
+        id: String,
+        #[serde(rename = "as")]
+        alias: String,
+    },
+}
+
+/// Schema-only description of a `depends` entry.
+#[derive(JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum DependencySchema {
+    /// A daemon name (same namespace) or a qualified `namespace/name` ID.
+    Id(DaemonId),
+    /// A daemon ID with a local name for templates.
+    Named {
+        /// The daemon name (same namespace) or qualified `namespace/name` ID.
+        id: DaemonId,
+        /// A name templates can use for this dependency, as in
+        /// `{{ daemons.<as>.url }}`, in addition to its qualified key. It
+        /// must not match a daemon in this namespace or another dependency's
+        /// name.
+        #[serde(rename = "as")]
+        alias: String,
+    },
+}
+
 /// Internal daemon config for reading (uses String for depends).
 ///
 /// Note: This struct mirrors `PitchforkTomlDaemon` but uses `Vec<String>` for `depends`
@@ -321,7 +354,7 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub depends: Vec<String>,
+    pub depends: Vec<DependencyRaw>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub watch: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1431,6 +1464,7 @@ impl PitchforkToml {
         pt.namespace = raw_config.namespace.clone();
         pt.worktree_label = raw_config.worktree_label.clone();
 
+        let daemon_names: HashSet<String> = raw_config.daemons.keys().cloned().collect();
         for (short_name, raw_daemon) in raw_config.daemons {
             let id = match DaemonId::try_new(&namespace, &short_name) {
                 Ok(id) => id,
@@ -1445,34 +1479,65 @@ impl PitchforkToml {
             };
 
             let mut depends = Vec::new();
-            for dep in raw_daemon.depends {
-                let dep_id = if dep.contains('/') {
-                    match DaemonId::parse(&dep) {
-                        Ok(id) => id,
-                        Err(e) => {
-                            return Err(ConfigParseError::InvalidDependency {
-                                daemon: short_name.clone(),
-                                dependency: dep,
-                                path: path.to_path_buf(),
-                                reason: e.to_string(),
-                            }
-                            .into());
-                        }
-                    }
-                } else {
-                    match DaemonId::try_new(&namespace, &dep) {
-                        Ok(id) => id,
-                        Err(e) => {
-                            return Err(ConfigParseError::InvalidDependency {
-                                daemon: short_name.clone(),
-                                dependency: dep,
-                                path: path.to_path_buf(),
-                                reason: e.to_string(),
-                            }
-                            .into());
-                        }
-                    }
+            let mut depends_as: IndexMap<String, DaemonId> = IndexMap::new();
+            for entry in raw_daemon.depends {
+                let (dep, alias) = match entry {
+                    DependencyRaw::Id(id) => (id, None),
+                    DependencyRaw::Named { id, alias } => (id, Some(alias)),
                 };
+                let invalid =
+                    |dependency: String, reason: String| ConfigParseError::InvalidDependency {
+                        daemon: short_name.clone(),
+                        dependency,
+                        path: path.to_path_buf(),
+                        reason,
+                    };
+                let parsed = if dep.contains('/') {
+                    DaemonId::parse(&dep)
+                } else {
+                    DaemonId::try_new(&namespace, &dep)
+                };
+                let dep_id = match parsed {
+                    Ok(id) => id,
+                    Err(e) => return Err(invalid(dep, e.to_string()).into()),
+                };
+                if let Some(alias) = alias {
+                    if alias.is_empty()
+                        || !alias
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    {
+                        return Err(invalid(
+                            dep,
+                            format!(
+                                "`as` name {alias:?} must be non-empty and use only letters, digits, '_' or '-'"
+                            ),
+                        )
+                        .into());
+                    }
+                    if let Some(existing) = depends_as.get(&alias) {
+                        if *existing != dep_id {
+                            return Err(invalid(
+                                dep,
+                                format!(
+                                    "`as` name {alias:?} is already used for dependency {existing}"
+                                ),
+                            )
+                            .into());
+                        }
+                    } else if daemon_names.contains(&alias)
+                        && !(dep_id.namespace() == namespace && dep_id.name() == alias)
+                    {
+                        return Err(invalid(
+                            dep,
+                            format!(
+                                "`as` name {alias:?} clashes with the daemon {alias:?} in this namespace"
+                            ),
+                        )
+                        .into());
+                    }
+                    depends_as.insert(alias, dep_id.clone());
+                }
                 depends.push(dep_id);
             }
 
@@ -1667,6 +1732,7 @@ impl PitchforkToml {
                 proxy_idle_timeout: raw_daemon.proxy_idle_timeout,
                 boot_start: raw_daemon.boot_start,
                 depends,
+                depends_as,
                 watch: raw_daemon.watch,
                 watch_mode: raw_daemon.watch_mode.unwrap_or_default(),
                 dir: raw_daemon.dir,
@@ -1872,10 +1938,17 @@ impl PitchforkToml {
                         .depends
                         .iter()
                         .map(|d| {
-                            if d.namespace() == config_namespace {
+                            let id = if d.namespace() == config_namespace {
                                 d.name().to_string()
                             } else {
                                 d.qualified()
+                            };
+                            match daemon.depends_as.iter().find(|(_, target)| *target == d) {
+                                Some((alias, _)) => DependencyRaw::Named {
+                                    id,
+                                    alias: alias.clone(),
+                                },
+                                None => DependencyRaw::Id(id),
                             }
                         })
                         .collect(),
@@ -2493,9 +2566,14 @@ pub struct PitchforkTomlDaemon {
     pub proxy_idle_timeout: Option<ProxyIdleTimeout>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,
-    /// List of daemon IDs that must be started before this one
-    #[schemars(default)]
+    /// List of daemons that must be started before this one. Each entry is a
+    /// daemon ID, or a table `{ id = "namespace/name", as = "local" }` that
+    /// also lets templates refer to the dependency as `daemons.local`.
+    #[schemars(default, with = "Vec<DependencySchema>")]
     pub depends: Vec<DaemonId>,
+    /// Local template names chosen with `as` in `depends`, keyed by name.
+    #[schemars(skip)]
+    pub depends_as: IndexMap<String, DaemonId>,
     /// File patterns to watch for changes
     #[schemars(default)]
     pub watch: Vec<String>,
@@ -2811,6 +2889,86 @@ mod tests {
 
     fn names(ids: &[DaemonId]) -> Vec<&str> {
         ids.iter().map(|id| id.name()).collect()
+    }
+
+    fn parse_daemons(toml: &str) -> Result<PitchforkToml> {
+        PitchforkToml::parse_str(toml, Path::new("/tmp/my-project/pitchfork.toml"))
+    }
+
+    #[test]
+    fn test_depends_as_parses_and_keeps_plain_entries() {
+        let pt = parse_daemons(
+            r#"
+[daemons.db]
+run = "db"
+
+[daemons.app]
+run = "app"
+depends = ["db", { id = "search-abc/app", as = "search" }]
+"#,
+        )
+        .unwrap();
+        let app = &pt.daemons[&DaemonId::new("my-project", "app")];
+        assert_eq!(
+            app.depends,
+            [
+                DaemonId::new("my-project", "db"),
+                DaemonId::new("search-abc", "app")
+            ]
+        );
+        assert_eq!(app.depends_as.len(), 1);
+        assert_eq!(app.depends_as["search"], DaemonId::new("search-abc", "app"));
+    }
+
+    #[test]
+    fn test_depends_as_rejects_clashes_and_bad_names() {
+        for (case, toml) in [
+            (
+                "same-namespace daemon",
+                r#"
+[daemons.db]
+run = "db"
+[daemons.app]
+run = "app"
+depends = [{ id = "other/x", as = "db" }]
+"#,
+            ),
+            (
+                "duplicate alias",
+                r#"
+[daemons.app]
+run = "app"
+depends = [{ id = "a/x", as = "s" }, { id = "b/y", as = "s" }]
+"#,
+            ),
+            (
+                "invalid alias",
+                r#"
+[daemons.app]
+run = "app"
+depends = [{ id = "a/x", as = "my.search" }]
+"#,
+            ),
+        ] {
+            assert!(parse_daemons(toml).is_err(), "{case} should be rejected");
+        }
+    }
+
+    #[test]
+    fn test_depends_as_round_trips_through_raw_config() {
+        let raw: PitchforkTomlRaw = toml::from_str(
+            r#"
+[daemons.app]
+run = "app"
+depends = ["db", { id = "search-abc/app", as = "search" }]
+"#,
+        )
+        .unwrap();
+        let out = toml::to_string(&raw).unwrap();
+        assert!(
+            out.contains(r#"{ id = "search-abc/app", as = "search" }"#),
+            "{out}"
+        );
     }
 
     #[test]

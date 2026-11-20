@@ -113,6 +113,33 @@
       },
       "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$"
     },
+    "DependencySchema": {
+      "description": "Schema-only description of a `depends` entry.",
+      "anyOf": [
+        {
+          "description": "A daemon name (same namespace) or a qualified `namespace/name` ID.",
+          "$ref": "#/$defs/DaemonId"
+        },
+        {
+          "description": "A daemon ID with a local name for templates.",
+          "type": "object",
+          "properties": {
+            "as": {
+              "description": "A name templates can use for this dependency, as in\n`{{ daemons.<as>.url }}`, in addition to its qualified key. It\nmust not match a daemon in this namespace or another dependency's\nname.",
+              "type": "string"
+            },
+            "id": {
+              "description": "The daemon name (same namespace) or qualified `namespace/name` ID.",
+              "$ref": "#/$defs/DaemonId"
+            }
+          },
+          "required": [
+            "id",
+            "as"
+          ]
+        }
+      ]
+    },
     "GroupEntryRaw": {
       "description": "Raw group entry as read from TOML.\n```toml\n[groups.backend]\ndaemons = [\"api\", \"worker\"]\n\n[groups.all]\ngroups = [\"backend\"]\ndaemons = [\"postgres\"]\n```",
       "type": "object",
@@ -455,11 +482,11 @@
           ]
         },
         "depends": {
-          "description": "List of daemon IDs that must be started before this one",
+          "description": "List of daemons that must be started before this one. Each entry is a\ndaemon ID, or a table `{ id = \"namespace/name\", as = \"local\" }` that\nalso lets templates refer to the dependency as `daemons.local`.",
           "type": "array",
           "default": [],
           "items": {
-            "$ref": "#/$defs/DaemonId"
+            "$ref": "#/$defs/DependencySchema"
           }
         },
         "dir": {
