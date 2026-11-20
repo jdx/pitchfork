@@ -140,13 +140,17 @@ impl TemplateContext {
             declared_url: daemon_config.url.clone(),
         };
 
-        // A daemon without a port has no resolved ports to appear in
-        // `resolved_daemons`, yet a `url` it declares doesn't need one. Keep it
+        // A daemon that is configured without a port has no resolved ports to
+        // appear in `resolved_daemons`, yet a `url` it declares doesn't need
+        // one. A daemon that has a port but hasn't resolved it (not started, or
+        // in the same level) stays out, so referencing it still fails. Keep it
         // referenceable, so a dependent renders the same however it was started.
         let portless_with_url = daemon_configs
             .iter()
             .filter(|(dep_id, config)| {
-                config.url.is_some() && !resolved_daemons.contains_key(*dep_id)
+                config.url.is_some()
+                    && config.port.is_none()
+                    && !resolved_daemons.contains_key(*dep_id)
             })
             .map(|(dep_id, _)| (dep_id, Vec::new()));
 
@@ -953,6 +957,20 @@ mod tests {
             render_template("{{ daemons.db.url }}", &ctx).unwrap(),
             "postgres://db.internal/app"
         );
+    }
+
+    #[test]
+    fn test_unresolved_daemon_with_a_port_stays_undefined() {
+        let me = DaemonId::new("myproj", "web");
+        let api = DaemonId::new("myproj", "api");
+        let mut configs = IndexMap::new();
+        configs.insert(
+            api,
+            unproxied_with_url("http://127.0.0.1:{{ port }}", vec![4300]),
+        );
+
+        let ctx = TemplateContext::new(&me, &make_daemon_config("echo"), &HashMap::new(), &configs);
+        assert!(render_template("{{ daemons.api.url }}", &ctx).is_err());
     }
 
     #[test]
