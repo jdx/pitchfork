@@ -57,7 +57,8 @@ Templates work in these configuration fields:
 
 Health check fields (`health_cmd`, `health_http`, and `health_port`) also accept
 templates. These examples reference dependencies; use `$PORT` in commands for
-the current daemon's own assigned port.
+the current daemon's own assigned port, which can differ from its configured
+<code v-pre>{{ port }}</code> after a bump.
 
 ## Template Variables
 
@@ -222,7 +223,7 @@ Level 2: worker   (depends on api, templates can reference redis and api)
 
 - Daemons within the same level start concurrently and **cannot** reference each other's ports
 - A daemon can reference any daemon that completed successfully in a previous level
-- `port` and `ports` for the current daemon are **not** available at template rendering time (ports are resolved after the command is constructed). Use the `$PORT` / `$PORT0`, `$PORT1`, ... environment variables to access the current daemon's own resolved ports. Use <code v-pre>{{ daemons.xxx.port }}</code> to reference **dependencies'** ports instead
+- <code v-pre>{{ port }}</code> and <code v-pre>{{ ports }}</code> for the current daemon are the ports it is **configured** for. The final ports are resolved after the command is constructed, so a bumped port can differ. Use the `$PORT` / `$PORT0`, `$PORT1`, ... environment variables to access the current daemon's own resolved ports. <code v-pre>{{ daemons.xxx.port }}</code> for a **dependency** is its resolved port
 
 ## Error Handling
 
