@@ -140,8 +140,22 @@ impl TemplateContext {
             declared_url: daemon_config.url.clone(),
         };
 
+        // A daemon without a port has no resolved ports to appear in
+        // `resolved_daemons`, yet a `url` it declares doesn't need one. Keep it
+        // referenceable, so a dependent renders the same however it was started.
+        let portless_with_url = daemon_configs
+            .iter()
+            .filter(|(dep_id, config)| {
+                config.url.is_some() && !resolved_daemons.contains_key(*dep_id)
+            })
+            .map(|(dep_id, _)| (dep_id, Vec::new()));
+
         let mut daemon_states = HashMap::new();
-        for (dep_id, ports) in resolved_daemons {
+        for (dep_id, ports) in resolved_daemons
+            .iter()
+            .map(|(dep_id, ports)| (dep_id, ports.clone()))
+            .chain(portless_with_url)
+        {
             if let Some(config) = daemon_configs.get(dep_id) {
                 let dep_effective_user = config.effective_user();
                 let dep_dir = crate::ipc::batch::resolve_daemon_dir(
@@ -150,7 +164,7 @@ impl TemplateContext {
                     dep_effective_user.as_deref(),
                 );
                 let state = DaemonTemplateState {
-                    ports: ports.clone(),
+                    ports,
                     id: dep_id.qualified(),
                     name: dep_id.name().to_string(),
                     namespace: dep_id.namespace().to_string(),
@@ -921,6 +935,23 @@ mod tests {
         assert_eq!(
             render_template("{{ daemons.cache.url }}", &ctx).unwrap(),
             "redis://127.0.0.1:6381/0"
+        );
+    }
+
+    #[test]
+    fn test_portless_daemon_with_declared_url_is_referenceable() {
+        let me = DaemonId::new("myproj", "web");
+        let db = DaemonId::new("myproj", "db");
+        let mut db_config = unproxied_with_url("postgres://db.internal/app", vec![]);
+        db_config.port = None;
+        let mut configs = IndexMap::new();
+        configs.insert(db, db_config);
+
+        // Nothing resolved for `db`, as when boot startup drops portless records.
+        let ctx = TemplateContext::new(&me, &make_daemon_config("echo"), &HashMap::new(), &configs);
+        assert_eq!(
+            render_template("{{ daemons.db.url }}", &ctx).unwrap(),
+            "postgres://db.internal/app"
         );
     }
 
