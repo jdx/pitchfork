@@ -166,7 +166,7 @@ run = "./worker --api {{ daemons.api.url }}"
 ```
 
 The proxy URL is null when the proxy is disabled or no routable hostname is
-available; <code v-pre>{{ url }}</code> then falls back to a [declared `url`](#declared-url) if the daemon has one, and is null otherwise.
+available; <code v-pre>{{ url }}</code> then falls back to a [declared `url`](#declared-url) if the daemon has one and it renders, and is null otherwise.
 Automatic hostnames require a `port` and are disabled by `proxy = false`;
 existing slug mappings still apply. Label conflicts can also prevent an
 automatic hostname from being assigned.
