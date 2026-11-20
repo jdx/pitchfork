@@ -124,7 +124,8 @@
           "properties": {
             "as": {
               "description": "Local template name: `{{ daemons.<as> }}`.",
-              "type": "string"
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
             },
             "id": {
               "$ref": "#/$defs/DaemonId"

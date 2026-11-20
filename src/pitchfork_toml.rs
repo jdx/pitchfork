@@ -277,6 +277,7 @@ enum DependencySchema {
         id: DaemonId,
         /// Local template name: `{{ daemons.<as> }}`.
         #[serde(rename = "as")]
+        #[schemars(regex(pattern = r"^[A-Za-z0-9_-]+$"))]
         alias: String,
     },
 }
@@ -1382,13 +1383,31 @@ impl PitchforkToml {
     /// This is the original merge logic extracted from `all_merged_from` so that
     /// the cache layer can wrap it without duplicating the algorithm.
     fn all_merged_from_uncached(paths: &[PathBuf]) -> Result<PitchforkToml> {
+        Self::merge_paths(paths, None)
+    }
+
+    /// The merge `all_merged_from_uncached` performs, optionally with `edited`
+    /// standing in for the on-disk file it was read from (merged last when it
+    /// is not one of `paths`).
+    fn merge_paths(paths: &[PathBuf], edited: Option<&PitchforkToml>) -> Result<PitchforkToml> {
         use std::collections::HashMap as StdHashMap;
 
         let mut ns_to_origin: StdHashMap<String, (PathBuf, PathBuf)> = StdHashMap::new();
 
         let mut pt = Self::default();
+        let mut replaced = false;
         for p in paths {
-            match Self::read(p) {
+            let is_edited = edited.and_then(|e| e.path.as_deref()).is_some_and(|e| {
+                e == p || matches!((e.canonicalize(), p.canonicalize()), (Ok(a), Ok(b)) if a == b)
+            });
+            let read = match edited {
+                Some(e) if is_edited => {
+                    replaced = true;
+                    Ok(e.clone())
+                }
+                _ => Self::read(p),
+            };
+            match read {
                 Ok(pt2) => {
                     // Detect collisions for all existing project configs, including
                     // pitchfork.local.toml. Allow sibling base/local files in the same
@@ -1417,6 +1436,11 @@ impl PitchforkToml {
                 Err(e) => return Err(e.wrap_err(format!("error reading {}", p.display()))),
             }
         }
+        if let Some(e) = edited
+            && !replaced
+        {
+            pt.merge(e.clone());
+        }
         pt.validate_dependency_aliases()?;
         Ok(pt)
     }
@@ -1427,23 +1451,7 @@ impl PitchforkToml {
     /// `edited` replaces the file it was read from; if that file is not one of
     /// the project's config files, it is merged last.
     pub(crate) fn validate_aliases_after_save(cwd: &Path, edited: &PitchforkToml) -> Result<()> {
-        let mut merged = Self::default();
-        let mut replaced = false;
-        for p in Self::list_paths_from(cwd) {
-            let is_edited = edited.path.as_deref().is_some_and(|e| {
-                e == p || matches!((e.canonicalize(), p.canonicalize()), (Ok(a), Ok(b)) if a == b)
-            });
-            if is_edited {
-                replaced = true;
-                merged.merge(edited.clone());
-            } else if let Ok(pt) = Self::read(&p) {
-                merged.merge(pt);
-            }
-        }
-        if !replaced {
-            merged.merge(edited.clone());
-        }
-        merged.validate_dependency_aliases()
+        Self::merge_paths(&Self::list_paths_from(cwd), Some(edited)).map(|_| ())
     }
 
     /// Reject a `depends` `as` name that hides a daemon of the same namespace.
