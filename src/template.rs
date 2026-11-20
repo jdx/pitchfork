@@ -31,11 +31,45 @@ pub struct DaemonTemplateState {
     /// Hostname the proxy routes to this daemon, without the TLD.
     pub host: Option<String>,
     pub dir: PathBuf,
+    /// The `url` the daemon declares, still a template.
+    pub declared_url: Option<String>,
 }
 
 impl DaemonTemplateState {
     fn port(&self) -> Option<u16> {
         self.ports.first().copied()
+    }
+
+    /// The URL to hand out for this daemon: the proxy's when it serves the
+    /// daemon, otherwise the one the daemon declares, rendered with its own
+    /// port. `None` when neither exists or the declared one doesn't render.
+    fn url(&self) -> Option<String> {
+        crate::proxy::build_proxy_url(self.host.as_deref(), &settings())
+            .or_else(|| self.render_declared_url())
+    }
+
+    fn render_declared_url(&self) -> Option<String> {
+        let template = self.declared_url.as_deref()?;
+        let mut tera = new_tera();
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &self.port());
+        ctx.insert("ports", &self.ports);
+        ctx.insert("name", &self.name);
+        ctx.insert("namespace", &self.namespace);
+        ctx.insert("id", &self.id);
+        ctx.insert("slug", &self.slug);
+        ctx.insert("host", &self.host);
+        ctx.insert("dir", &self.dir.to_string_lossy());
+        let rendered = tera
+            .add_raw_template("url", template)
+            .and_then(|()| tera.render("url", &ctx));
+        match rendered {
+            Ok(url) => Some(url),
+            Err(e) => {
+                log::warn!("daemon {}: cannot render url {template:?}: {e}", self.id);
+                None
+            }
+        }
     }
 }
 
@@ -84,8 +118,16 @@ impl TemplateContext {
             effective_user.as_deref(),
         );
 
+        // The port the daemon is configured for. The supervisor settles the final
+        // one after rendering, so it can differ when the port is bumped; `$PORT`
+        // always has the final one.
+        let self_ports = daemon_config
+            .port
+            .as_ref()
+            .map(|p| p.expect.clone())
+            .unwrap_or_default();
         let self_state = DaemonTemplateState {
-            ports: Vec::new(),
+            ports: self_ports,
             id: id.qualified(),
             name: id.name().to_string(),
             namespace: id.namespace().to_string(),
@@ -95,6 +137,7 @@ impl TemplateContext {
             ),
             host: host_of(id, daemon_config),
             dir,
+            declared_url: daemon_config.url.clone(),
         };
 
         let mut daemon_states = HashMap::new();
@@ -117,6 +160,7 @@ impl TemplateContext {
                     ),
                     host: host_of(dep_id, config),
                     dir: dep_dir,
+                    declared_url: config.url.clone(),
                 };
 
                 // Short names are only valid within the current namespace.
@@ -166,6 +210,8 @@ impl TemplateContext {
         insert("id", self.self_state.id.clone().into());
         insert("slug", serde_json::json!(self.self_state.slug));
         insert("host", serde_json::json!(self.self_state.host));
+        insert("port", serde_json::json!(self.self_state.port()));
+        insert("ports", serde_json::json!(self.self_state.ports));
         insert(
             "dir",
             self.self_state.dir.to_string_lossy().to_string().into(),
@@ -199,8 +245,9 @@ impl TemplateContext {
         // via a strict null value instead of an undefined-variable error.
         let proxy_url = crate::proxy::build_proxy_url(self.self_state.host.as_deref(), &s);
         insert("proxy_url", serde_json::json!(proxy_url));
-        // `url` is the current spelling; `proxy_url` stays for existing configs.
-        insert("url", serde_json::json!(proxy_url));
+        // `url` is the proxy URL, or the one the daemon declares when the proxy
+        // doesn't serve it. `proxy_url` stays the proxy's alone.
+        insert("url", serde_json::json!(self.self_state.url()));
 
         // Rendered env for this daemon (set via set_env after env rendering)
         if let Some(ref env) = self.env {
@@ -224,7 +271,7 @@ fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
         "namespace": state.namespace,
         "slug": state.slug,
         "host": state.host,
-        "url": crate::proxy::build_proxy_url(state.host.as_deref(), &settings()),
+        "url": state.url(),
         "dir": state.dir.to_string_lossy(),
     })
 }
@@ -566,6 +613,26 @@ fn contains_template_syntax(template: &str) -> bool {
     template.contains("{{") || template.contains("{%") || template.contains("{#")
 }
 
+fn new_tera() -> tera::Tera {
+    let mut tera = tera::Tera::default();
+    tera.register_filter(
+        "default",
+        |value: &tera::Value,
+         kwargs: tera::Kwargs,
+         _: &tera::State|
+         -> tera::TeraResult<tera::Value> {
+            let default_val = kwargs.must_get::<tera::Value>("value")?;
+            let boolean = kwargs.get::<bool>("boolean")?.unwrap_or_default();
+            if value.is_undefined() || value.is_none() || (boolean && !value.is_truthy()) {
+                Ok(default_val)
+            } else {
+                Ok(value.clone())
+            }
+        },
+    );
+    tera
+}
+
 struct TemplateRenderer {
     tera: tera::Tera,
     context: tera::Context,
@@ -574,24 +641,8 @@ struct TemplateRenderer {
 
 impl TemplateRenderer {
     fn new(context: &TemplateContext) -> Self {
-        let mut tera = tera::Tera::default();
-        tera.register_filter(
-            "default",
-            |value: &tera::Value,
-             kwargs: tera::Kwargs,
-             _: &tera::State|
-             -> tera::TeraResult<tera::Value> {
-                let default_val = kwargs.must_get::<tera::Value>("value")?;
-                let boolean = kwargs.get::<bool>("boolean")?.unwrap_or_default();
-                if value.is_undefined() || value.is_none() || (boolean && !value.is_truthy()) {
-                    Ok(default_val)
-                } else {
-                    Ok(value.clone())
-                }
-            },
-        );
         Self {
-            tera,
+            tera: new_tera(),
             context: context.to_tera_context(),
             next_template_id: 0,
         }
@@ -814,6 +865,73 @@ mod tests {
         assert_eq!(
             ctx.self_state.host,
             ctx.daemon_states.get("api").unwrap().host
+        );
+    }
+
+    fn unproxied_with_url(url: &str, expect: Vec<u16>) -> PitchforkTomlDaemon {
+        PitchforkTomlDaemon {
+            run: "server".into(),
+            proxy: Some(crate::config_types::ProxyConfig::Disabled),
+            url: Some(url.to_string()),
+            port: Some(crate::config_types::PortConfig {
+                expect,
+                ..Default::default()
+            }),
+            ..PitchforkTomlDaemon::default()
+        }
+    }
+
+    #[test]
+    fn test_self_port_and_ports() {
+        let id = DaemonId::new("myproj", "api");
+        let config = unproxied_with_url("x", vec![4300, 4301]);
+        let ctx = TemplateContext::new(&id, &config, &HashMap::new(), &IndexMap::new());
+        assert_eq!(render_template("{{ port }}", &ctx).unwrap(), "4300");
+        assert_eq!(render_template("{{ ports[1] }}", &ctx).unwrap(), "4301");
+    }
+
+    #[test]
+    fn test_declared_url_is_used_without_the_proxy() {
+        let id = DaemonId::new("myproj", "cache");
+        let config = unproxied_with_url("redis://127.0.0.1:{{ port }}/0", vec![6380]);
+        let ctx = TemplateContext::new(&id, &config, &HashMap::new(), &IndexMap::new());
+        assert_eq!(
+            render_template("{{ url }}", &ctx).unwrap(),
+            "redis://127.0.0.1:6380/0"
+        );
+        // `proxy_url` stays the proxy's alone.
+        assert_eq!(
+            render_template("{{ proxy_url | default(value=\"none\") }}", &ctx).unwrap(),
+            "none"
+        );
+    }
+
+    #[test]
+    fn test_referenced_declared_url_uses_the_resolved_port() {
+        let me = DaemonId::new("myproj", "web");
+        let cache = DaemonId::new("myproj", "cache");
+        let cache_config = unproxied_with_url("redis://127.0.0.1:{{ port }}/0", vec![6380]);
+        let mut configs = IndexMap::new();
+        configs.insert(cache.clone(), cache_config);
+        // The port was bumped from the configured 6380.
+        let mut resolved = HashMap::new();
+        resolved.insert(cache, vec![6381]);
+
+        let ctx = TemplateContext::new(&me, &make_daemon_config("echo"), &resolved, &configs);
+        assert_eq!(
+            render_template("{{ daemons.cache.url }}", &ctx).unwrap(),
+            "redis://127.0.0.1:6381/0"
+        );
+    }
+
+    #[test]
+    fn test_unrenderable_declared_url_is_null() {
+        let id = DaemonId::new("myproj", "api");
+        let config = unproxied_with_url("{{ nope }}", vec![4300]);
+        let ctx = TemplateContext::new(&id, &config, &HashMap::new(), &IndexMap::new());
+        assert_eq!(
+            render_template("{{ url | default(value=\"none\") }}", &ctx).unwrap(),
+            "none"
         );
     }
 
