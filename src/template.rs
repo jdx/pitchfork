@@ -66,7 +66,8 @@ impl DaemonTemplateState {
         match rendered {
             Ok(url) => Some(url),
             Err(e) => {
-                log::warn!("daemon {}: cannot render url {template:?}: {e}", self.id);
+                // The template is left out: a declared url can carry credentials.
+                log::warn!("daemon {}: cannot render its declared url: {e}", self.id);
                 None
             }
         }
