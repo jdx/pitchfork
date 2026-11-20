@@ -165,7 +165,8 @@ run = "./worker --api {{ daemons.api.url }}"
 # Renders to: ./worker --api https://api.myproj.localhost
 ```
 
-The URL is null when the proxy is disabled or no routable hostname is available.
+The proxy URL is null when the proxy is disabled or no routable hostname is
+available; <code v-pre>{{ url }}</code> then falls back to a [declared `url`](#declared-url) if the daemon has one, and is null otherwise.
 Automatic hostnames require a `port` and are disabled by `proxy = false`;
 existing slug mappings still apply. Label conflicts can also prevent an
 automatic hostname from being assigned.
@@ -179,11 +180,13 @@ a `url`.
 ### Declared URL
 
 When the proxy doesn't serve a daemon (`proxy = false`, the proxy is off, the
-daemon sets no `port`, or no hostname can be derived for it),
-<code v-pre>{{ url }}</code> is null. The proxy doesn't check a daemon's
-protocol, so a non-HTTP daemon with a `port` must set `proxy = false` to get its
-declared URL. A daemon can declare the URL it answers on with `url`, so consumers don't have to guess the
-scheme and host from the port:
+daemon sets no `port`, or no hostname can be derived for it), there is no proxy
+URL. A daemon can declare the URL it answers on with `url`, so consumers don't
+have to guess the scheme and host from the port.
+<code v-pre>{{ url }}</code> then uses the declared `url`, and is null only when
+the daemon declares none or it fails to render. The proxy doesn't check a
+daemon's protocol, so a non-HTTP daemon with a `port` must set `proxy = false`
+to get its declared URL:
 
 ```toml
 [daemons.cache]
