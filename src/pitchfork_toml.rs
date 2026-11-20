@@ -1423,7 +1423,34 @@ impl PitchforkToml {
                 Err(e) => return Err(e.wrap_err(format!("error reading {}", p.display()))),
             }
         }
+        pt.validate_dependency_aliases()?;
         Ok(pt)
+    }
+
+    /// Reject a `depends` `as` name that hides a daemon of the same namespace.
+    ///
+    /// Parsing checks one file; a daemon in another file of the merged
+    /// configuration can only be seen here.
+    fn validate_dependency_aliases(&self) -> Result<()> {
+        for (id, daemon) in &self.daemons {
+            for (alias, target) in &daemon.depends_as {
+                let Ok(clash) = DaemonId::try_new(id.namespace(), alias) else {
+                    continue;
+                };
+                if clash != *target && self.daemons.contains_key(&clash) {
+                    return Err(ConfigParseError::InvalidDependency {
+                        daemon: id.name().to_string(),
+                        dependency: target.qualified(),
+                        path: daemon.path.clone().unwrap_or_default(),
+                        reason: format!(
+                            "`as` name {alias:?} clashes with the daemon {alias:?} in this namespace"
+                        ),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1538,7 +1565,9 @@ impl PitchforkToml {
                     }
                     depends_as.insert(alias, dep_id.clone());
                 }
-                depends.push(dep_id);
+                if !depends.contains(&dep_id) {
+                    depends.push(dep_id);
+                }
             }
 
             // Resolve port config: prefer new `port` field, fall back to deprecated fields
@@ -1937,18 +1966,25 @@ impl PitchforkToml {
                     depends: daemon
                         .depends
                         .iter()
-                        .map(|d| {
+                        .flat_map(|d| {
                             let id = if d.namespace() == config_namespace {
                                 d.name().to_string()
                             } else {
                                 d.qualified()
                             };
-                            match daemon.depends_as.iter().find(|(_, target)| *target == d) {
-                                Some((alias, _)) => DependencyRaw::Named {
-                                    id,
+                            let aliases: Vec<DependencyRaw> = daemon
+                                .depends_as
+                                .iter()
+                                .filter(|(_, target)| *target == d)
+                                .map(|(alias, _)| DependencyRaw::Named {
+                                    id: id.clone(),
                                     alias: alias.clone(),
-                                },
-                                None => DependencyRaw::Id(id),
+                                })
+                                .collect();
+                            if aliases.is_empty() {
+                                vec![DependencyRaw::Id(id)]
+                            } else {
+                                aliases
                             }
                         })
                         .collect(),
@@ -2952,6 +2988,42 @@ depends = [{ id = "a/x", as = "my.search" }]
         ] {
             assert!(parse_daemons(toml).is_err(), "{case} should be rejected");
         }
+    }
+
+    #[test]
+    fn test_depends_as_write_keeps_every_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pitchfork.toml");
+        std::fs::write(
+            &path,
+            r#"
+[daemons.app]
+run = "app"
+depends = [{ id = "other/db", as = "read" }, { id = "other/db", as = "write" }]
+"#,
+        )
+        .unwrap();
+        let pt = PitchforkToml::read(&path).unwrap();
+        pt.write().unwrap();
+        let again = PitchforkToml::read(&path).unwrap();
+        let app = again.daemons.values().next().unwrap();
+        assert_eq!(app.depends.len(), 1);
+        assert_eq!(app.depends_as.len(), 2);
+        assert!(app.depends_as.contains_key("read") && app.depends_as.contains_key("write"));
+    }
+
+    #[test]
+    fn test_depends_as_clash_across_files_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("pitchfork.toml");
+        let b = dir.path().join("pitchfork.local.toml");
+        std::fs::write(&a, "[daemons.db]\nrun = \"db\"\n").unwrap();
+        std::fs::write(
+            &b,
+            "[daemons.app]\nrun = \"app\"\ndepends = [{ id = \"other/x\", as = \"db\" }]\n",
+        )
+        .unwrap();
+        assert!(PitchforkToml::all_merged_from_uncached(&[a, b]).is_err());
     }
 
     #[test]
