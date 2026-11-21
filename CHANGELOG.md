@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.36.0](https://github.com/jdx/pitchfork/compare/v2.35.0...v2.36.0) - 2026-11-21
+
+### Added
+
+- *(config)* declare a daemon url for templates when the proxy doesn't serve it ([#1146](https://github.com/jdx/pitchfork/pull/1146))
+- *(config)* name a dependency for templates with depends `as` ([#1144](https://github.com/jdx/pitchfork/pull/1144))
+- *(proxy)* forward a slug under its public URL ([#1141](https://github.com/jdx/pitchfork/pull/1141))
+
+### Fixed
+
+- *(deps)* update rust crates ([#1134](https://github.com/jdx/pitchfork/pull/1134))
+
+### Other
+
+- *(deps)* lock file maintenance ([#1135](https://github.com/jdx/pitchfork/pull/1135))
+- *(supervisor)* fix flaky Windows port-conflict test ([#1136](https://github.com/jdx/pitchfork/pull/1136))
+- *(deps)* update rust crate usage_rs to v7.4.0 ([#1138](https://github.com/jdx/pitchfork/pull/1138))
+
 ## [2.35.0](https://github.com/jdx/pitchfork/compare/v2.34.0...v2.35.0) - 2026-11-14
 
 ### Added
