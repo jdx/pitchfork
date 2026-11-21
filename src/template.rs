@@ -995,6 +995,10 @@ mod tests {
         on.proxy.enable = true;
         on.proxy.https = false;
         on.proxy.port = 7777;
+        // Pin what the host's config or environment could otherwise change.
+        on.proxy.tld = "localhost".into();
+        on.proxy.lan = false;
+        on.proxy.lan_ip = String::new();
         assert_eq!(
             state.url_with(&on).as_deref(),
             Some("http://api.myproj.localhost:7777")
