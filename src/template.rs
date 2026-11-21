@@ -65,9 +65,10 @@ impl DaemonTemplateState {
             .and_then(|()| tera.render("url", &ctx));
         match rendered {
             Ok(url) => Some(url),
-            Err(e) => {
-                // The template is left out: a declared url can carry credentials.
-                log::warn!("daemon {}: cannot render its declared url: {e}", self.id);
+            Err(_) => {
+                // Neither the template nor the error goes in the log: a declared
+                // url can carry credentials, and a render error may quote it.
+                log::warn!("daemon {}: cannot render its declared url", self.id);
                 None
             }
         }
