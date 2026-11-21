@@ -171,7 +171,8 @@ Automatic hostnames require a `port` and are disabled by `proxy = false`;
 existing slug mappings still apply. Label conflicts can also prevent an
 automatic hostname from being assigned.
 
-The daemon receives the same URL as `PITCHFORK_URL` in its environment.
+The daemon receives the proxy URL as `PITCHFORK_URL` in its environment; it
+matches <code v-pre>{{ proxy_url }}</code>, not a declared `url`.
 <code v-pre>{{ host }}</code> contains the hostname without the TLD, such as
 `api.myproj`. <code v-pre>{{ proxy_url }}</code> is the proxy URL alone: it
 stays null for a daemon the proxy doesn't serve, even when the daemon declares
@@ -204,10 +205,11 @@ env.REDIS_URL = "{{ daemons.cache.url }}"
 ```
 
 The declared `url` is a template. In it, <code v-pre>{{ port }}</code> and
-<code v-pre>{{ ports }}</code> are the daemon's own ports, so `url` follows the
-port when it changes. When another daemon reads
-<code v-pre>{{ daemons.cache.url }}</code>, they are the ports the daemon
-actually got, including a bump. The proxy URL wins whenever there is one, because
+<code v-pre>{{ ports }}</code> are the daemon's own ports. When another daemon
+reads <code v-pre>{{ daemons.cache.url }}</code>, they are the ports the daemon
+actually got, including a bump, so the URL follows the port. The daemon's own
+<code v-pre>{{ url }}</code> is built from its configured ports, so it can be
+stale after a bump. The proxy URL wins whenever there is one, because
 it's stable across checkouts. To always get the direct address, set
 `proxy = false` and remove any legacy slug mapping for the daemon, since a slug
 still gets a proxy URL. A daemon without `url` behaves as before.

@@ -44,7 +44,11 @@ impl DaemonTemplateState {
     /// daemon, otherwise the one the daemon declares, rendered with its own
     /// port. `None` when neither exists or the declared one doesn't render.
     fn url(&self) -> Option<String> {
-        crate::proxy::build_proxy_url(self.host.as_deref(), &settings())
+        self.url_with(&settings())
+    }
+
+    fn url_with(&self, settings: &crate::settings::Settings) -> Option<String> {
+        crate::proxy::build_proxy_url(self.host.as_deref(), settings)
             .or_else(|| self.render_declared_url())
     }
 
@@ -972,6 +976,34 @@ mod tests {
         assert_eq!(
             render_template("{{ daemons.db.url }}", &ctx).unwrap(),
             "postgres://db.internal/app"
+        );
+    }
+
+    #[test]
+    fn test_proxy_url_wins_over_a_declared_url() {
+        let state = DaemonTemplateState {
+            ports: vec![4300],
+            id: "myproj/api".into(),
+            name: "api".into(),
+            namespace: "myproj".into(),
+            slug: None,
+            host: Some("api.myproj".into()),
+            dir: PathBuf::new(),
+            declared_url: Some("http://127.0.0.1:{{ port }}".into()),
+        };
+        let mut on = (*settings()).clone();
+        on.proxy.enable = true;
+        on.proxy.https = false;
+        on.proxy.port = 7777;
+        assert_eq!(
+            state.url_with(&on).as_deref(),
+            Some("http://api.myproj.localhost:7777")
+        );
+        let mut off = on.clone();
+        off.proxy.enable = false;
+        assert_eq!(
+            state.url_with(&off).as_deref(),
+            Some("http://127.0.0.1:4300")
         );
     }
 
