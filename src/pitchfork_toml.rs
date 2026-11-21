@@ -364,6 +364,9 @@ struct PitchforkTomlDaemonRaw {
     pub watch_mode: Option<WatchMode>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub dir: Option<String>,
+    /// The URL the daemon answers on, used when the proxy isn't serving it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -1809,6 +1812,7 @@ impl PitchforkToml {
                 watch: raw_daemon.watch,
                 watch_mode: raw_daemon.watch_mode.unwrap_or_default(),
                 dir: raw_daemon.dir,
+                url: raw_daemon.url,
                 env: raw_daemon.env,
                 env_file: raw_daemon.env_file,
                 hooks: raw_daemon.hooks,
@@ -2039,6 +2043,7 @@ impl PitchforkToml {
                         mode => Some(mode),
                     },
                     dir: daemon.dir.clone(),
+                    url: daemon.url.clone(),
                     env: daemon.env.clone(),
                     env_file: daemon.env_file.clone(),
                     hooks: daemon.hooks.clone(),
@@ -2676,6 +2681,12 @@ pub struct PitchforkTomlDaemon {
     pub watch_mode: WatchMode,
     /// Working directory for the daemon. Relative paths are resolved from the pitchfork.toml location.
     pub dir: Option<String>,
+    /// The URL this daemon answers on, for `{{ url }}` and `{{ daemons.<name>.url }}`
+    /// when the proxy isn't serving it (`proxy = false`, the proxy is off, or the
+    /// daemon has no `port` or routable hostname). A Tera template that can use `{{ port }}` and
+    /// `{{ ports }}`, such as `redis://127.0.0.1:{{ port }}/0`. The proxy URL wins
+    /// when there is one.
+    pub url: Option<String>,
     /// Environment variables to set for the daemon process
     pub env: Option<IndexMap<String, String>>,
     /// Dotenv files (e.g. `.env.local`) whose variables are added to the daemon's

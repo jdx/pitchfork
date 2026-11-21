@@ -57,7 +57,8 @@ Templates work in these configuration fields:
 
 Health check fields (`health_cmd`, `health_http`, and `health_port`) also accept
 templates. These examples reference dependencies; use `$PORT` in commands for
-the current daemon's own assigned port.
+the current daemon's own assigned port, which can differ from its configured
+<code v-pre>{{ port }}</code> after a bump.
 
 ## Template Variables
 
@@ -72,7 +73,9 @@ The current daemon's own metadata is always available:
 | <code v-pre>{{ id }}</code> | Qualified ID | `"myproj/api"` |
 | <code v-pre>{{ slug }}</code> | Legacy proxy slug alias (or null) | `"myapi"` |
 | <code v-pre>{{ host }}</code> | Proxy hostname without the TLD (or null) | `"api.myproj"` |
-| <code v-pre>{{ url }}</code> | Full proxy URL (or null) | `"https://api.myproj.localhost"` |
+| <code v-pre>{{ url }}</code> | Full proxy URL, else the daemon's declared [`url`](#declared-url) (or null) | `"https://api.myproj.localhost"` |
+| <code v-pre>{{ port }}</code> | First configured port (or null) | `3000` |
+| <code v-pre>{{ ports }}</code> | All configured ports | `[3000, 3001]` |
 | <code v-pre>{{ dir }}</code> | Resolved working directory | `"/home/user/myproj"` |
 
 ### Daemon References
@@ -89,7 +92,7 @@ Reference same-namespace daemons by their short name:
 | <code v-pre>{{ daemons.redis.namespace }}</code> | Namespace | `"myproj"` |
 | <code v-pre>{{ daemons.redis.slug }}</code> | Legacy slug alias | `"myredis"` |
 | <code v-pre>{{ daemons.redis.host }}</code> | Proxy hostname without the TLD | `"redis.myproj"` |
-| <code v-pre>{{ daemons.redis.url }}</code> | Full proxy URL | `"https://redis.myproj.localhost"` |
+| <code v-pre>{{ daemons.redis.url }}</code> | Full proxy URL, else its declared `url` | `"https://redis.myproj.localhost"` |
 | <code v-pre>{{ daemons.redis.dir }}</code> | Working directory | `"/home/user/myproj"` |
 
 ::: tip
@@ -183,15 +186,60 @@ run = "./worker --api {{ daemons.api.url }}"
 # Renders to: ./worker --api https://api.myproj.localhost
 ```
 
-The URL is null when the proxy is disabled or no routable hostname is available.
+The proxy URL is null when the proxy is disabled or no routable hostname is
+available; <code v-pre>{{ url }}</code> then falls back to a [declared `url`](#declared-url) if the daemon has one and it renders, and is null otherwise.
 Automatic hostnames require a `port` and are disabled by `proxy = false`;
 existing slug mappings still apply. Label conflicts can also prevent an
 automatic hostname from being assigned.
 
-The daemon receives the same URL as `PITCHFORK_URL` in its environment.
+The daemon receives the proxy URL as `PITCHFORK_URL` in its environment; it
+matches <code v-pre>{{ proxy_url }}</code>, not a declared `url`.
 <code v-pre>{{ host }}</code> contains the hostname without the TLD, such as
-`api.myproj`. <code v-pre>{{ proxy_url }}</code> remains an alias for
-<code v-pre>{{ url }}</code>.
+`api.myproj`. <code v-pre>{{ proxy_url }}</code> is the proxy URL alone: it
+stays null for a daemon the proxy doesn't serve, even when the daemon declares
+a `url`.
+
+### Declared URL
+
+When the proxy doesn't serve a daemon (`proxy = false`, the proxy is off, the
+daemon sets no `port`, or no hostname can be derived for it), there is no proxy
+URL. With the proxy enabled, a legacy slug mapping is the exception: it still gives
+the daemon a proxy URL, which wins over the declared one. A daemon can declare the URL it answers on with `url`, so consumers don't
+have to guess the scheme and host from the port.
+<code v-pre>{{ url }}</code> then uses the declared `url`, and is null only when
+the daemon declares none or it fails to render. The proxy doesn't check a
+daemon's protocol, so a non-HTTP daemon with a `port` must set `proxy = false`
+to get its declared URL:
+
+```toml
+[daemons.cache]
+run = "redis-server --port $PORT"
+port = 6380
+proxy = false
+url = "redis://127.0.0.1:{{ port }}/0"
+
+[daemons.web]
+depends = ["cache"]
+run = "./web"
+env.REDIS_URL = "{{ daemons.cache.url }}"
+# REDIS_URL: redis://127.0.0.1:6380/0
+```
+
+The declared `url` is a template. In it, <code v-pre>{{ port }}</code> and
+<code v-pre>{{ ports }}</code> are the daemon's own ports. When another daemon
+reads <code v-pre>{{ daemons.cache.url }}</code>, they are the ports the daemon
+actually got, including a bump, so the URL follows the port. The daemon's own
+<code v-pre>{{ url }}</code> is built from its configured ports, so it can be
+stale after a bump. The proxy URL wins whenever there is one, because
+it's stable across checkouts. To always get the direct address, set
+`proxy = false` and remove any legacy slug mapping for the daemon, since a slug
+still gets a proxy URL. A daemon without `url` behaves as before.
+
+::: tip
+Elsewhere in a daemon's own config, <code v-pre>{{ port }}</code> is the port it
+is configured for. If port bumping moves it, `$PORT` in the command has the port
+it actually got.
+:::
 
 ## Resolution Order
 
@@ -205,7 +253,7 @@ Level 2: worker   (depends on api, templates can reference redis and api)
 
 - Daemons within the same level start concurrently and **cannot** reference each other's ports
 - A daemon can reference any daemon that completed successfully in a previous level
-- `port` and `ports` for the current daemon are **not** available at template rendering time (ports are resolved after the command is constructed). Use the `$PORT` / `$PORT0`, `$PORT1`, ... environment variables to access the current daemon's own resolved ports. Use <code v-pre>{{ daemons.xxx.port }}</code> to reference **dependencies'** ports instead
+- <code v-pre>{{ port }}</code> and <code v-pre>{{ ports }}</code> for the current daemon are the ports it is **configured** for. The final ports are resolved after the command is constructed, so a bumped port can differ. Use the `$PORT` / `$PORT0`, `$PORT1`, ... environment variables to access the current daemon's own resolved ports. <code v-pre>{{ daemons.xxx.port }}</code> for a **dependency** is its resolved port
 
 ## Error Handling
 
