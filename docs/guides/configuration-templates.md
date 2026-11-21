@@ -181,8 +181,8 @@ a `url`.
 
 When the proxy doesn't serve a daemon (`proxy = false`, the proxy is off, the
 daemon sets no `port`, or no hostname can be derived for it), there is no proxy
-URL. A legacy slug mapping is the exception: it still gives the daemon a proxy
-URL, which wins over the declared one. A daemon can declare the URL it answers on with `url`, so consumers don't
+URL. With the proxy enabled, a legacy slug mapping is the exception: it still gives
+the daemon a proxy URL, which wins over the declared one. A daemon can declare the URL it answers on with `url`, so consumers don't
 have to guess the scheme and host from the port.
 <code v-pre>{{ url }}</code> then uses the declared `url`, and is null only when
 the daemon declares none or it fails to render. The proxy doesn't check a
