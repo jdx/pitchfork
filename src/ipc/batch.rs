@@ -842,6 +842,35 @@ impl IpcClient {
             // Resolve dependencies to get start order (levels)
             let dep_order = resolve_dependencies(&config_ids, &pt.daemons)?;
 
+            // A copy of a daemon template can use the other running daemons of
+            // its instance, not only those it depends on, as when the
+            // supervisor renders it. What this start runs is added level by
+            // level below instead, so a restarted daemon's new port wins.
+            let in_order: HashSet<&DaemonId> = dep_order.levels.iter().flatten().collect();
+            let instances: HashSet<(&str, &str, &str)> = in_order
+                .iter()
+                .filter_map(|id| {
+                    let instance = pt.daemons.get(*id)?.instance.as_ref()?;
+                    Some((
+                        id.namespace(),
+                        instance.template.as_str(),
+                        instance.name.as_str(),
+                    ))
+                })
+                .collect();
+            for (id, ports) in &running_ports_map {
+                let same_instance = pt
+                    .daemons
+                    .get(id)
+                    .and_then(|d| d.instance.as_ref())
+                    .is_some_and(|i| {
+                        instances.contains(&(id.namespace(), i.template.as_str(), i.name.as_str()))
+                    });
+                if same_instance && !in_order.contains(id) {
+                    resolved_ports_map.insert(id.clone(), ports.clone());
+                }
+            }
+
             for (level_idx, level) in dep_order.levels.iter().enumerate() {
                 let is_last_level = level_idx == dep_order.levels.len() - 1;
                 let mut successful_this_level: Vec<(DaemonId, Vec<u16>)> = Vec::new();

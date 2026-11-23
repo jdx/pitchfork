@@ -10,7 +10,7 @@
 //! had their ports resolved).
 
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::PitchforkTomlDaemon;
+use crate::pitchfork_toml::{PitchforkTomlDaemon, TemplateInstance};
 use crate::settings::settings;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -33,6 +33,8 @@ pub struct DaemonTemplateState {
     pub dir: PathBuf,
     /// The `url` the daemon declares, still a template.
     pub declared_url: Option<String>,
+    /// The daemon template instance the daemon is a copy for, if any.
+    pub instance: Option<TemplateInstance>,
 }
 
 impl DaemonTemplateState {
@@ -64,6 +66,8 @@ impl DaemonTemplateState {
         ctx.insert("slug", &self.slug);
         ctx.insert("host", &self.host);
         ctx.insert("dir", &self.dir.to_string_lossy());
+        ctx.insert("instance", &self.instance.as_ref().map(|i| &i.name));
+        ctx.insert("instance_index", &self.instance.as_ref().map(|i| i.index));
         let rendered = tera
             .add_raw_template("url", template)
             .and_then(|()| tera.render("url", &ctx));
@@ -92,6 +96,8 @@ pub struct TemplateContext {
     /// values have been rendered, so it is `None` during env-value rendering
     /// itself (preventing self-reference cycles).
     env: Option<IndexMap<String, String>>,
+    /// The daemon template instance the daemon is a copy for, if any.
+    instance: Option<TemplateInstance>,
 }
 
 impl TemplateContext {
@@ -144,6 +150,7 @@ impl TemplateContext {
             host: host_of(id, daemon_config),
             dir,
             declared_url: daemon_config.url.clone(),
+            instance: daemon_config.instance.clone(),
         };
 
         // A daemon that is configured without any port (none, or `port = []`) has no resolved ports to
@@ -160,7 +167,15 @@ impl TemplateContext {
             })
             .map(|(dep_id, _)| (dep_id, Vec::new()));
 
-        let mut daemon_states = HashMap::new();
+        // Qualified keys first: a short name in this namespace wins over the
+        // qualified key of another namespace that reads the same, whatever
+        // the order of `depends`.
+        let mut qualified_states = HashMap::new();
+        // By id for `as` names: two ids can share a qualified key, such as
+        // `app/t.0.api` and `app.t/0.api`.
+        let mut states_by_id: HashMap<&DaemonId, DaemonTemplateState> = HashMap::new();
+        let mut short_names = Vec::new();
+        let mut siblings = Vec::new();
         for (dep_id, ports) in resolved_daemons
             .iter()
             .map(|(dep_id, ports)| (dep_id, ports.clone()))
@@ -185,21 +200,42 @@ impl TemplateContext {
                     host: host_of(dep_id, config),
                     dir: dep_dir,
                     declared_url: config.url.clone(),
+                    instance: config.instance.clone(),
                 };
 
                 // Short names are only valid within the current namespace.
                 if dep_id.namespace() == id.namespace() {
-                    daemon_states.insert(dep_id.name().to_string(), state.clone());
+                    short_names.push((dep_id.name().to_string(), state.clone()));
+                    if let Some(name) = sibling_name(daemon_config, dep_id, config) {
+                        siblings.push((name.to_string(), state.clone()));
+                    }
                 }
 
                 // Register with qualified key (namespace.name) for all namespaces.
-                daemon_states.insert(qualified_key(dep_id), state);
+                qualified_states.insert(qualified_key(dep_id), state.clone());
+                states_by_id.insert(dep_id, state);
             }
         }
 
+        let mut daemon_states = qualified_states;
+        daemon_states.extend(short_names);
+
+        // In a copy of a daemon template, the other daemons of its instance go
+        // by their template names, over regular daemons of the same name. A
+        // template name stays taken while its copy has no resolved port, so
+        // it fails to render rather than naming the regular daemon.
+        for (other_id, other) in daemon_configs {
+            if other_id.namespace() == id.namespace()
+                && let Some(name) = sibling_name(daemon_config, other_id, other)
+            {
+                daemon_states.remove(name);
+            }
+        }
+        daemon_states.extend(siblings);
+
         // Names the daemon chose for its dependencies with `depends = [{ id, as }]`.
         for (alias, dep_id) in &daemon_config.depends_as {
-            if let Some(state) = daemon_states.get(&qualified_key(dep_id)).cloned() {
+            if let Some(state) = states_by_id.get(dep_id).cloned() {
                 daemon_states.insert(alias.clone(), state);
             }
         }
@@ -208,6 +244,7 @@ impl TemplateContext {
             self_state,
             daemon_states,
             env: None,
+            instance: daemon_config.instance.clone(),
         }
     }
 
@@ -246,6 +283,15 @@ impl TemplateContext {
         insert(
             "dir",
             self.self_state.dir.to_string_lossy().to_string().into(),
+        );
+        // Null outside a daemon template, so `{% if instance %}` works anywhere.
+        insert(
+            "instance",
+            serde_json::json!(self.instance.as_ref().map(|i| &i.name)),
+        );
+        insert(
+            "instance_index",
+            serde_json::json!(self.instance.as_ref().map(|i| i.index)),
         );
 
         // Daemons
@@ -291,6 +337,22 @@ impl TemplateContext {
 
         map
     }
+}
+
+/// The template name of `other` when it is a copy in the same daemon template
+/// instance as `own`: `api` for `workers.1.api` seen from `workers.1.web`.
+fn sibling_name<'a>(
+    own: &PitchforkTomlDaemon,
+    other_id: &'a DaemonId,
+    other: &PitchforkTomlDaemon,
+) -> Option<&'a str> {
+    let (own, other) = (own.instance.as_ref()?, other.instance.as_ref()?);
+    if own.template != other.template || own.name != other.name {
+        return None;
+    }
+    other_id
+        .name()
+        .strip_prefix(&format!("{}.{}.", other.template, other.name))
 }
 
 fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
@@ -817,6 +879,140 @@ mod tests {
     }
 
     #[test]
+    fn test_template_instance_variables_and_sibling_name() {
+        // A copy of a daemon template: `api` is its own instance's api, even
+        // with a regular `api` daemon in the namespace, and `db` is its
+        // instance's db although `web` only depends on `api`.
+        let copy = |name: &str| {
+            let mut config = make_daemon_config("echo");
+            config.instance = Some(TemplateInstance {
+                template: "w".into(),
+                name: "feat".into(),
+                index: 2,
+            });
+            (DaemonId::new("app", format!("w.feat.{name}")), config)
+        };
+        let (self_id, mut self_config) = copy("web");
+        let (api, mut api_config) = copy("api");
+        let (db, db_config) = copy("db");
+        let (_, mut other_db_config) = copy("db");
+        let other_db = DaemonId::new("app", "w.main.db");
+        other_db_config.instance.as_mut().unwrap().name = "main".into();
+        let shared = DaemonId::new("app", "api");
+        self_config.depends = vec![api.clone()];
+        api_config.url = Some("https://{{ instance }}-{{ instance_index }}.example.test".into());
+
+        let resolved = HashMap::from([
+            (api.clone(), vec![4002]),
+            (db.clone(), vec![5002]),
+            (other_db.clone(), vec![5001]),
+            (shared.clone(), vec![3000]),
+        ]);
+        let configs = IndexMap::from([
+            (api, api_config),
+            (db, db_config),
+            (other_db, other_db_config),
+            (shared, make_daemon_config("echo")),
+        ]);
+        let ctx = TemplateContext::new(&self_id, &self_config, &resolved, &configs);
+
+        assert_eq!(
+            render_template("{{ instance }}-{{ instance_index }}", &ctx).unwrap(),
+            "feat-2"
+        );
+        assert_eq!(
+            render_template("{{ daemons.api.port }}", &ctx).unwrap(),
+            "4002"
+        );
+        assert_eq!(
+            render_template("{{ daemons.db.port }}", &ctx).unwrap(),
+            "5002"
+        );
+        assert_eq!(
+            render_template("{{ daemons.api.url }}", &ctx).unwrap(),
+            "https://feat-2.example.test"
+        );
+
+        let plain = make_context_with_daemon("redis", vec![6379]);
+        assert_eq!(
+            render_template("{% if instance %}copy{% else %}plain{% endif %}", &plain).unwrap(),
+            "plain"
+        );
+    }
+
+    #[test]
+    fn test_unresolved_sibling_hides_a_regular_daemon_of_the_same_name() {
+        let copy = |name: &str| {
+            let mut config = make_daemon_config("echo");
+            config.instance = Some(TemplateInstance {
+                template: "stack".into(),
+                name: "green".into(),
+                index: 1,
+            });
+            (DaemonId::new("app", format!("stack.green.{name}")), config)
+        };
+        let (self_id, self_config) = copy("web");
+        let (api, api_config) = copy("api");
+        let shared = DaemonId::new("app", "api");
+        let resolved = HashMap::from([(shared.clone(), vec![3000])]);
+        let configs = IndexMap::from([(api, api_config), (shared, make_daemon_config("echo"))]);
+        let ctx = TemplateContext::new(&self_id, &self_config, &resolved, &configs);
+
+        assert!(render_template("{{ daemons.api.port }}", &ctx).is_err());
+        assert_eq!(
+            render_template("{{ daemons[\"app.api\"].port }}", &ctx).unwrap(),
+            "3000"
+        );
+    }
+
+    #[test]
+    fn test_as_name_resolves_by_id_not_by_qualified_key() {
+        // `app/t.0.api` and `app.t/0.api` both read `app.t.0.api`.
+        let local = DaemonId::new("app", "t.0.api");
+        let foreign = DaemonId::new("app.t", "0.api");
+        for order in [[&local, &foreign], [&foreign, &local]] {
+            let mut config = make_daemon_config("echo");
+            config.depends = order.iter().map(|id| (*id).clone()).collect();
+            config.depends_as = IndexMap::from([("external".to_string(), foreign.clone())]);
+            let resolved =
+                HashMap::from([(local.clone(), vec![4000]), (foreign.clone(), vec![5000])]);
+            let configs = order
+                .iter()
+                .map(|id| ((*id).clone(), make_daemon_config("echo")))
+                .collect();
+            let ctx =
+                TemplateContext::new(&DaemonId::new("app", "web"), &config, &resolved, &configs);
+            assert_eq!(
+                render_template("{{ daemons.external.port }}", &ctx).unwrap(),
+                "5000"
+            );
+        }
+    }
+
+    #[test]
+    fn test_short_name_wins_over_a_qualified_key_that_reads_the_same() {
+        // `app/workers.0.api` and `workers/0.api` both read `workers.0.api`.
+        let local = DaemonId::new("app", "workers.0.api");
+        let foreign = DaemonId::new("workers", "0.api");
+        for order in [[&local, &foreign], [&foreign, &local]] {
+            let mut config = make_daemon_config("echo");
+            config.depends = order.iter().map(|id| (*id).clone()).collect();
+            let resolved =
+                HashMap::from([(local.clone(), vec![4000]), (foreign.clone(), vec![5000])]);
+            let configs = order
+                .iter()
+                .map(|id| ((*id).clone(), make_daemon_config("echo")))
+                .collect();
+            let ctx =
+                TemplateContext::new(&DaemonId::new("app", "web"), &config, &resolved, &configs);
+            assert_eq!(
+                render_template("{{ daemons[\"workers.0.api\"].port }}", &ctx).unwrap(),
+                "4000"
+            );
+        }
+    }
+
+    #[test]
     fn test_depends_as_gives_local_name() {
         let self_id = DaemonId::new("app", "api");
         let other_id = DaemonId::new("search-bd9126f3bbca47d", "app");
@@ -1024,6 +1220,7 @@ mod tests {
             host: Some("api.myproj".into()),
             dir: PathBuf::new(),
             declared_url: Some("http://127.0.0.1:{{ port }}".into()),
+            instance: None,
         };
         let mut on = (*settings()).clone();
         on.proxy.enable = true;

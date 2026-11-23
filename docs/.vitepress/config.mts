@@ -79,6 +79,7 @@ export default defineConfig({
           { text: "File watching", link: "/guides/file-watching" },
           { text: "Automatic retries", link: "/guides/auto-restart" },
           { text: "Health checks", link: "/guides/health-checks" },
+          { text: "Daemon templates", link: "/guides/daemon-templates" },
           { text: "Ports & local URLs", link: "/guides/port-management" },
           { text: "Namespaces & worktrees", link: "/concepts/namespaces" },
         ],

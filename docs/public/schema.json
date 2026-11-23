@@ -4,6 +4,16 @@
   "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files.\n\nNote: When read from a file, daemon keys are short names (e.g., \"api\").\nAfter merging, keys become qualified DaemonIds (e.g., \"project/api\").",
   "type": "object",
   "properties": {
+    "daemon_templates": {
+      "description": "Reusable sets of daemons. Each instance of a template gets its own copy\nof the template's daemons and a group to start them with.\n\n```toml\n[daemon_templates.e2e]\ninstances = 2\n\n[daemon_templates.e2e.daemons.api]\nrun = \"node api.js --port $PORT\"\nport = { expect = [8080], bump = 20 }\n\n[daemon_templates.e2e.daemons.web]\nrun = \"caddy run\"\ndepends = [\"api\"]\nenv.API_PORT = \"{{ daemons.api.port }}\"\n```\n\nThis defines `e2e.0.api`, `e2e.0.web`, `e2e.1.api` and `e2e.1.web`,\nthe groups `e2e.0` and `e2e.1`, and the group `e2e` with every instance.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/DaemonTemplateSchema"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$"
+      }
+    },
     "daemons": {
       "description": "Map of daemon IDs to their configurations",
       "type": "object",
@@ -112,6 +122,33 @@
         "pattern": "\\.\\.|--|(^|/)-|-($|/)|^\\.$|^\\./|/\\.$"
       },
       "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$"
+    },
+    "DaemonTemplateSchema": {
+      "description": "Schema-only shape of a `[daemon_templates.<name>]` table.",
+      "type": "object",
+      "properties": {
+        "daemons": {
+          "description": "The daemons every instance gets, with the same settings as\n`[daemons.<name>]`. In `depends`, the name of another daemon in the\ntemplate means the copy in the same instance. A later config file can\nleave it out to change only `instances`.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/PitchforkTomlDaemon"
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$"
+          }
+        },
+        "instances": {
+          "description": "The instances to define: a number (`instances = 4` names them `0` to\n`3`) or a list of names. Each instance gets a copy of every daemon in\nthe template, named `<template>.<instance>.<daemon>`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemplateInstances"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     },
     "DependencySchema": {
       "description": "Schema-only shape of a `depends` entry.",
@@ -1967,6 +2004,28 @@
         "SIGHUP",
         "SIGUSR1",
         "SIGUSR2"
+      ]
+    },
+    "TemplateInstances": {
+      "description": "The instances of a daemon template: a number of them, or their names.",
+      "anyOf": [
+        {
+          "description": "How many instances to define, at most 1000. They are named `0`, `1`,\n`2`, ...",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 1000,
+          "minimum": 0
+        },
+        {
+          "description": "The instance names, at most 1000. Each may use ASCII letters, digits,\n`_` and `-`, and may not start or end with `-` or contain `--`.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$"
+          },
+          "maxItems": 1000,
+          "uniqueItems": true
+        }
       ]
     },
     "ThemeDef": {

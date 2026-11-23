@@ -77,6 +77,8 @@ The current daemon's own metadata is always available:
 | <code v-pre>{{ port }}</code> | First configured port (or null) | `3000` |
 | <code v-pre>{{ ports }}</code> | All configured ports | `[3000, 3001]` |
 | <code v-pre>{{ dir }}</code> | Resolved working directory | `"/home/user/myproj"` |
+| <code v-pre>{{ instance }}</code> | [Daemon template](/guides/daemon-templates) instance name (or null) | `"1"` |
+| <code v-pre>{{ instance_index }}</code> | Daemon template instance position (or null) | `1` |
 
 ### Daemon References
 

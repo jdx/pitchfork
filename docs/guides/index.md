@@ -18,6 +18,7 @@ the behavior your workflow needs.
 | Recover from a crash | [Automatic retries](/guides/auto-restart) |
 | Detect a service that stops responding | [Health checks](/guides/health-checks) |
 | Share ports and connection details between services | [Configuration templates](/guides/configuration-templates) |
+| Run several copies of a set of services | [Daemon templates](/guides/daemon-templates) |
 | Use stable local URLs | [Ports and reverse proxy](/guides/port-management) |
 
 ## See what is happening
