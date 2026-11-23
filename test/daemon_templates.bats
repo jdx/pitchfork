@@ -76,3 +76,31 @@ TOML
 
   pitchfork stop --all
 }
+
+@test "a copy started alone can use a running sibling it does not depend on" {
+  local port http_script
+  port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  http_script="$(script_path http_server.py)"
+  create_pitchfork_toml <<TOML
+[daemon_templates.stack]
+instances = ["green"]
+
+[daemon_templates.stack.daemons.api]
+run = "python3 -u $http_script 0 $port"
+port = $port
+
+[daemon_templates.stack.daemons.web]
+run = "echo {{ daemons.api.port }} > web_{{ instance }}; sleep 30"
+ready_delay = 0
+TOML
+
+  run pitchfork start stack.green.api
+  assert_success
+  wait_for_status stack.green.api running
+
+  run pitchfork start stack.green.web
+  assert_success
+  wait_for_file_content web_green "$port"
+
+  pitchfork stop --all
+}

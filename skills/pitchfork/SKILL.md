@@ -73,8 +73,9 @@ the supervisor's PATH or addressed by absolute path.
   ready_cmd = { run = "curl -fsS http://127.0.0.1:$PORT/health", timeout = "30s" }
   ```
 
-- To run several copies of a set of daemons, define them once under
-  `[daemon_templates.<t>.daemons]` with `instances = N` or a list of names.
+- To run several copies of a set of daemons, set `instances = N` or a list of
+  names under `[daemon_templates.<t>]` and define each daemon under
+  `[daemon_templates.<t>.daemons.<name>]`.
   Copies are named `<t>.<instance>.<daemon>` and grouped as `<t>.<instance>`
   and `<t>`; `depends` and `{{ daemons.<name> }}` in a copy resolve to the same
   instance.

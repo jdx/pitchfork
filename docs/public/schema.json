@@ -9,6 +9,9 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/DaemonTemplateSchema"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$"
       }
     },
     "daemons": {
@@ -129,6 +132,9 @@
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/PitchforkTomlDaemon"
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$"
           }
         },
         "instances": {
@@ -2004,17 +2010,21 @@
       "description": "The instances of a daemon template: a number of them, or their names.",
       "anyOf": [
         {
-          "description": "How many instances to define. They are named `0`, `1`, `2`, ...",
+          "description": "How many instances to define, at most 1000. They are named `0`, `1`,\n`2`, ...",
           "type": "integer",
           "format": "uint32",
+          "maximum": 1000,
           "minimum": 0
         },
         {
-          "description": "The instance names. Each may use letters, digits, `_` and `-`.",
+          "description": "The instance names, at most 1000. Each may use ASCII letters, digits,\n`_` and `-`, and may not start or end with `-` or contain `--`.",
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$"
+          },
+          "maxItems": 1000,
+          "uniqueItems": true
         }
       ]
     },

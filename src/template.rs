@@ -167,7 +167,11 @@ impl TemplateContext {
             })
             .map(|(dep_id, _)| (dep_id, Vec::new()));
 
-        let mut daemon_states = HashMap::new();
+        // Qualified keys first: a short name in this namespace wins over the
+        // qualified key of another namespace that reads the same, whatever
+        // the order of `depends`.
+        let mut qualified_states = HashMap::new();
+        let mut short_names = Vec::new();
         let mut siblings = Vec::new();
         for (dep_id, ports) in resolved_daemons
             .iter()
@@ -198,24 +202,36 @@ impl TemplateContext {
 
                 // Short names are only valid within the current namespace.
                 if dep_id.namespace() == id.namespace() {
-                    daemon_states.insert(dep_id.name().to_string(), state.clone());
+                    short_names.push((dep_id.name().to_string(), state.clone()));
                     if let Some(name) = sibling_name(daemon_config, dep_id, config) {
                         siblings.push((name.to_string(), state.clone()));
                     }
                 }
 
                 // Register with qualified key (namespace.name) for all namespaces.
-                daemon_states.insert(qualified_key(dep_id), state);
+                qualified_states.insert(qualified_key(dep_id), state);
             }
         }
 
+        let mut daemon_states = qualified_states.clone();
+        daemon_states.extend(short_names);
+
         // In a copy of a daemon template, the other daemons of its instance go
-        // by their template names, over regular daemons of the same name.
+        // by their template names, over regular daemons of the same name. A
+        // template name stays taken while its copy has no resolved port, so
+        // it fails to render rather than naming the regular daemon.
+        for (other_id, other) in daemon_configs {
+            if other_id.namespace() == id.namespace()
+                && let Some(name) = sibling_name(daemon_config, other_id, other)
+            {
+                daemon_states.remove(name);
+            }
+        }
         daemon_states.extend(siblings);
 
         // Names the daemon chose for its dependencies with `depends = [{ id, as }]`.
         for (alias, dep_id) in &daemon_config.depends_as {
-            if let Some(state) = daemon_states.get(&qualified_key(dep_id)).cloned() {
+            if let Some(state) = qualified_states.get(&qualified_key(dep_id)).cloned() {
                 daemon_states.insert(alias.clone(), state);
             }
         }
@@ -918,6 +934,54 @@ mod tests {
             render_template("{% if instance %}copy{% else %}plain{% endif %}", &plain).unwrap(),
             "plain"
         );
+    }
+
+    #[test]
+    fn test_unresolved_sibling_hides_a_regular_daemon_of_the_same_name() {
+        let copy = |name: &str| {
+            let mut config = make_daemon_config("echo");
+            config.instance = Some(TemplateInstance {
+                template: "stack".into(),
+                name: "green".into(),
+                index: 1,
+            });
+            (DaemonId::new("app", format!("stack.green.{name}")), config)
+        };
+        let (self_id, self_config) = copy("web");
+        let (api, api_config) = copy("api");
+        let shared = DaemonId::new("app", "api");
+        let resolved = HashMap::from([(shared.clone(), vec![3000])]);
+        let configs = IndexMap::from([(api, api_config), (shared, make_daemon_config("echo"))]);
+        let ctx = TemplateContext::new(&self_id, &self_config, &resolved, &configs);
+
+        assert!(render_template("{{ daemons.api.port }}", &ctx).is_err());
+        assert_eq!(
+            render_template("{{ daemons[\"app.api\"].port }}", &ctx).unwrap(),
+            "3000"
+        );
+    }
+
+    #[test]
+    fn test_short_name_wins_over_a_qualified_key_that_reads_the_same() {
+        // `app/workers.0.api` and `workers/0.api` both read `workers.0.api`.
+        let local = DaemonId::new("app", "workers.0.api");
+        let foreign = DaemonId::new("workers", "0.api");
+        for order in [[&local, &foreign], [&foreign, &local]] {
+            let mut config = make_daemon_config("echo");
+            config.depends = order.iter().map(|id| (*id).clone()).collect();
+            let resolved =
+                HashMap::from([(local.clone(), vec![4000]), (foreign.clone(), vec![5000])]);
+            let configs = order
+                .iter()
+                .map(|id| ((*id).clone(), make_daemon_config("echo")))
+                .collect();
+            let ctx =
+                TemplateContext::new(&DaemonId::new("app", "web"), &config, &resolved, &configs);
+            assert_eq!(
+                render_template("{{ daemons[\"workers.0.api\"].port }}", &ctx).unwrap(),
+                "4000"
+            );
+        }
     }
 
     #[test]

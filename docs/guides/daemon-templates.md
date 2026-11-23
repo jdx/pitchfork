@@ -64,9 +64,10 @@ instances = 3                     # instances 0, 1 and 2
 instances = ["acme", "globex"]    # instances acme and globex
 ```
 
-Template, instance and template daemon names may use letters, digits, `_` and
-`-`, and may not start or end with `-` or contain `--`. Config parsing fails
-on other names and on an instance listed twice.
+A template can have at most 1000 instances. Template, instance and template
+daemon names may use ASCII letters, digits, `_` and `-`, and may not start or
+end with `-` or contain `--`. Config parsing fails on other names, on an
+instance listed twice and on more instances than the limit.
 
 ## Dependencies within an instance
 
@@ -78,7 +79,10 @@ daemon's name takes precedence over a regular daemon with the same name.
 Templates in a copy use the same names, so <code v-pre>{{ daemons.api.port }}</code>
 in `workers.1.worker` is the port of `workers.1.api`. Once they have started,
 the other daemons of the instance are available by their template names too,
-including those the copy only depends on indirectly. A copy is also
+including those the copy only depends on indirectly or not at all. A template
+name always means the copy: while `workers.1.api` has not started,
+<code v-pre>{{ daemons.api.port }}</code> fails to render in `workers.1.worker`
+even if a regular `api` daemon is running. A copy is also
 available under its full name, such as
 <code v-pre>{{ daemons["workers.1.api"].port }}</code>. An `as` name in
 `depends` that points to another template daemon also points to the copy in
@@ -106,8 +110,11 @@ a `bump` range, as in the example, so each copy starts on the next free port.
 started on. See [port management](/guides/port-management) for `bump`.
 
 The reverse proxy names each copy from its full name, so `workers.1.api`
-gets a hostname such as `workers-1-api.myproj.localhost`. Do not set
-`proxy.label` in a template daemon: every copy would ask for the same label.
+gets a hostname such as `workers-1-api.myproj.localhost`. Dots become `-` in
+the hostname, so pick names that stay distinct: `workers.blue.green-api` and
+`workers.blue-green.api` both become `workers-blue-green-api`, and neither copy
+gets a hostname. Do not set a label with `proxy = "<label>"` in a template
+daemon: every copy would ask for the same label.
 
 ## Configuration files
 

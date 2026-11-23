@@ -607,7 +607,10 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
     expanded.groups = declared.clone();
     expanded.daemons = daemons;
     expanded.daemon_templates = templates;
-    if let Err(e) = expanded.expand_daemon_templates() {
+    if let Err(e) = expanded
+        .expand_daemon_templates()
+        .and_then(|()| expanded.validate_dependency_aliases())
+    {
         log::warn!("Failed to expand daemon templates: {e}");
         return (IndexMap::new(), Some(e.to_string()));
     }
@@ -1880,6 +1883,32 @@ mod tests {
         let (groups, error) = groups_for_dir(&project);
         assert!(groups.is_empty());
         assert!(error.unwrap().contains("already defined"));
+    }
+
+    /// An `as` name that hides a template daemon added by a later file is an
+    /// error for the CLI, so the stack page reports it instead of the groups.
+    #[test]
+    fn daemon_template_alias_hiding_a_sibling_yields_no_groups() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemons.shared-db]\nrun = \"true\"\n\n\
+             [daemon_templates.e2e]\ninstances = 1\n\n\
+             [daemon_templates.e2e.daemons.worker]\nrun = \"true\"\n\
+             depends = [{ id = \"shared-db\", as = \"db\" }]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("pitchfork.local.toml"),
+            "[daemon_templates.e2e.daemons.db]\nrun = \"true\"\n",
+        )
+        .unwrap();
+
+        let (groups, error) = groups_for_dir(&project);
+        assert!(groups.is_empty());
+        assert!(error.unwrap().contains("clashes with the daemon"));
     }
 
     /// A config file that cannot be read must not leave the groups the files

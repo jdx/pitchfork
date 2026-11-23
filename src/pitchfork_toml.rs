@@ -115,14 +115,30 @@ pub struct GroupEntry {
     pub groups: Vec<String>,
 }
 
+/// The most instances a daemon template may have.
+pub const MAX_TEMPLATE_INSTANCES: usize = 1000;
+
+/// JSON Schema pattern for the names of daemon templates, their instances and
+/// their daemons; see [`is_template_label`].
+const TEMPLATE_LABEL_PATTERN: &str = "^[A-Za-z0-9_]+(-[A-Za-z0-9_]+)*$";
+
 /// The instances of a daemon template: a number of them, or their names.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum TemplateInstances {
-    /// How many instances to define. They are named `0`, `1`, `2`, ...
-    Count(u32),
-    /// The instance names. Each may use letters, digits, `_` and `-`.
-    Names(Vec<String>),
+    /// How many instances to define, at most 1000. They are named `0`, `1`,
+    /// `2`, ...
+    Count(#[schemars(range(max = 1000))] u32),
+    /// The instance names, at most 1000. Each may use ASCII letters, digits,
+    /// `_` and `-`, and may not start or end with `-` or contain `--`.
+    Names(
+        #[schemars(
+            length(max = 1000),
+            inner(regex(pattern = TEMPLATE_LABEL_PATTERN)),
+            extend("uniqueItems" = true)
+        )]
+        Vec<String>,
+    ),
 }
 
 impl TemplateInstances {
@@ -156,7 +172,7 @@ struct DaemonTemplateSchema {
     /// `[daemons.<name>]`. In `depends`, the name of another daemon in the
     /// template means the copy in the same instance. A later config file can
     /// leave it out to change only `instances`.
-    #[schemars(default)]
+    #[schemars(default, extend("propertyNames" = {"pattern": TEMPLATE_LABEL_PATTERN}))]
     daemons: IndexMap<String, PitchforkTomlDaemon>,
 }
 
@@ -581,7 +597,11 @@ pub struct PitchforkToml {
     ///
     /// This defines `e2e.0.api`, `e2e.0.web`, `e2e.1.api` and `e2e.1.web`,
     /// the groups `e2e.0` and `e2e.1`, and the group `e2e` with every instance.
-    #[schemars(default, with = "IndexMap<String, DaemonTemplateSchema>")]
+    #[schemars(
+        default,
+        with = "IndexMap<String, DaemonTemplateSchema>",
+        extend("propertyNames" = {"pattern": TEMPLATE_LABEL_PATTERN})
+    )]
     pub daemon_templates: IndexMap<String, DaemonTemplate>,
     /// Namespace registry (merged from global config files).
     /// Maps namespace names to their project directory.
@@ -2285,9 +2305,21 @@ impl PitchforkToml {
                 path: path.to_path_buf(),
                 reason,
             };
-            const LABEL_RULE: &str = "must be non-empty and use only letters, digits, '_' or '-'";
+            const LABEL_RULE: &str = "must be non-empty, use only ASCII letters, digits, '_' or '-', \
+                 and not start or end with '-' or contain '--'";
             if !is_template_label(&template_name) {
                 return Err(invalid(format!("its name {LABEL_RULE}")).into());
+            }
+            let count = match &raw_template.instances {
+                Some(TemplateInstances::Count(n)) => usize::try_from(*n).unwrap_or(usize::MAX),
+                Some(TemplateInstances::Names(names)) => names.len(),
+                None => 0,
+            };
+            if count > MAX_TEMPLATE_INSTANCES {
+                return Err(invalid(format!(
+                    "it has {count} instances, more than the limit of {MAX_TEMPLATE_INSTANCES}"
+                ))
+                .into());
             }
             if let Some(TemplateInstances::Names(names)) = &raw_template.instances {
                 let mut seen = HashSet::new();
@@ -3791,6 +3823,48 @@ depends = [{ id = "shared-db", as = "db" }]
         assert_eq!(
             worker.depends_as["db"],
             DaemonId::new(id.namespace(), "shared-db")
+        );
+    }
+
+    #[test]
+    fn test_daemon_templates_reject_too_many_instances() {
+        let err = merged_templates(&[(
+            "pitchfork.toml",
+            "[daemon_templates.t]\ninstances = 4294967295\n\n\
+             [daemon_templates.t.daemons.api]\nrun = \"api\"\n",
+        )])
+        .unwrap_err();
+        let err = err
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ");
+        assert!(err.contains("more than the limit of 1000"), "{err}");
+        assert!(
+            merged_templates(&[(
+                "pitchfork.toml",
+                "[daemon_templates.t]\ninstances = 1000\n\n\
+                 [daemon_templates.t.daemons.api]\nrun = \"api\"\n",
+            )])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_daemon_templates_label_error_names_every_rule() {
+        let err = merged_templates(&[(
+            "pitchfork.toml",
+            "[daemon_templates.t]\ninstances = [\"east-\"]\n",
+        )])
+        .unwrap_err();
+        let err = err
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ");
+        assert!(
+            err.contains("not start or end with '-' or contain '--'"),
+            "{err}"
         );
     }
 

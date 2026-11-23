@@ -1116,7 +1116,7 @@ run = "./worker --api http://127.0.0.1:{{ daemons.api.port }}"
 depends = ["api"]
 ```
 
-- `instances` is a count (instances `0` to `N-1`) or a list of instance names
+- `instances` is a count (instances `0` to `N-1`) or a list of instance names, at most 1000
 - `daemons` takes the same fields as `[daemons.<name>]`
 - Instance `<i>` adds the daemon `<template>.<i>.<daemon>` for each template daemon and the group `<template>.<i>`. The group `<template>` has the daemons of every instance
 - In a copy, `depends` and templates such as <code v-pre>{{ daemons.api.port }}</code> resolve another daemon of the template to its copy in the same instance
