@@ -64,7 +64,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls-native-certs",
     "rustls-no-provider",
 ] }
-rusqlite = { version = "0.41", features = ["bundled", "chrono", "functions"] }
+rusqlite = { version = "0.43", features = ["bundled", "chrono", "functions"] }
 rev_lines = "0.3"
 rust-embed = { version = "8", features = ["axum"] }
 axum = { version = "0.8" }
@@ -121,7 +121,7 @@ terminal-colorsaurus = "1"
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"
 libc = "0.2"
-nix = { version = "0.31", features = ["signal", "process", "user", "net", "ioctl"] }
+nix = { version = "0.32", features = ["signal", "process", "user", "net", "ioctl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"
