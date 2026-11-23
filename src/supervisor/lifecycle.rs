@@ -4156,20 +4156,34 @@ mod port_conflict_tests {
     async fn bumping_moves_by_the_configured_step() {
         use crate::daemon_id::DaemonId;
         let _forks = FORKS.lock().await;
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
-        // Keep the arithmetic away from the top of the port range.
-        let port = port.min(60000);
+        // A starting port whose stepped candidate is free too.
+        let mut port = None;
+        for _ in 0..50 {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let candidate = probe.local_addr().unwrap().port();
+            drop(probe);
+            if candidate <= 65000 && port_bind_conflict(candidate + 10).await.is_none() {
+                port = Some(candidate);
+                break;
+            }
+        }
+        let port = port.expect("no free port pair for the step test");
         let one = DaemonId::new("step-one", "web");
         let two = DaemonId::new("step-two", "web");
 
         let (_, _claim) = claim_ports(&one, &[port], false, 0, 1).await.unwrap();
         let (bumped, _bumped_claim) = claim_ports(&two, &[port], true, 5, 10).await.unwrap();
         assert_eq!(bumped, vec![port + 10]);
+    }
 
-        // A step that runs past the last port ends the search.
-        let (_, _top) = claim_ports(&one, &[65530], false, 0, 1).await.unwrap();
+    #[tokio::test]
+    async fn bumping_past_the_last_port_ends_the_search() {
+        use crate::daemon_id::DaemonId;
+        let _forks = FORKS.lock().await;
+        let one = DaemonId::new("top-one", "web");
+        let two = DaemonId::new("top-two", "web");
+
+        let (_, _claim) = claim_ports(&one, &[65530], false, 0, 1).await.unwrap();
         let err = claim_ports(&two, &[65530], true, 5, 10).await.unwrap_err();
         assert!(matches!(
             err.downcast_ref::<PortError>(),
