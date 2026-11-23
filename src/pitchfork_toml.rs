@@ -3701,7 +3701,7 @@ depends = ["api"]
         .unwrap();
         let (id, web) = daemon_named(&pt, "wt.feature-x.web");
         let api = DaemonId::new(id.namespace(), "wt.feature-x.api");
-        assert_eq!(web.depends, [api.clone()]);
+        assert_eq!(web.depends, [api]);
         assert_eq!(web.instance.as_ref().unwrap().index, 1);
         assert!(pt.groups.contains_key("wt.main"));
         assert_eq!(daemon_named(&pt, "api").1.run, "shared-api");
