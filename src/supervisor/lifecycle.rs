@@ -1371,6 +1371,7 @@ impl Supervisor {
                 &expected_ports,
                 port_cfg.auto_bump(),
                 port_cfg.max_bump_attempts(),
+                port_cfg.bump_step(),
             )
             .await
             {
@@ -1450,7 +1451,7 @@ impl Supervisor {
             if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port())
                 && port > 0
             {
-                match claim_ports(id, &[port], false, 0).await {
+                match claim_ports(id, &[port], false, 0, 1).await {
                     Ok((_, claim)) => port_claim = Some(claim),
                     Err(e)
                         if matches!(
@@ -1845,6 +1846,7 @@ impl Supervisor {
                         o.port = crate::config_types::PortConfig::from_parts(
                             expected_ports,
                             opts.port.as_ref().map(|p| p.bump).unwrap_or_default(),
+                            opts.port.as_ref().and_then(|p| p.step),
                         );
                         o.resolved_port = Some(resolved_ports);
                     })
@@ -3622,6 +3624,7 @@ async fn claim_ports(
     expected_ports: &[u16],
     auto_bump: bool,
     max_attempts: u32,
+    step: u16,
 ) -> Result<(Vec<u16>, PortClaim)> {
     let _resolution = PORT_RESOLUTION.lock().await;
     let claimed: HashMap<u16, DaemonId> = PORT_CLAIMS
@@ -3631,7 +3634,8 @@ async fn claim_ports(
         .filter(|(_, (owner, _))| owner != id)
         .map(|(port, (owner, _))| (*port, owner.clone()))
         .collect();
-    let resolved = check_ports_available(expected_ports, auto_bump, max_attempts, &claimed).await?;
+    let resolved =
+        check_ports_available(expected_ports, auto_bump, max_attempts, step, &claimed).await?;
     let ports: Vec<u16> = resolved.iter().copied().filter(|&p| p != 0).collect();
     let generation = PORT_CLAIM_GENERATION.fetch_add(1, atomic::Ordering::Relaxed);
     {
@@ -3647,6 +3651,7 @@ async fn check_ports_available(
     expected_ports: &[u16],
     auto_bump: bool,
     max_attempts: u32,
+    step: u16,
     claimed: &HashMap<u16, DaemonId>,
 ) -> Result<Vec<u16>> {
     if expected_ports.is_empty() {
@@ -3654,10 +3659,16 @@ async fn check_ports_available(
     }
 
     for bump_offset in 0..=max_attempts {
-        // Use wrapping_add to handle overflow correctly - ports wrap around at 65535
+        // Wrapping keeps the old overflow handling: a candidate that wraps
+        // to 0 ends the search below.
+        let delta = u64::from(bump_offset) * u64::from(step.max(1));
+        if delta > u64::from(u16::MAX) {
+            break;
+        }
+        let delta = delta as u16;
         let candidate_ports: Vec<u16> = expected_ports
             .iter()
-            .map(|&p| p.wrapping_add(bump_offset as u16))
+            .map(|&p| p.wrapping_add(delta))
             .collect();
 
         // Check if all ports in this set are available
@@ -4088,7 +4099,7 @@ mod port_conflict_tests {
             "{address}"
         );
 
-        let err = check_ports_available(&[port], false, 0, &Default::default())
+        let err = check_ports_available(&[port], false, 0, 1, &Default::default())
             .await
             .unwrap_err();
         match err.downcast_ref::<PortError>() {
@@ -4122,24 +4133,50 @@ mod port_conflict_tests {
         let one = DaemonId::new("claim-one", "web");
         let two = DaemonId::new("claim-two", "web");
 
-        let (resolved, claim) = claim_ports(&one, &[port], false, 0).await.unwrap();
+        let (resolved, claim) = claim_ports(&one, &[port], false, 0, 1).await.unwrap();
         assert_eq!(resolved, vec![port]);
 
         // Nothing is bound yet, but the port is claimed: without bump the
         // second start fails, with bump it moves past the claimed port.
-        let err = claim_ports(&two, &[port], false, 0).await.unwrap_err();
+        let err = claim_ports(&two, &[port], false, 0, 1).await.unwrap_err();
         assert!(
             matches!(err.downcast_ref::<PortError>(), Some(PortError::Claimed { port: p, .. }) if *p == port),
             "{err:?}"
         );
-        let (bumped, bumped_claim) = claim_ports(&two, &[port], true, 10).await.unwrap();
+        let (bumped, bumped_claim) = claim_ports(&two, &[port], true, 10, 1).await.unwrap();
         assert_ne!(bumped, vec![port]);
         drop(bumped_claim);
 
         // Once the first daemon is ready or gone, the port is free again.
         drop(claim);
-        let (resolved, _claim) = claim_ports(&two, &[port], false, 0).await.unwrap();
+        let (resolved, _claim) = claim_ports(&two, &[port], false, 0, 1).await.unwrap();
         assert_eq!(resolved, vec![port]);
+    }
+
+    #[tokio::test]
+    async fn bumping_moves_by_the_configured_step() {
+        use crate::daemon_id::DaemonId;
+        let _forks = FORKS.lock().await;
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        // Keep the arithmetic away from the top of the port range.
+        let port = port.min(60000);
+        let one = DaemonId::new("step-one", "web");
+        let two = DaemonId::new("step-two", "web");
+
+        let (_, _claim) = claim_ports(&one, &[port], false, 0, 1).await.unwrap();
+        let (bumped, _bumped_claim) = claim_ports(&two, &[port], true, 5, 10).await.unwrap();
+        assert_eq!(bumped, vec![port + 10]);
+
+        // A step that runs past the last port ends the search.
+        let err = claim_ports(&two, &[65530], true, 5, 10).await;
+        if let Err(err) = err {
+            assert!(matches!(
+                err.downcast_ref::<PortError>(),
+                Some(PortError::NoAvailablePort { .. })
+            ));
+        }
     }
 
     #[tokio::test]
@@ -4152,12 +4189,12 @@ mod port_conflict_tests {
         let one = DaemonId::new("claim-restart", "web");
         let other = DaemonId::new("claim-other", "web");
 
-        let (_, old) = claim_ports(&one, &[port], false, 0).await.unwrap();
-        let (_, new) = claim_ports(&one, &[port], false, 0).await.unwrap();
+        let (_, old) = claim_ports(&one, &[port], false, 0, 1).await.unwrap();
+        let (_, new) = claim_ports(&one, &[port], false, 0, 1).await.unwrap();
         drop(old);
-        assert!(claim_ports(&other, &[port], false, 0).await.is_err());
+        assert!(claim_ports(&other, &[port], false, 0, 1).await.is_err());
         drop(new);
-        assert!(claim_ports(&other, &[port], false, 0).await.is_ok());
+        assert!(claim_ports(&other, &[port], false, 0, 1).await.is_ok());
     }
 
     #[cfg(unix)]
