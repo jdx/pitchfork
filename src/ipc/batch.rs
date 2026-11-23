@@ -1227,6 +1227,7 @@ impl IpcClient {
         let port_config = crate::config_types::PortConfig::from_parts(
             opts.expected_port.clone().unwrap_or(saved_port.expect),
             opts.auto_bump_port.unwrap_or(saved_port.bump),
+            saved_port.step,
         );
         let retry = opts.retry.unwrap_or(saved.retry);
         let shell_pid = opts.shell_pid;
@@ -1519,6 +1520,7 @@ impl IpcClient {
             port: crate::config_types::PortConfig::from_parts(
                 opts.expected_port.unwrap_or_default(),
                 opts.auto_bump_port.unwrap_or_default(),
+                None,
             ),
             wait_ready: true,
             mise: None,

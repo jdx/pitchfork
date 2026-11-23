@@ -2003,11 +2003,15 @@ impl JsonSchema for PortBump {
 /// port = 5173                                  # single port
 /// port = [5173, 5174]                          # multiple ports
 /// port = { expect = [5173], bump = 10 }        # full form with bump
+/// port = { expect = [4200], bump = 9, step = 10 }  # bump 4200, 4210, ... 4290
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PortConfig {
     pub expect: Vec<u16>,
     pub bump: PortBump,
+    /// Distance between bump candidates (default 1). With `step = 10` and
+    /// `expect = [4200]`, bumping tries 4200, 4210, 4220, ...
+    pub step: Option<std::num::NonZeroU16>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -2017,11 +2021,13 @@ pub struct PortConfigRaw {
     pub expect: Vec<u16>,
     #[serde(default)]
     pub bump: PortBump,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<std::num::NonZeroU16>,
 }
 
 impl Serialize for PortConfig {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        if self.bump.0 == 0 {
+        if self.bump.0 == 0 && self.step.is_none() {
             if self.expect.len() == 1 {
                 s.serialize_u16(self.expect[0])
             } else {
@@ -2031,6 +2037,7 @@ impl Serialize for PortConfig {
             PortConfigRaw {
                 expect: self.expect.clone(),
                 bump: self.bump,
+                step: self.step,
             }
             .serialize(s)
         }
@@ -2045,7 +2052,7 @@ impl<'de> Deserialize<'de> for PortConfig {
             type Value = PortConfig;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a port number, array of ports, or { expect, bump } object")
+                f.write_str("a port number, array of ports, or { expect, bump, step } object")
             }
 
             fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<PortConfig, E> {
@@ -2054,6 +2061,7 @@ impl<'de> Deserialize<'de> for PortConfig {
                 Ok(PortConfig {
                     expect: vec![port],
                     bump: PortBump(0),
+                    step: None,
                 })
             }
 
@@ -2076,6 +2084,7 @@ impl<'de> Deserialize<'de> for PortConfig {
                 Ok(PortConfig {
                     expect: ports,
                     bump: PortBump(0),
+                    step: None,
                 })
             }
 
@@ -2088,6 +2097,7 @@ impl<'de> Deserialize<'de> for PortConfig {
                 Ok(PortConfig {
                     expect: raw.expect,
                     bump: raw.bump,
+                    step: raw.step,
                 })
             }
         }
@@ -2098,12 +2108,21 @@ impl<'de> Deserialize<'de> for PortConfig {
 
 impl PortConfig {
     /// Construct from expected ports and bump config, returning `None` if both are empty/zero.
-    pub fn from_parts(expect: Vec<u16>, bump: PortBump) -> Option<Self> {
+    pub fn from_parts(
+        expect: Vec<u16>,
+        bump: PortBump,
+        step: Option<std::num::NonZeroU16>,
+    ) -> Option<Self> {
         if expect.is_empty() && bump.0 == 0 {
             None
         } else {
-            Some(Self { expect, bump })
+            Some(Self { expect, bump, step })
         }
+    }
+
+    /// Distance between bump candidates (1 unless `step` is set).
+    pub fn bump_step(&self) -> u16 {
+        self.step.map_or(1, |s| s.get())
     }
 
     /// Whether auto-bump is enabled (bump > 0).
@@ -2124,7 +2143,7 @@ impl JsonSchema for PortConfig {
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "Port config: a port number, array of ports, or { expect, bump } object",
+            "description": "Port config: a port number, array of ports, or { expect, bump, step } object",
             "oneOf": [
                 { "type": "integer", "minimum": 0, "maximum": 65535 },
                 { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 65535 } },
@@ -2132,7 +2151,8 @@ impl JsonSchema for PortConfig {
                     "type": "object",
                     "properties": {
                         "expect": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 65535 } },
-                        "bump": generator.subschema_for::<PortBump>()
+                        "bump": generator.subschema_for::<PortBump>(),
+                        "step": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Distance between bump candidates (default 1)" }
                     }
                 }
             ]

@@ -727,6 +727,7 @@ fn daemon_from_raw(
         PortConfig {
             expect: raw_daemon.expected_port,
             bump,
+            step: None,
         }
     });
     let port = match (raw_daemon.port, deprecated_port) {
