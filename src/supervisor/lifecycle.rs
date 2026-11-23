@@ -3659,17 +3659,16 @@ async fn check_ports_available(
     }
 
     for bump_offset in 0..=max_attempts {
-        // Wrapping keeps the old overflow handling: a candidate that wraps
-        // to 0 ends the search below.
+        // A candidate past port 65535 ends the search instead of wrapping to
+        // a port outside the configured sequence.
         let delta = u64::from(bump_offset) * u64::from(step.max(1));
-        if delta > u64::from(u16::MAX) {
-            break;
-        }
-        let delta = delta as u16;
-        let candidate_ports: Vec<u16> = expected_ports
+        let Some(candidate_ports) = expected_ports
             .iter()
-            .map(|&p| p.wrapping_add(delta))
-            .collect();
+            .map(|&p| u16::try_from(u64::from(p) + delta).ok())
+            .collect::<Option<Vec<u16>>>()
+        else {
+            break;
+        };
 
         // Check if all ports in this set are available
         let mut all_available = true;
@@ -4170,13 +4169,12 @@ mod port_conflict_tests {
         assert_eq!(bumped, vec![port + 10]);
 
         // A step that runs past the last port ends the search.
-        let err = claim_ports(&two, &[65530], true, 5, 10).await;
-        if let Err(err) = err {
-            assert!(matches!(
-                err.downcast_ref::<PortError>(),
-                Some(PortError::NoAvailablePort { .. })
-            ));
-        }
+        let (_, _top) = claim_ports(&one, &[65530], false, 0, 1).await.unwrap();
+        let err = claim_ports(&two, &[65530], true, 5, 10).await.unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<PortError>(),
+            Some(PortError::NoAvailablePort { .. })
+        ));
     }
 
     #[tokio::test]
