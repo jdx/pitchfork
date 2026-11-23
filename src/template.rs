@@ -171,6 +171,9 @@ impl TemplateContext {
         // qualified key of another namespace that reads the same, whatever
         // the order of `depends`.
         let mut qualified_states = HashMap::new();
+        // By id for `as` names: two ids can share a qualified key, such as
+        // `app/t.0.api` and `app.t/0.api`.
+        let mut states_by_id: HashMap<&DaemonId, DaemonTemplateState> = HashMap::new();
         let mut short_names = Vec::new();
         let mut siblings = Vec::new();
         for (dep_id, ports) in resolved_daemons
@@ -209,11 +212,12 @@ impl TemplateContext {
                 }
 
                 // Register with qualified key (namespace.name) for all namespaces.
-                qualified_states.insert(qualified_key(dep_id), state);
+                qualified_states.insert(qualified_key(dep_id), state.clone());
+                states_by_id.insert(dep_id, state);
             }
         }
 
-        let mut daemon_states = qualified_states.clone();
+        let mut daemon_states = qualified_states;
         daemon_states.extend(short_names);
 
         // In a copy of a daemon template, the other daemons of its instance go
@@ -231,7 +235,7 @@ impl TemplateContext {
 
         // Names the daemon chose for its dependencies with `depends = [{ id, as }]`.
         for (alias, dep_id) in &daemon_config.depends_as {
-            if let Some(state) = qualified_states.get(&qualified_key(dep_id)).cloned() {
+            if let Some(state) = states_by_id.get(dep_id).cloned() {
                 daemon_states.insert(alias.clone(), state);
             }
         }
@@ -959,6 +963,30 @@ mod tests {
             render_template("{{ daemons[\"app.api\"].port }}", &ctx).unwrap(),
             "3000"
         );
+    }
+
+    #[test]
+    fn test_as_name_resolves_by_id_not_by_qualified_key() {
+        // `app/t.0.api` and `app.t/0.api` both read `app.t.0.api`.
+        let local = DaemonId::new("app", "t.0.api");
+        let foreign = DaemonId::new("app.t", "0.api");
+        for order in [[&local, &foreign], [&foreign, &local]] {
+            let mut config = make_daemon_config("echo");
+            config.depends = order.iter().map(|id| (*id).clone()).collect();
+            config.depends_as = IndexMap::from([("external".to_string(), foreign.clone())]);
+            let resolved =
+                HashMap::from([(local.clone(), vec![4000]), (foreign.clone(), vec![5000])]);
+            let configs = order
+                .iter()
+                .map(|id| ((*id).clone(), make_daemon_config("echo")))
+                .collect();
+            let ctx =
+                TemplateContext::new(&DaemonId::new("app", "web"), &config, &resolved, &configs);
+            assert_eq!(
+                render_template("{{ daemons.external.port }}", &ctx).unwrap(),
+                "5000"
+            );
+        }
     }
 
     #[test]
