@@ -4180,7 +4180,8 @@ mod port_conflict_tests {
     async fn bumping_past_the_last_port_ends_the_search() {
         use crate::daemon_id::DaemonId;
         // Claimed, so the start port counts as taken without binding anything.
-        let claimed = HashMap::from([(65530u16, DaemonId::new("top-one", "web"))]);
+        let claimed =
+            std::collections::HashMap::from([(65530u16, DaemonId::new("top-one", "web"))]);
         let err = check_ports_available(&[65530], true, 5, 10, &claimed)
             .await
             .unwrap_err();
