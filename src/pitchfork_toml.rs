@@ -2115,13 +2115,18 @@ impl PitchforkToml {
                 // In a template copy, an `as` name for another daemon of the
                 // template names that daemon's copy, over a regular daemon.
                 // Any other target must not hide a daemon of the template,
-                // which may come from a later config file.
+                // which may come from a later config file. A regular daemon
+                // that happens to have the copy's name is not a sibling.
                 if let Some(instance) = &daemon.instance
                     && let Ok(sibling) = DaemonId::try_new(
                         id.namespace(),
                         format!("{}.{}.{alias}", instance.template, instance.name),
                     )
-                    && self.daemons.contains_key(&sibling)
+                    && self
+                        .daemons
+                        .get(&sibling)
+                        .and_then(|d| d.instance.as_ref())
+                        .is_some_and(|i| i.template == instance.template && i.name == instance.name)
                 {
                     if sibling == *target {
                         continue;
@@ -3759,6 +3764,33 @@ run = "db"
             err.to_string()
                 .contains("clashes with the daemon \"db\" of template \"t\""),
             "{err:?}"
+        );
+    }
+
+    #[test]
+    fn test_daemon_templates_alias_may_match_a_regular_daemon_named_like_a_copy() {
+        let pt = merged_templates(&[(
+            "pitchfork.toml",
+            r#"
+[daemons.shared-db]
+run = "shared-db"
+
+[daemons."t.0.db"]
+run = "unrelated"
+
+[daemon_templates.t]
+instances = 1
+
+[daemon_templates.t.daemons.worker]
+run = "worker"
+depends = [{ id = "shared-db", as = "db" }]
+"#,
+        )])
+        .unwrap();
+        let (id, worker) = daemon_named(&pt, "t.0.worker");
+        assert_eq!(
+            worker.depends_as["db"],
+            DaemonId::new(id.namespace(), "shared-db")
         );
     }
 
