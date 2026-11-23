@@ -75,8 +75,10 @@ that daemon's copy in the same instance. In the example, `workers.1.worker`
 depends on `workers.1.api` and on the regular `redis` daemon. A template
 daemon's name takes precedence over a regular daemon with the same name.
 
-Templates in a copy use the same rule, so <code v-pre>{{ daemons.api.port }}</code>
-in `workers.1.worker` is the port of `workers.1.api`. The copy is also
+Templates in a copy use the same names, so <code v-pre>{{ daemons.api.port }}</code>
+in `workers.1.worker` is the port of `workers.1.api`. Once they have started,
+the other daemons of the instance are available by their template names too,
+including those the copy only depends on indirectly. A copy is also
 available under its full name, such as
 <code v-pre>{{ daemons["workers.1.api"].port }}</code>. An `as` name in
 `depends` that points to another template daemon also points to the copy in

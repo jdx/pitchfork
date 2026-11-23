@@ -125,7 +125,7 @@
       "type": "object",
       "properties": {
         "daemons": {
-          "description": "The daemons every instance gets, with the same settings as\n`[daemons.<name>]`. In `depends`, the name of another daemon in the\ntemplate means the copy in the same instance.",
+          "description": "The daemons every instance gets, with the same settings as\n`[daemons.<name>]`. In `depends`, the name of another daemon in the\ntemplate means the copy in the same instance. A later config file can\nleave it out to change only `instances`.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/PitchforkTomlDaemon"
@@ -142,10 +142,7 @@
             }
           ]
         }
-      },
-      "required": [
-        "daemons"
-      ]
+      }
     },
     "DependencySchema": {
       "description": "Schema-only shape of a `depends` entry.",

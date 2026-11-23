@@ -33,6 +33,8 @@ pub struct DaemonTemplateState {
     pub dir: PathBuf,
     /// The `url` the daemon declares, still a template.
     pub declared_url: Option<String>,
+    /// The daemon template instance the daemon is a copy for, if any.
+    pub instance: Option<TemplateInstance>,
 }
 
 impl DaemonTemplateState {
@@ -64,6 +66,8 @@ impl DaemonTemplateState {
         ctx.insert("slug", &self.slug);
         ctx.insert("host", &self.host);
         ctx.insert("dir", &self.dir.to_string_lossy());
+        ctx.insert("instance", &self.instance.as_ref().map(|i| &i.name));
+        ctx.insert("instance_index", &self.instance.as_ref().map(|i| i.index));
         let rendered = tera
             .add_raw_template("url", template)
             .and_then(|()| tera.render("url", &ctx));
@@ -146,6 +150,7 @@ impl TemplateContext {
             host: host_of(id, daemon_config),
             dir,
             declared_url: daemon_config.url.clone(),
+            instance: daemon_config.instance.clone(),
         };
 
         // A daemon that is configured without any port (none, or `port = []`) has no resolved ports to
@@ -163,6 +168,7 @@ impl TemplateContext {
             .map(|(dep_id, _)| (dep_id, Vec::new()));
 
         let mut daemon_states = HashMap::new();
+        let mut siblings = Vec::new();
         for (dep_id, ports) in resolved_daemons
             .iter()
             .map(|(dep_id, ports)| (dep_id, ports.clone()))
@@ -187,17 +193,25 @@ impl TemplateContext {
                     host: host_of(dep_id, config),
                     dir: dep_dir,
                     declared_url: config.url.clone(),
+                    instance: config.instance.clone(),
                 };
 
                 // Short names are only valid within the current namespace.
                 if dep_id.namespace() == id.namespace() {
                     daemon_states.insert(dep_id.name().to_string(), state.clone());
+                    if let Some(name) = sibling_name(daemon_config, dep_id, config) {
+                        siblings.push((name.to_string(), state.clone()));
+                    }
                 }
 
                 // Register with qualified key (namespace.name) for all namespaces.
                 daemon_states.insert(qualified_key(dep_id), state);
             }
         }
+
+        // In a copy of a daemon template, the other daemons of its instance go
+        // by their template names, over regular daemons of the same name.
+        daemon_states.extend(siblings);
 
         // Names the daemon chose for its dependencies with `depends = [{ id, as }]`.
         for (alias, dep_id) in &daemon_config.depends_as {
@@ -303,6 +317,22 @@ impl TemplateContext {
 
         map
     }
+}
+
+/// The template name of `other` when it is a copy in the same daemon template
+/// instance as `own`: `api` for `workers.1.api` seen from `workers.1.web`.
+fn sibling_name<'a>(
+    own: &PitchforkTomlDaemon,
+    other_id: &'a DaemonId,
+    other: &PitchforkTomlDaemon,
+) -> Option<&'a str> {
+    let (own, other) = (own.instance.as_ref()?, other.instance.as_ref()?);
+    if own.template != other.template || own.name != other.name {
+        return None;
+    }
+    other_id
+        .name()
+        .strip_prefix(&format!("{}.{}.", other.template, other.name))
 }
 
 fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
@@ -831,24 +861,37 @@ mod tests {
     #[test]
     fn test_template_instance_variables_and_sibling_name() {
         // A copy of a daemon template: `api` is its own instance's api, even
-        // with a regular `api` daemon in the namespace.
-        let self_id = DaemonId::new("app", "w.feat.web");
-        let sibling = DaemonId::new("app", "w.feat.api");
+        // with a regular `api` daemon in the namespace, and `db` is its
+        // instance's db although `web` only depends on `api`.
+        let copy = |name: &str| {
+            let mut config = make_daemon_config("echo");
+            config.instance = Some(TemplateInstance {
+                template: "w".into(),
+                name: "feat".into(),
+                index: 2,
+            });
+            (DaemonId::new("app", format!("w.feat.{name}")), config)
+        };
+        let (self_id, mut self_config) = copy("web");
+        let (api, mut api_config) = copy("api");
+        let (db, db_config) = copy("db");
+        let (_, mut other_db_config) = copy("db");
+        let other_db = DaemonId::new("app", "w.main.db");
+        other_db_config.instance.as_mut().unwrap().name = "main".into();
         let shared = DaemonId::new("app", "api");
-        let mut self_config = make_daemon_config("echo");
-        self_config.depends = vec![sibling.clone()];
-        self_config
-            .depends_as
-            .insert("api".to_string(), sibling.clone());
-        self_config.instance = Some(TemplateInstance {
-            template: "w".into(),
-            name: "feat".into(),
-            index: 2,
-        });
+        self_config.depends = vec![api.clone()];
+        api_config.url = Some("https://{{ instance }}-{{ instance_index }}.example.test".into());
 
-        let resolved = HashMap::from([(sibling.clone(), vec![4002]), (shared.clone(), vec![3000])]);
+        let resolved = HashMap::from([
+            (api.clone(), vec![4002]),
+            (db.clone(), vec![5002]),
+            (other_db.clone(), vec![5001]),
+            (shared.clone(), vec![3000]),
+        ]);
         let configs = IndexMap::from([
-            (sibling, make_daemon_config("echo")),
+            (api, api_config),
+            (db, db_config),
+            (other_db, other_db_config),
             (shared, make_daemon_config("echo")),
         ]);
         let ctx = TemplateContext::new(&self_id, &self_config, &resolved, &configs);
@@ -860,6 +903,14 @@ mod tests {
         assert_eq!(
             render_template("{{ daemons.api.port }}", &ctx).unwrap(),
             "4002"
+        );
+        assert_eq!(
+            render_template("{{ daemons.db.port }}", &ctx).unwrap(),
+            "5002"
+        );
+        assert_eq!(
+            render_template("{{ daemons.api.url }}", &ctx).unwrap(),
+            "https://feat-2.example.test"
         );
 
         let plain = make_context_with_daemon("redis", vec![6379]);
@@ -1077,6 +1128,7 @@ mod tests {
             host: Some("api.myproj".into()),
             dir: PathBuf::new(),
             declared_url: Some("http://127.0.0.1:{{ port }}".into()),
+            instance: None,
         };
         let mut on = (*settings()).clone();
         on.proxy.enable = true;

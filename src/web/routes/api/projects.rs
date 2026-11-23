@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use super::daemons::{ApiDaemonEntry, build_api_daemons, config_daemon_entry, config_proxy_hosts};
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::{GroupEntry, PitchforkToml, expand_group};
+use crate::pitchfork_toml::{GroupEntry, PitchforkToml, expand_group, merge_daemon_templates};
 use crate::proxy::worktree::{WorktreeEntry, discover_worktrees};
 
 /// Name used for the single synthetic worktree of a project directory that is
@@ -559,13 +559,17 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
     let mut declared: IndexMap<String, GroupEntry> = IndexMap::new();
     let mut exposed: HashSet<String> = HashSet::new();
     let mut unreadable_inherited: Option<String> = None;
+    let mut templates = IndexMap::new();
+    let is_inherited = |path: &StdPath| {
+        *path == **crate::env::PITCHFORK_GLOBAL_CONFIG_USER
+            || *path == **crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
+    };
 
     for path in paths {
         if !path.exists() {
             continue;
         }
-        let inherited = *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
-            || *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM;
+        let inherited = is_inherited(path);
         match PitchforkToml::read(path) {
             // Later files override earlier ones, as in the normal merge.
             Ok(config) => {
@@ -573,6 +577,7 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
                     exposed.extend(config.groups.keys().cloned());
                 }
                 declared.extend(config.groups);
+                merge_daemon_templates(&mut templates, config.daemon_templates);
             }
             // Project files override these, so an unreadable one leaves the
             // project's own groups intact. It may override a group a project
@@ -590,6 +595,31 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
                 return (IndexMap::new(), Some(e.to_string()));
             }
         }
+    }
+
+    // Daemon templates add their groups after the merge, as for the CLI. A
+    // group a template adds is shown when a project file has the template.
+    let mut expanded = PitchforkToml::new(PathBuf::new());
+    expanded.groups = declared.clone();
+    expanded.daemon_templates = templates;
+    if let Err(e) = expanded.expand_daemon_templates() {
+        log::warn!("Failed to expand daemon templates: {e}");
+        return (IndexMap::new(), Some(e.to_string()));
+    }
+    for (name, entry) in std::mem::take(&mut expanded.groups) {
+        if declared.contains_key(&name) {
+            continue;
+        }
+        let template = name.split('.').next().unwrap_or(&name);
+        if expanded
+            .daemon_templates
+            .get(template)
+            .and_then(|t| t.path.as_deref())
+            .is_some_and(|path| !is_inherited(path))
+        {
+            exposed.insert(name.clone());
+        }
+        declared.insert(name, entry);
     }
 
     resolve_groups(&declared, &exposed, unreadable_inherited.as_deref())
@@ -1801,6 +1831,30 @@ mod tests {
         assert_eq!(groups.keys().collect::<Vec<_>>(), ["web"]);
         let error = error.unwrap();
         assert!(error.contains("group 'default'") && error.contains("permission denied"));
+    }
+
+    /// The groups a daemon template adds get stack controls like declared ones.
+    #[test]
+    fn daemon_template_groups_are_shown() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemon_templates.e2e]\ninstances = 2\n\n\
+             [daemon_templates.e2e.daemons.api]\nrun = \"true\"\n\n\
+             [groups.default]\ngroups = [\"e2e.1\"]\n",
+        )
+        .unwrap();
+
+        let (groups, error) = groups_for_dir(&project);
+        assert_eq!(error, None);
+        assert_eq!(
+            groups.keys().collect::<Vec<_>>(),
+            ["default", "e2e.0", "e2e.1", "e2e"]
+        );
+        let members: Vec<_> = groups["default"].iter().map(|id| id.name()).collect();
+        assert_eq!(members, ["e2e.1.api"]);
     }
 
     /// A config file that cannot be read must not leave the groups the files

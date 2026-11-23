@@ -154,7 +154,9 @@ struct DaemonTemplateSchema {
     instances: Option<TemplateInstances>,
     /// The daemons every instance gets, with the same settings as
     /// `[daemons.<name>]`. In `depends`, the name of another daemon in the
-    /// template means the copy in the same instance.
+    /// template means the copy in the same instance. A later config file can
+    /// leave it out to change only `instances`.
+    #[schemars(default)]
     daemons: IndexMap<String, PitchforkTomlDaemon>,
 }
 
@@ -185,6 +187,32 @@ pub struct TemplateInstance {
 /// Whether `s` can name a daemon template, an instance or a daemon in a
 /// template. Dots are excluded so `<template>.<instance>.<daemon>` stays
 /// unambiguous.
+/// Merge the daemon templates of a later config file into `into`.
+///
+/// A later file of the same project can set `instances` or replace single
+/// daemons; one from another project replaces the template, as with groups.
+pub(crate) fn merge_daemon_templates(
+    into: &mut IndexMap<String, DaemonTemplate>,
+    from: IndexMap<String, DaemonTemplate>,
+) {
+    for (name, template) in from {
+        match into.get_mut(&name) {
+            Some(existing) if existing.namespace == template.namespace => {
+                if template.instances.is_some() {
+                    existing.instances = template.instances;
+                }
+                existing.daemons.extend(template.daemons);
+                if template.path.is_some() {
+                    existing.path = template.path;
+                }
+            }
+            _ => {
+                into.insert(name, template);
+            }
+        }
+    }
+}
+
 fn is_template_label(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('-')
@@ -2036,21 +2064,14 @@ impl PitchforkToml {
                         && template.daemons.contains_key(dep.name())
                 };
                 let mut daemon = daemon.clone();
-                let mut names = Vec::new();
-                for dep in &mut daemon.depends {
+                for dep in daemon
+                    .depends
+                    .iter_mut()
+                    .chain(daemon.depends_as.values_mut())
+                {
                     if sibling(dep) {
-                        let name = dep.name().to_string();
-                        *dep = copy_of(&name)?;
-                        names.push((name, dep.clone()));
+                        *dep = copy_of(dep.name())?;
                     }
-                }
-                for target in daemon.depends_as.values_mut() {
-                    if sibling(target) {
-                        *target = copy_of(target.name())?;
-                    }
-                }
-                for (name, copy) in names {
-                    daemon.depends_as.entry(name).or_insert(copy);
                 }
                 daemon.instance = Some(TemplateInstance {
                     template: template_name.to_string(),
@@ -2090,14 +2111,6 @@ impl PitchforkToml {
     pub(crate) fn validate_dependency_aliases(&self) -> Result<()> {
         for (id, daemon) in &self.daemons {
             for (alias, target) in &daemon.depends_as {
-                // In a template instance, the name of another daemon of the
-                // template means that daemon's copy in the same instance.
-                if let Some(instance) = &daemon.instance
-                    && target.namespace() == id.namespace()
-                    && target.name() == format!("{}.{}.{alias}", instance.template, instance.name)
-                {
-                    continue;
-                }
                 let Ok(clash) = DaemonId::try_new(id.namespace(), alias) else {
                     continue;
                 };
@@ -2455,25 +2468,7 @@ impl PitchforkToml {
         for (name, group) in pt.groups {
             self.groups.insert(name, group);
         }
-        // Merge daemon templates. A later file of the same project can set
-        // `instances` or replace single daemons; one from another project
-        // replaces the template, as with groups.
-        for (name, template) in pt.daemon_templates {
-            match self.daemon_templates.get_mut(&name) {
-                Some(existing) if existing.namespace == template.namespace => {
-                    if template.instances.is_some() {
-                        existing.instances = template.instances;
-                    }
-                    existing.daemons.extend(template.daemons);
-                    if template.path.is_some() {
-                        existing.path = template.path;
-                    }
-                }
-                _ => {
-                    self.daemon_templates.insert(name, template);
-                }
-            }
-        }
+        merge_daemon_templates(&mut self.daemon_templates, pt.daemon_templates);
         // Merge namespaces - pt's values override self's values
         for (name, entry) in pt.namespaces {
             self.namespaces.insert(name, entry);
@@ -3629,7 +3624,7 @@ depends = ["api", "redis", { id = "api", as = "backend" }]
         let ns = id.namespace();
         let api = DaemonId::new(ns, "workers.1.api");
         assert_eq!(worker.depends, [api.clone(), DaemonId::new(ns, "redis")]);
-        assert_eq!(worker.depends_as["api"], api);
+        assert_eq!(worker.depends_as.keys().collect::<Vec<_>>(), ["backend"]);
         assert_eq!(worker.depends_as["backend"], api);
         let instance = worker.instance.as_ref().unwrap();
         assert_eq!(
@@ -3676,7 +3671,6 @@ depends = ["api"]
         let (id, web) = daemon_named(&pt, "wt.feature-x.web");
         let api = DaemonId::new(id.namespace(), "wt.feature-x.api");
         assert_eq!(web.depends, [api.clone()]);
-        assert_eq!(web.depends_as["api"], api);
         assert_eq!(web.instance.as_ref().unwrap().index, 1);
         assert!(pt.groups.contains_key("wt.main"));
         assert_eq!(daemon_named(&pt, "api").1.run, "shared-api");
