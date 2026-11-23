@@ -897,7 +897,7 @@
       ]
     },
     "PortConfig": {
-      "description": "Port config: a port number, array of ports, or { expect, bump } object",
+      "description": "Port config: a port number, array of ports, or { expect, bump, step } object",
       "oneOf": [
         {
           "type": "integer",
@@ -925,6 +925,12 @@
                 "maximum": 65535,
                 "minimum": 0
               }
+            },
+            "step": {
+              "description": "Distance between bump candidates (default 1)",
+              "type": "integer",
+              "maximum": 65535,
+              "minimum": 1
             }
           }
         }

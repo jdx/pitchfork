@@ -274,7 +274,7 @@ impl Add {
                         Some(None) => PortBump(settings().default_port_bump_attempts()),
                         Some(Some(n)) => PortBump(n),
                     };
-                    PortConfig::from_parts(expect, bump)
+                    PortConfig::from_parts(expect, bump, None)
                 },
                 boot_start,
                 depends: {

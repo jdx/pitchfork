@@ -79,6 +79,19 @@ run = "node server.js"
 port = { expect = [3000], bump = true }
 ```
 
+Bumping adds 1 to the port each time. When only some ports are acceptable, for
+example because an OAuth provider allows a fixed set of redirect URLs, set
+`step` to change the distance between candidates:
+
+```toml
+[daemons.api]
+run = "node server.js"
+port = { expect = [4200], bump = 9, step = 10 }  # tries 4200, 4210, ... 4290
+```
+
+With several expected ports, all of them move by the same step. If the next
+candidate would pass port 65535, the search ends and the start fails.
+
 These environment variables reflect the **resolved** port, so they work correctly with auto-bumping. See [Port Assignment](#port-assignment) for the full list of available variables.
 
 ### Active Port Tracking

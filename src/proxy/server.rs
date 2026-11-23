@@ -5409,6 +5409,7 @@ mod tests {
             port: crate::config_types::PortConfig::from_parts(
                 configured.to_vec(),
                 crate::config_types::PortBump(0),
+                None,
             ),
             resolved_port: resolved.to_vec(),
             active_port: active,
