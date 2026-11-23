@@ -230,6 +230,17 @@ pub enum ConfigParseError {
         help: Option<String>,
     },
 
+    #[error("invalid daemon template '{template}' in {}: {reason}", path.display())]
+    #[diagnostic(
+        code(pitchfork::config::invalid_daemon_template),
+        url("https://pitchfork.jdx.dev/guides/daemon-templates")
+    )]
+    InvalidDaemonTemplate {
+        template: String,
+        path: PathBuf,
+        reason: String,
+    },
+
     #[error("invalid daemon name '{name}' in {}", path.display())]
     #[diagnostic(
         code(pitchfork::config::invalid_daemon_name),

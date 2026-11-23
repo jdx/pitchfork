@@ -115,6 +115,85 @@ pub struct GroupEntry {
     pub groups: Vec<String>,
 }
 
+/// The instances of a daemon template: a number of them, or their names.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum TemplateInstances {
+    /// How many instances to define. They are named `0`, `1`, `2`, ...
+    Count(u32),
+    /// The instance names. Each may use letters, digits, `_` and `-`.
+    Names(Vec<String>),
+}
+
+impl TemplateInstances {
+    /// The instance names, in order.
+    pub fn names(&self) -> Vec<String> {
+        match self {
+            Self::Count(n) => (0..*n).map(|i| i.to_string()).collect(),
+            Self::Names(names) => names.clone(),
+        }
+    }
+}
+
+/// A daemon template as written in a config file.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct DaemonTemplateRaw {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    instances: Option<TemplateInstances>,
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
+}
+
+/// Schema-only shape of a `[daemon_templates.<name>]` table.
+#[derive(JsonSchema)]
+#[allow(dead_code)]
+struct DaemonTemplateSchema {
+    /// The instances to define: a number (`instances = 4` names them `0` to
+    /// `3`) or a list of names. Each instance gets a copy of every daemon in
+    /// the template, named `<template>.<instance>.<daemon>`.
+    instances: Option<TemplateInstances>,
+    /// The daemons every instance gets, with the same settings as
+    /// `[daemons.<name>]`. In `depends`, the name of another daemon in the
+    /// template means the copy in the same instance.
+    daemons: IndexMap<String, PitchforkTomlDaemon>,
+}
+
+/// A reusable set of daemons, copied once for each of its instances.
+///
+/// Its daemons are not daemons themselves: merging configs adds a copy of
+/// each for every instance, see [`PitchforkToml::expand_daemon_templates`].
+#[derive(Debug, Clone, Default)]
+pub struct DaemonTemplate {
+    /// Namespace of the config file that defines the template.
+    pub namespace: String,
+    pub instances: Option<TemplateInstances>,
+    /// The template's daemons by short name. Their `depends` are qualified
+    /// like those of a regular daemon in `namespace`.
+    pub daemons: IndexMap<String, PitchforkTomlDaemon>,
+    pub path: Option<PathBuf>,
+}
+
+/// Which daemon template instance a daemon was copied for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateInstance {
+    pub template: String,
+    pub name: String,
+    /// Position of the instance in `instances`, from 0.
+    pub index: usize,
+}
+
+/// Whether `s` can name a daemon template, an instance or a daemon in a
+/// template. Dots are excluded so `<template>.<instance>.<daemon>` stays
+/// unambiguous.
+fn is_template_label(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && !s.contains("--")
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 /// Expand a group into its deduplicated daemons, following `groups` includes.
 ///
 /// Daemons of included groups come first, in the order the groups are listed,
@@ -232,6 +311,9 @@ struct PitchforkTomlRaw {
     /// Named groups of daemons for batch operations.
     #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
     pub groups: IndexMap<String, GroupEntryRaw>,
+    /// Reusable sets of daemons, copied once per instance.
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub daemon_templates: IndexMap<String, DaemonTemplateRaw>,
     /// Namespace registry (only meaningful in global config).
     /// Maps namespace names to their project directory.
     #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
@@ -452,6 +534,27 @@ pub struct PitchforkToml {
     /// Named groups of daemons for batch operations.
     #[schemars(default, with = "IndexMap<String, GroupEntryRaw>")]
     pub groups: IndexMap<String, GroupEntry>,
+    /// Reusable sets of daemons. Each instance of a template gets its own copy
+    /// of the template's daemons and a group to start them with.
+    ///
+    /// ```toml
+    /// [daemon_templates.e2e]
+    /// instances = 2
+    ///
+    /// [daemon_templates.e2e.daemons.api]
+    /// run = "node api.js --port $PORT"
+    /// port = { expect = [8080], bump = 20 }
+    ///
+    /// [daemon_templates.e2e.daemons.web]
+    /// run = "caddy run"
+    /// depends = ["api"]
+    /// env.API_PORT = "{{ daemons.api.port }}"
+    /// ```
+    ///
+    /// This defines `e2e.0.api`, `e2e.0.web`, `e2e.1.api` and `e2e.1.web`,
+    /// the groups `e2e.0` and `e2e.1`, and the group `e2e` with every instance.
+    #[schemars(default, with = "IndexMap<String, DaemonTemplateSchema>")]
+    pub daemon_templates: IndexMap<String, DaemonTemplate>,
     /// Namespace registry (merged from global config files).
     /// Maps namespace names to their project directory.
     #[schemars(default, with = "IndexMap<String, NamespaceEntryRaw>")]
@@ -489,6 +592,401 @@ impl PitchforkToml {
         self.foreign_env
             .get(id)
             .map_or(self.env.as_ref(), |env| env.as_ref())
+    }
+}
+
+/// Convert one daemon as written in a config file into its resolved form,
+/// qualifying its ID and `depends` with `namespace`.
+///
+/// `daemon_names` are the daemons defined beside it, which an `as` name in its
+/// `depends` must not shadow.
+fn daemon_from_raw(
+    namespace: &str,
+    short_name: &str,
+    raw_daemon: PitchforkTomlDaemonRaw,
+    path: &Path,
+    daemon_names: &HashSet<String>,
+) -> Result<(DaemonId, PitchforkTomlDaemon)> {
+    let short_name = short_name.to_string();
+    let id = match DaemonId::try_new(namespace, &short_name) {
+        Ok(id) => id,
+        Err(e) => {
+            return Err(ConfigParseError::InvalidDaemonName {
+                name: short_name,
+                path: path.to_path_buf(),
+                reason: e.to_string(),
+            }
+            .into());
+        }
+    };
+
+    let mut depends = Vec::new();
+    let mut depends_as: IndexMap<String, DaemonId> = IndexMap::new();
+    for entry in raw_daemon.depends {
+        let (dep, alias) = match entry {
+            DependencyRaw::Id(id) => (id, None),
+            DependencyRaw::Named { id, alias } => (id, Some(alias)),
+        };
+        let invalid = |dependency: String, reason: String| ConfigParseError::InvalidDependency {
+            daemon: short_name.clone(),
+            dependency,
+            path: path.to_path_buf(),
+            reason,
+        };
+        let parsed = if dep.contains('/') {
+            DaemonId::parse(&dep)
+        } else {
+            DaemonId::try_new(namespace, &dep)
+        };
+        let dep_id = match parsed {
+            Ok(id) => id,
+            Err(e) => return Err(invalid(dep, e.to_string()).into()),
+        };
+        if let Some(alias) = alias {
+            if alias.is_empty()
+                || !alias
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return Err(invalid(
+                        dep,
+                        format!(
+                            "`as` name {alias:?} must be non-empty and use only letters, digits, '_' or '-'"
+                        ),
+                    )
+                    .into());
+            }
+            if let Some(existing) = depends_as.get(&alias) {
+                if *existing != dep_id {
+                    return Err(invalid(
+                        dep,
+                        format!("`as` name {alias:?} is already used for dependency {existing}"),
+                    )
+                    .into());
+                }
+            } else if daemon_names.contains(&alias)
+                && !(dep_id.namespace() == namespace && dep_id.name() == alias)
+            {
+                return Err(invalid(
+                    dep,
+                    format!(
+                        "`as` name {alias:?} clashes with the daemon {alias:?} in this namespace"
+                    ),
+                )
+                .into());
+            }
+            depends_as.insert(alias, dep_id.clone());
+        }
+        if !depends.contains(&dep_id) {
+            depends.push(dep_id);
+        }
+    }
+
+    // Resolve port config: prefer new `port` field, fall back to deprecated fields
+    let has_deprecated = !raw_daemon.expected_port.is_empty()
+        || raw_daemon.auto_bump_port.is_some()
+        || raw_daemon.port_bump_attempts.is_some();
+    let deprecated_port = has_deprecated.then(|| {
+        let bump = if raw_daemon.auto_bump_port.unwrap_or(false) {
+            PortBump(
+                raw_daemon
+                    .port_bump_attempts
+                    .unwrap_or_else(|| settings().default_port_bump_attempts()),
+            )
+        } else {
+            PortBump(0)
+        };
+        PortConfig {
+            expect: raw_daemon.expected_port,
+            bump,
+        }
+    });
+    let port = match (raw_daemon.port, deprecated_port) {
+        (Some(port), Some(deprecated)) => {
+            // Writing the config adds the deprecated fields beside
+            // `port` for older versions; only a disagreement is news.
+            if deprecated != port {
+                warn!(
+                    "daemon {short_name}: both `port` and deprecated expected_port/auto_bump_port/port_bump_attempts are set; ignoring deprecated fields"
+                );
+            }
+            Some(port)
+        }
+        (Some(port), None) => Some(port),
+        (None, Some(deprecated)) => {
+            deprecated_at!(
+                "2026-10-03",
+                "2027-10-03",
+                format!("port-fields:{id}"),
+                "daemon {short_name}: expected_port/auto_bump_port/port_bump_attempts are deprecated, use [daemons.{short_name}.port] instead."
+            );
+            Some(deprecated)
+        }
+        (None, None) => None,
+    };
+
+    // `proxy_port` is the shorter spelling of the same setting.
+    if let (Some(explicit), Some(short)) = (raw_daemon.proxy_tls_port, raw_daemon.proxy_port)
+        && explicit != short
+    {
+        warn!(
+            "daemon {short_name}: proxy_tls_port ({explicit}) and proxy_port ({short}) \
+                 disagree; using proxy_tls_port"
+        );
+    }
+    let proxy_tls_port = raw_daemon.proxy_tls_port.or(raw_daemon.proxy_port);
+
+    // Port 0 asks the operating system to choose, so it names no port
+    // a hostname can be sent to.
+    for (key, value) in [
+        ("proxy_tls_port", raw_daemon.proxy_tls_port),
+        ("proxy_port", raw_daemon.proxy_port),
+    ] {
+        if value == Some(0) {
+            return Err(ConfigParseError::ProxyPortZero {
+                daemon: short_name.clone(),
+                key,
+                path: path.to_path_buf(),
+            }
+            .into());
+        }
+    }
+
+    // The hostname maps to one of the daemon's own ports, so a port it
+    // never declares cannot be routed to.
+    if let Some(port_want) = proxy_tls_port {
+        let declared = port.as_ref().map(|p| p.expect.clone()).unwrap_or_default();
+        if !declared.contains(&port_want) {
+            return Err(ConfigParseError::ProxyPortNotDeclared {
+                daemon: short_name.clone(),
+                port: port_want,
+                declared,
+                path: path.to_path_buf(),
+            }
+            .into());
+        }
+    }
+
+    // TLS passthrough splices the raw stream to 127.0.0.1:<port>, so a
+    // daemon without a known port has nothing to splice to.
+    if raw_daemon
+        .proxy_tls
+        .is_some_and(ProxyTlsMode::is_passthrough)
+        && port
+            .as_ref()
+            .is_none_or(|p| p.expect.iter().all(|&port| port == 0))
+    {
+        return Err(ConfigParseError::PassthroughWithoutPort {
+            daemon: short_name.clone(),
+            path: path.to_path_buf(),
+        }
+        .into());
+    }
+
+    if let RunCommand::Argv(argv) = &raw_daemon.run {
+        match argv.first().map(String::as_str) {
+            None => {
+                return Err(ConfigParseError::EmptyRunArgv {
+                    daemon: short_name.clone(),
+                    path: path.to_path_buf(),
+                }
+                .into());
+            }
+            // Almost certainly a shell command line carried over: in
+            // an array it would look for a program called `exec`.
+            Some("exec") => {
+                return Err(ConfigParseError::ExecInRunArgv {
+                    daemon: short_name.clone(),
+                    path: path.to_path_buf(),
+                }
+                .into());
+            }
+            Some(_) => {}
+        }
+    }
+
+    if let Some(RunCommand::Argv(argv)) = raw_daemon.ready_cmd.as_ref().map(|c| &c.run) {
+        match argv.first().map(String::as_str) {
+            // An empty program would fail every probe, and with no
+            // timeout the start would wait for readiness forever.
+            None | Some("") => {
+                return Err(ConfigParseError::EmptyReadyCmdArgv {
+                    daemon: short_name.clone(),
+                    path: path.to_path_buf(),
+                }
+                .into());
+            }
+            Some("exec") => {
+                return Err(ConfigParseError::ExecInReadyCmdArgv {
+                    daemon: short_name.clone(),
+                    path: path.to_path_buf(),
+                }
+                .into());
+            }
+            Some(_) => {}
+        }
+    }
+
+    if let Some(RunCommand::Argv(argv)) = raw_daemon.health_cmd.as_ref().map(|c| &c.run) {
+        match argv.first().map(String::as_str) {
+            // An empty program would fail every probe, and the daemon
+            // would be killed once its health check retries ran out.
+            None | Some("") => {
+                return Err(ConfigParseError::EmptyHealthCmdArgv {
+                    daemon: short_name.clone(),
+                    path: path.to_path_buf(),
+                }
+                .into());
+            }
+            Some("exec") => {
+                return Err(ConfigParseError::ExecInHealthCmdArgv {
+                    daemon: short_name.clone(),
+                    path: path.to_path_buf(),
+                }
+                .into());
+            }
+            Some(_) => {}
+        }
+    }
+
+    let daemon = PitchforkTomlDaemon {
+        run: raw_daemon.run,
+        auto: raw_daemon.auto,
+        oneshot: raw_daemon.oneshot,
+        cron: raw_daemon.cron,
+        retry: raw_daemon.retry,
+        ready_delay: raw_daemon.ready_delay,
+        ready_output: raw_daemon.ready_output,
+        ready_http: raw_daemon.ready_http,
+        ready_port: raw_daemon.ready_port,
+        ready_cmd: raw_daemon.ready_cmd,
+        health_cmd: raw_daemon.health_cmd,
+        health_http: raw_daemon.health_http,
+        health_port: raw_daemon.health_port,
+        port,
+        proxy: raw_daemon.proxy,
+        proxy_tls: raw_daemon.proxy_tls,
+        proxy_protocol: raw_daemon.proxy_protocol,
+        proxy_tls_port: raw_daemon.proxy_tls_port,
+        proxy_port: raw_daemon.proxy_port,
+        proxy_idle_timeout: raw_daemon.proxy_idle_timeout,
+        boot_start: raw_daemon.boot_start,
+        depends,
+        depends_as,
+        watch: raw_daemon.watch,
+        watch_mode: raw_daemon.watch_mode.unwrap_or_default(),
+        dir: raw_daemon.dir,
+        url: raw_daemon.url,
+        env: raw_daemon.env,
+        env_file: raw_daemon.env_file,
+        hooks: raw_daemon.hooks,
+        mise: raw_daemon.mise,
+        deferred_template_context: None,
+        user: raw_daemon.user,
+        memory_limit: raw_daemon.memory_limit,
+        cpu_limit: raw_daemon.cpu_limit,
+        stop_signal: raw_daemon.stop_signal,
+        pty: raw_daemon.pty,
+        time_retention: raw_daemon.time_retention,
+        line_retention: raw_daemon.line_retention,
+        archive_hook: raw_daemon.archive_hook,
+        logs: raw_daemon.logs,
+        instance: None,
+        path: Some(path.to_path_buf()),
+    };
+    if daemon.is_oneshot() {
+        let conflicts = daemon.oneshot_conflicts();
+        if !conflicts.is_empty() {
+            return Err(ConfigParseError::OneshotConflict {
+                daemon: short_name.clone(),
+                path: path.to_path_buf(),
+                conflicts: conflicts.into_iter().map(str::to_string).collect(),
+            }
+            .into());
+        }
+    }
+    Ok((id, daemon))
+}
+
+/// The form of `daemon` written to a config file whose namespace is
+/// `config_namespace`: dependencies in it are written by short name.
+fn daemon_to_raw(daemon: &PitchforkTomlDaemon, config_namespace: &str) -> PitchforkTomlDaemonRaw {
+    let port = daemon.port.as_ref();
+    PitchforkTomlDaemonRaw {
+        run: daemon.run.clone(),
+        auto: daemon.auto.clone(),
+        oneshot: daemon.oneshot,
+        cron: daemon.cron.clone(),
+        retry: daemon.retry,
+        ready_delay: daemon.ready_delay,
+        ready_output: daemon.ready_output.clone(),
+        ready_http: daemon.ready_http.clone(),
+        ready_port: daemon.ready_port.clone(),
+        ready_cmd: daemon.ready_cmd.clone(),
+        health_cmd: daemon.health_cmd.clone(),
+        health_http: daemon.health_http.clone(),
+        health_port: daemon.health_port.clone(),
+        port: port.cloned(),
+        proxy: daemon.proxy.clone(),
+        proxy_tls: daemon.proxy_tls,
+        proxy_protocol: daemon.proxy_protocol,
+        proxy_tls_port: daemon.proxy_tls_port,
+        proxy_port: daemon.proxy_port,
+        proxy_idle_timeout: daemon.proxy_idle_timeout,
+        // Deprecated fields: written for backward compatibility with older pitchfork versions
+        expected_port: port.map(|p| p.expect.clone()).unwrap_or_default(),
+        auto_bump_port: port.filter(|p| p.auto_bump()).map(|_| true),
+        port_bump_attempts: port
+            .filter(|p| p.auto_bump())
+            .map(|p| p.max_bump_attempts()),
+        boot_start: daemon.boot_start,
+        // Preserve cross-namespace dependencies: use qualified ID if namespace differs,
+        // otherwise use short name
+        depends: daemon
+            .depends
+            .iter()
+            .flat_map(|d| {
+                let id = if d.namespace() == config_namespace {
+                    d.name().to_string()
+                } else {
+                    d.qualified()
+                };
+                let aliases: Vec<DependencyRaw> = daemon
+                    .depends_as
+                    .iter()
+                    .filter(|(_, target)| *target == d)
+                    .map(|(alias, _)| DependencyRaw::Named {
+                        id: id.clone(),
+                        alias: alias.clone(),
+                    })
+                    .collect();
+                if aliases.is_empty() {
+                    vec![DependencyRaw::Id(id)]
+                } else {
+                    aliases
+                }
+            })
+            .collect(),
+        watch: daemon.watch.clone(),
+        watch_mode: match daemon.watch_mode {
+            WatchMode::Native => None,
+            mode => Some(mode),
+        },
+        dir: daemon.dir.clone(),
+        url: daemon.url.clone(),
+        env: daemon.env.clone(),
+        env_file: daemon.env_file.clone(),
+        hooks: daemon.hooks.clone(),
+        mise: daemon.mise,
+        user: daemon.user.clone(),
+        memory_limit: daemon.memory_limit,
+        cpu_limit: daemon.cpu_limit,
+        stop_signal: daemon.stop_signal,
+        pty: daemon.pty,
+        time_retention: daemon.time_retention.clone(),
+        line_retention: daemon.line_retention,
+        archive_hook: daemon.archive_hook.clone(),
+        logs: daemon.logs.clone(),
     }
 }
 
@@ -1452,6 +1950,7 @@ impl PitchforkToml {
         {
             pt.merge(e.clone());
         }
+        pt.expand_daemon_templates()?;
         pt.validate_dependency_aliases()?;
         Ok(pt)
     }
@@ -1478,9 +1977,127 @@ impl PitchforkToml {
     ///
     /// Parsing checks one file; a daemon in another file of the merged
     /// configuration can only be seen here.
+    /// Add a copy of every daemon template's daemons for each of its instances.
+    ///
+    /// Instance `<i>` of template `<t>` gets daemon `<t>.<i>.<d>` for each
+    /// template daemon `<d>`, and the group `<t>.<i>` with them. The group
+    /// `<t>` has the daemons of every instance. In a copy's `depends`, a
+    /// daemon of the template becomes its copy in the same instance and keeps
+    /// its template name for `{{ daemons.<d> }}`.
+    pub(crate) fn expand_daemon_templates(&mut self) -> Result<()> {
+        let templates = std::mem::take(&mut self.daemon_templates);
+        let result = templates
+            .iter()
+            .try_for_each(|(name, template)| self.expand_daemon_template(name, template));
+        self.daemon_templates = templates;
+        result
+    }
+
+    fn expand_daemon_template(
+        &mut self,
+        template_name: &str,
+        template: &DaemonTemplate,
+    ) -> Result<()> {
+        let invalid = |reason: String| -> miette::Report {
+            ConfigParseError::InvalidDaemonTemplate {
+                template: template_name.to_string(),
+                path: template.path.clone().unwrap_or_default(),
+                reason,
+            }
+            .into()
+        };
+        let instances = template
+            .instances
+            .as_ref()
+            .map(TemplateInstances::names)
+            .unwrap_or_default();
+        if instances.is_empty() {
+            return Ok(());
+        }
+        let mut every_instance = Vec::new();
+        for (index, instance) in instances.iter().enumerate() {
+            let copy_of = |name: &str| {
+                DaemonId::try_new(
+                    &template.namespace,
+                    format!("{template_name}.{instance}.{name}"),
+                )
+                .map_err(|e| invalid(format!("cannot name the copy of {name:?}: {e}")))
+            };
+            let mut members = Vec::new();
+            for (short_name, daemon) in &template.daemons {
+                let id = copy_of(short_name)?;
+                if self.daemons.contains_key(&id) {
+                    return Err(invalid(format!(
+                        "instance {instance:?} defines daemon {id}, which is already defined"
+                    )));
+                }
+                let sibling = |dep: &DaemonId| {
+                    dep.namespace() == template.namespace
+                        && template.daemons.contains_key(dep.name())
+                };
+                let mut daemon = daemon.clone();
+                let mut names = Vec::new();
+                for dep in &mut daemon.depends {
+                    if sibling(dep) {
+                        let name = dep.name().to_string();
+                        *dep = copy_of(&name)?;
+                        names.push((name, dep.clone()));
+                    }
+                }
+                for target in daemon.depends_as.values_mut() {
+                    if sibling(target) {
+                        *target = copy_of(target.name())?;
+                    }
+                }
+                for (name, copy) in names {
+                    daemon.depends_as.entry(name).or_insert(copy);
+                }
+                daemon.instance = Some(TemplateInstance {
+                    template: template_name.to_string(),
+                    name: instance.clone(),
+                    index,
+                });
+                self.daemons.insert(id.clone(), daemon);
+                members.push(id);
+            }
+            every_instance.extend(members.iter().cloned());
+            self.add_template_group(format!("{template_name}.{instance}"), members, &invalid)?;
+        }
+        self.add_template_group(template_name.to_string(), every_instance, &invalid)
+    }
+
+    fn add_template_group(
+        &mut self,
+        name: String,
+        daemons: Vec<DaemonId>,
+        invalid: &impl Fn(String) -> miette::Report,
+    ) -> Result<()> {
+        if self.groups.contains_key(&name) {
+            return Err(invalid(format!(
+                "it defines the group {name:?}, which is already defined"
+            )));
+        }
+        self.groups.insert(
+            name,
+            GroupEntry {
+                daemons,
+                groups: Vec::new(),
+            },
+        );
+        Ok(())
+    }
+
     pub(crate) fn validate_dependency_aliases(&self) -> Result<()> {
         for (id, daemon) in &self.daemons {
             for (alias, target) in &daemon.depends_as {
+                // In a template instance, the name of another daemon of the
+                // template means that daemon's copy in the same instance.
+                if let Some(instance) = &daemon.instance
+                    && target.namespace() == id.namespace()
+                    && target.name() == format!("{}.{}.{alias}", instance.template, instance.name)
+                {
+                    continue;
+                }
                 let Ok(clash) = DaemonId::try_new(id.namespace(), alias) else {
                     continue;
                 };
@@ -1511,6 +2128,7 @@ impl PitchforkToml {
             settings: SettingsPartial::default(),
             slugs: IndexMap::new(),
             groups: IndexMap::new(),
+            daemon_templates: IndexMap::new(),
             namespaces: IndexMap::new(),
             themes: IndexMap::new(),
             path: Some(path),
@@ -1540,306 +2158,8 @@ impl PitchforkToml {
 
         let daemon_names: HashSet<String> = raw_config.daemons.keys().cloned().collect();
         for (short_name, raw_daemon) in raw_config.daemons {
-            let id = match DaemonId::try_new(&namespace, &short_name) {
-                Ok(id) => id,
-                Err(e) => {
-                    return Err(ConfigParseError::InvalidDaemonName {
-                        name: short_name,
-                        path: path.to_path_buf(),
-                        reason: e.to_string(),
-                    }
-                    .into());
-                }
-            };
-
-            let mut depends = Vec::new();
-            let mut depends_as: IndexMap<String, DaemonId> = IndexMap::new();
-            for entry in raw_daemon.depends {
-                let (dep, alias) = match entry {
-                    DependencyRaw::Id(id) => (id, None),
-                    DependencyRaw::Named { id, alias } => (id, Some(alias)),
-                };
-                let invalid =
-                    |dependency: String, reason: String| ConfigParseError::InvalidDependency {
-                        daemon: short_name.clone(),
-                        dependency,
-                        path: path.to_path_buf(),
-                        reason,
-                    };
-                let parsed = if dep.contains('/') {
-                    DaemonId::parse(&dep)
-                } else {
-                    DaemonId::try_new(&namespace, &dep)
-                };
-                let dep_id = match parsed {
-                    Ok(id) => id,
-                    Err(e) => return Err(invalid(dep, e.to_string()).into()),
-                };
-                if let Some(alias) = alias {
-                    if alias.is_empty()
-                        || !alias
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-                    {
-                        return Err(invalid(
-                            dep,
-                            format!(
-                                "`as` name {alias:?} must be non-empty and use only letters, digits, '_' or '-'"
-                            ),
-                        )
-                        .into());
-                    }
-                    if let Some(existing) = depends_as.get(&alias) {
-                        if *existing != dep_id {
-                            return Err(invalid(
-                                dep,
-                                format!(
-                                    "`as` name {alias:?} is already used for dependency {existing}"
-                                ),
-                            )
-                            .into());
-                        }
-                    } else if daemon_names.contains(&alias)
-                        && !(dep_id.namespace() == namespace && dep_id.name() == alias)
-                    {
-                        return Err(invalid(
-                            dep,
-                            format!(
-                                "`as` name {alias:?} clashes with the daemon {alias:?} in this namespace"
-                            ),
-                        )
-                        .into());
-                    }
-                    depends_as.insert(alias, dep_id.clone());
-                }
-                if !depends.contains(&dep_id) {
-                    depends.push(dep_id);
-                }
-            }
-
-            // Resolve port config: prefer new `port` field, fall back to deprecated fields
-            let has_deprecated = !raw_daemon.expected_port.is_empty()
-                || raw_daemon.auto_bump_port.is_some()
-                || raw_daemon.port_bump_attempts.is_some();
-            let deprecated_port = has_deprecated.then(|| {
-                let bump = if raw_daemon.auto_bump_port.unwrap_or(false) {
-                    PortBump(
-                        raw_daemon
-                            .port_bump_attempts
-                            .unwrap_or_else(|| settings().default_port_bump_attempts()),
-                    )
-                } else {
-                    PortBump(0)
-                };
-                PortConfig {
-                    expect: raw_daemon.expected_port,
-                    bump,
-                }
-            });
-            let port = match (raw_daemon.port, deprecated_port) {
-                (Some(port), Some(deprecated)) => {
-                    // Writing the config adds the deprecated fields beside
-                    // `port` for older versions; only a disagreement is news.
-                    if deprecated != port {
-                        warn!(
-                            "daemon {short_name}: both `port` and deprecated expected_port/auto_bump_port/port_bump_attempts are set; ignoring deprecated fields"
-                        );
-                    }
-                    Some(port)
-                }
-                (Some(port), None) => Some(port),
-                (None, Some(deprecated)) => {
-                    deprecated_at!(
-                        "2026-10-03",
-                        "2027-10-03",
-                        format!("port-fields:{id}"),
-                        "daemon {short_name}: expected_port/auto_bump_port/port_bump_attempts are deprecated, use [daemons.{short_name}.port] instead."
-                    );
-                    Some(deprecated)
-                }
-                (None, None) => None,
-            };
-
-            // `proxy_port` is the shorter spelling of the same setting.
-            if let (Some(explicit), Some(short)) =
-                (raw_daemon.proxy_tls_port, raw_daemon.proxy_port)
-                && explicit != short
-            {
-                warn!(
-                    "daemon {short_name}: proxy_tls_port ({explicit}) and proxy_port ({short}) \
-                     disagree; using proxy_tls_port"
-                );
-            }
-            let proxy_tls_port = raw_daemon.proxy_tls_port.or(raw_daemon.proxy_port);
-
-            // Port 0 asks the operating system to choose, so it names no port
-            // a hostname can be sent to.
-            for (key, value) in [
-                ("proxy_tls_port", raw_daemon.proxy_tls_port),
-                ("proxy_port", raw_daemon.proxy_port),
-            ] {
-                if value == Some(0) {
-                    return Err(ConfigParseError::ProxyPortZero {
-                        daemon: short_name.clone(),
-                        key,
-                        path: path.to_path_buf(),
-                    }
-                    .into());
-                }
-            }
-
-            // The hostname maps to one of the daemon's own ports, so a port it
-            // never declares cannot be routed to.
-            if let Some(port_want) = proxy_tls_port {
-                let declared = port.as_ref().map(|p| p.expect.clone()).unwrap_or_default();
-                if !declared.contains(&port_want) {
-                    return Err(ConfigParseError::ProxyPortNotDeclared {
-                        daemon: short_name.clone(),
-                        port: port_want,
-                        declared,
-                        path: path.to_path_buf(),
-                    }
-                    .into());
-                }
-            }
-
-            // TLS passthrough splices the raw stream to 127.0.0.1:<port>, so a
-            // daemon without a known port has nothing to splice to.
-            if raw_daemon
-                .proxy_tls
-                .is_some_and(ProxyTlsMode::is_passthrough)
-                && port
-                    .as_ref()
-                    .is_none_or(|p| p.expect.iter().all(|&port| port == 0))
-            {
-                return Err(ConfigParseError::PassthroughWithoutPort {
-                    daemon: short_name.clone(),
-                    path: path.to_path_buf(),
-                }
-                .into());
-            }
-
-            if let RunCommand::Argv(argv) = &raw_daemon.run {
-                match argv.first().map(String::as_str) {
-                    None => {
-                        return Err(ConfigParseError::EmptyRunArgv {
-                            daemon: short_name.clone(),
-                            path: path.to_path_buf(),
-                        }
-                        .into());
-                    }
-                    // Almost certainly a shell command line carried over: in
-                    // an array it would look for a program called `exec`.
-                    Some("exec") => {
-                        return Err(ConfigParseError::ExecInRunArgv {
-                            daemon: short_name.clone(),
-                            path: path.to_path_buf(),
-                        }
-                        .into());
-                    }
-                    Some(_) => {}
-                }
-            }
-
-            if let Some(RunCommand::Argv(argv)) = raw_daemon.ready_cmd.as_ref().map(|c| &c.run) {
-                match argv.first().map(String::as_str) {
-                    // An empty program would fail every probe, and with no
-                    // timeout the start would wait for readiness forever.
-                    None | Some("") => {
-                        return Err(ConfigParseError::EmptyReadyCmdArgv {
-                            daemon: short_name.clone(),
-                            path: path.to_path_buf(),
-                        }
-                        .into());
-                    }
-                    Some("exec") => {
-                        return Err(ConfigParseError::ExecInReadyCmdArgv {
-                            daemon: short_name.clone(),
-                            path: path.to_path_buf(),
-                        }
-                        .into());
-                    }
-                    Some(_) => {}
-                }
-            }
-
-            if let Some(RunCommand::Argv(argv)) = raw_daemon.health_cmd.as_ref().map(|c| &c.run) {
-                match argv.first().map(String::as_str) {
-                    // An empty program would fail every probe, and the daemon
-                    // would be killed once its health check retries ran out.
-                    None | Some("") => {
-                        return Err(ConfigParseError::EmptyHealthCmdArgv {
-                            daemon: short_name.clone(),
-                            path: path.to_path_buf(),
-                        }
-                        .into());
-                    }
-                    Some("exec") => {
-                        return Err(ConfigParseError::ExecInHealthCmdArgv {
-                            daemon: short_name.clone(),
-                            path: path.to_path_buf(),
-                        }
-                        .into());
-                    }
-                    Some(_) => {}
-                }
-            }
-
-            let daemon = PitchforkTomlDaemon {
-                run: raw_daemon.run,
-                auto: raw_daemon.auto,
-                oneshot: raw_daemon.oneshot,
-                cron: raw_daemon.cron,
-                retry: raw_daemon.retry,
-                ready_delay: raw_daemon.ready_delay,
-                ready_output: raw_daemon.ready_output,
-                ready_http: raw_daemon.ready_http,
-                ready_port: raw_daemon.ready_port,
-                ready_cmd: raw_daemon.ready_cmd,
-                health_cmd: raw_daemon.health_cmd,
-                health_http: raw_daemon.health_http,
-                health_port: raw_daemon.health_port,
-                port,
-                proxy: raw_daemon.proxy,
-                proxy_tls: raw_daemon.proxy_tls,
-                proxy_protocol: raw_daemon.proxy_protocol,
-                proxy_tls_port: raw_daemon.proxy_tls_port,
-                proxy_port: raw_daemon.proxy_port,
-                proxy_idle_timeout: raw_daemon.proxy_idle_timeout,
-                boot_start: raw_daemon.boot_start,
-                depends,
-                depends_as,
-                watch: raw_daemon.watch,
-                watch_mode: raw_daemon.watch_mode.unwrap_or_default(),
-                dir: raw_daemon.dir,
-                url: raw_daemon.url,
-                env: raw_daemon.env,
-                env_file: raw_daemon.env_file,
-                hooks: raw_daemon.hooks,
-                mise: raw_daemon.mise,
-                deferred_template_context: None,
-                user: raw_daemon.user,
-                memory_limit: raw_daemon.memory_limit,
-                cpu_limit: raw_daemon.cpu_limit,
-                stop_signal: raw_daemon.stop_signal,
-                pty: raw_daemon.pty,
-                time_retention: raw_daemon.time_retention,
-                line_retention: raw_daemon.line_retention,
-                archive_hook: raw_daemon.archive_hook,
-                logs: raw_daemon.logs,
-                path: Some(path.to_path_buf()),
-            };
-            if daemon.is_oneshot() {
-                let conflicts = daemon.oneshot_conflicts();
-                if !conflicts.is_empty() {
-                    return Err(ConfigParseError::OneshotConflict {
-                        daemon: short_name.clone(),
-                        path: path.to_path_buf(),
-                        conflicts: conflicts.into_iter().map(str::to_string).collect(),
-                    }
-                    .into());
-                }
-            }
+            let (id, daemon) =
+                daemon_from_raw(&namespace, &short_name, raw_daemon, path, &daemon_names)?;
             pt.daemons.insert(id, daemon);
         }
 
@@ -1915,6 +2235,48 @@ impl PitchforkToml {
             );
         }
 
+        for (template_name, raw_template) in raw_config.daemon_templates {
+            let invalid = |reason: String| ConfigParseError::InvalidDaemonTemplate {
+                template: template_name.clone(),
+                path: path.to_path_buf(),
+                reason,
+            };
+            const LABEL_RULE: &str = "must be non-empty and use only letters, digits, '_' or '-'";
+            if !is_template_label(&template_name) {
+                return Err(invalid(format!("its name {LABEL_RULE}")).into());
+            }
+            if let Some(TemplateInstances::Names(names)) = &raw_template.instances {
+                let mut seen = HashSet::new();
+                for name in names {
+                    if !is_template_label(name) {
+                        return Err(invalid(format!("instance name {name:?} {LABEL_RULE}")).into());
+                    }
+                    if !seen.insert(name) {
+                        return Err(invalid(format!("instance {name:?} is listed twice")).into());
+                    }
+                }
+            }
+            let template_daemons: HashSet<String> = raw_template.daemons.keys().cloned().collect();
+            let mut daemons = IndexMap::new();
+            for (short_name, raw_daemon) in raw_template.daemons {
+                if !is_template_label(&short_name) {
+                    return Err(invalid(format!("daemon name {short_name:?} {LABEL_RULE}")).into());
+                }
+                let (_, daemon) =
+                    daemon_from_raw(&namespace, &short_name, raw_daemon, path, &template_daemons)?;
+                daemons.insert(short_name, daemon);
+            }
+            pt.daemon_templates.insert(
+                template_name,
+                DaemonTemplate {
+                    namespace: namespace.clone(),
+                    instances: raw_template.instances,
+                    daemons,
+                    path: Some(path.to_path_buf()),
+                },
+            );
+        }
+
         pt.themes = raw_config.themes;
 
         Ok(pt)
@@ -1981,83 +2343,7 @@ impl PitchforkToml {
                         config_namespace
                     ));
                 }
-                let port = daemon.port.as_ref();
-                let raw_daemon = PitchforkTomlDaemonRaw {
-                    run: daemon.run.clone(),
-                    auto: daemon.auto.clone(),
-                    oneshot: daemon.oneshot,
-                    cron: daemon.cron.clone(),
-                    retry: daemon.retry,
-                    ready_delay: daemon.ready_delay,
-                    ready_output: daemon.ready_output.clone(),
-                    ready_http: daemon.ready_http.clone(),
-                    ready_port: daemon.ready_port.clone(),
-                    ready_cmd: daemon.ready_cmd.clone(),
-                    health_cmd: daemon.health_cmd.clone(),
-                    health_http: daemon.health_http.clone(),
-                    health_port: daemon.health_port.clone(),
-                    port: port.cloned(),
-                    proxy: daemon.proxy.clone(),
-                    proxy_tls: daemon.proxy_tls,
-                    proxy_protocol: daemon.proxy_protocol,
-                    proxy_tls_port: daemon.proxy_tls_port,
-                    proxy_port: daemon.proxy_port,
-                    proxy_idle_timeout: daemon.proxy_idle_timeout,
-                    // Deprecated fields: written for backward compatibility with older pitchfork versions
-                    expected_port: port.map(|p| p.expect.clone()).unwrap_or_default(),
-                    auto_bump_port: port.filter(|p| p.auto_bump()).map(|_| true),
-                    port_bump_attempts: port
-                        .filter(|p| p.auto_bump())
-                        .map(|p| p.max_bump_attempts()),
-                    boot_start: daemon.boot_start,
-                    // Preserve cross-namespace dependencies: use qualified ID if namespace differs,
-                    // otherwise use short name
-                    depends: daemon
-                        .depends
-                        .iter()
-                        .flat_map(|d| {
-                            let id = if d.namespace() == config_namespace {
-                                d.name().to_string()
-                            } else {
-                                d.qualified()
-                            };
-                            let aliases: Vec<DependencyRaw> = daemon
-                                .depends_as
-                                .iter()
-                                .filter(|(_, target)| *target == d)
-                                .map(|(alias, _)| DependencyRaw::Named {
-                                    id: id.clone(),
-                                    alias: alias.clone(),
-                                })
-                                .collect();
-                            if aliases.is_empty() {
-                                vec![DependencyRaw::Id(id)]
-                            } else {
-                                aliases
-                            }
-                        })
-                        .collect(),
-                    watch: daemon.watch.clone(),
-                    watch_mode: match daemon.watch_mode {
-                        WatchMode::Native => None,
-                        mode => Some(mode),
-                    },
-                    dir: daemon.dir.clone(),
-                    url: daemon.url.clone(),
-                    env: daemon.env.clone(),
-                    env_file: daemon.env_file.clone(),
-                    hooks: daemon.hooks.clone(),
-                    mise: daemon.mise,
-                    user: daemon.user.clone(),
-                    memory_limit: daemon.memory_limit,
-                    cpu_limit: daemon.cpu_limit,
-                    stop_signal: daemon.stop_signal,
-                    pty: daemon.pty,
-                    time_retention: daemon.time_retention.clone(),
-                    line_retention: daemon.line_retention,
-                    archive_hook: daemon.archive_hook.clone(),
-                    logs: daemon.logs.clone(),
-                };
+                let raw_daemon = daemon_to_raw(daemon, &config_namespace);
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
 
@@ -2092,6 +2378,22 @@ impl PitchforkToml {
                     GroupEntryRaw {
                         daemons: raw_daemons,
                         groups: group.groups.clone(),
+                    },
+                );
+            }
+
+            for (name, template) in &self.daemon_templates {
+                raw.daemon_templates.insert(
+                    name.clone(),
+                    DaemonTemplateRaw {
+                        instances: template.instances.clone(),
+                        daemons: template
+                            .daemons
+                            .iter()
+                            .map(|(short_name, daemon)| {
+                                (short_name.clone(), daemon_to_raw(daemon, &config_namespace))
+                            })
+                            .collect(),
                     },
                 );
             }
@@ -2152,6 +2454,25 @@ impl PitchforkToml {
         // Merge groups - pt's values override self's values
         for (name, group) in pt.groups {
             self.groups.insert(name, group);
+        }
+        // Merge daemon templates. A later file of the same project can set
+        // `instances` or replace single daemons; one from another project
+        // replaces the template, as with groups.
+        for (name, template) in pt.daemon_templates {
+            match self.daemon_templates.get_mut(&name) {
+                Some(existing) if existing.namespace == template.namespace => {
+                    if template.instances.is_some() {
+                        existing.instances = template.instances;
+                    }
+                    existing.daemons.extend(template.daemons);
+                    if template.path.is_some() {
+                        existing.path = template.path;
+                    }
+                }
+                _ => {
+                    self.daemon_templates.insert(name, template);
+                }
+            }
         }
         // Merge namespaces - pt's values override self's values
         for (name, entry) in pt.namespaces {
@@ -2729,6 +3050,9 @@ pub struct PitchforkTomlDaemon {
     pub archive_hook: Option<String>,
     /// Per-daemon log configuration sub-table.
     pub logs: Option<PitchforkTomlDaemonLogs>,
+    /// The daemon template instance this daemon is a copy for.
+    #[schemars(skip)]
+    pub instance: Option<TemplateInstance>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -3243,6 +3567,222 @@ groups = ["a"]
     fn test_group_without_daemons_key_parses() {
         let groups = parse_groups("[groups.empty]\n");
         assert!(expand_group(&groups, "empty").unwrap().is_empty());
+    }
+
+    fn merged_templates(files: &[(&str, &str)]) -> Result<PitchforkToml> {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = files
+            .iter()
+            .map(|(name, content)| {
+                let path = dir.path().join(name);
+                std::fs::write(&path, content).unwrap();
+                path
+            })
+            .collect();
+        PitchforkToml::all_merged_from_uncached(&paths)
+    }
+
+    fn daemon_named<'a>(
+        pt: &'a PitchforkToml,
+        name: &str,
+    ) -> (&'a DaemonId, &'a PitchforkTomlDaemon) {
+        pt.daemons
+            .iter()
+            .find(|(id, _)| id.name() == name)
+            .unwrap_or_else(|| panic!("no daemon {name}"))
+    }
+
+    #[test]
+    fn test_daemon_templates_expand_each_instance() {
+        let pt = merged_templates(&[(
+            "pitchfork.toml",
+            r#"
+[daemons.redis]
+run = "redis-server"
+
+[daemon_templates.workers]
+instances = 2
+
+[daemon_templates.workers.daemons.api]
+run = "api"
+
+[daemon_templates.workers.daemons.worker]
+run = "worker --api {{ daemons.api.port }}"
+depends = ["api", "redis", { id = "api", as = "backend" }]
+"#,
+        )])
+        .unwrap();
+        let mut daemons: Vec<_> = pt.daemons.keys().map(|id| id.name()).collect();
+        daemons.sort();
+        assert_eq!(
+            daemons,
+            [
+                "redis",
+                "workers.0.api",
+                "workers.0.worker",
+                "workers.1.api",
+                "workers.1.worker"
+            ]
+        );
+
+        let (id, worker) = daemon_named(&pt, "workers.1.worker");
+        let ns = id.namespace();
+        let api = DaemonId::new(ns, "workers.1.api");
+        assert_eq!(worker.depends, [api.clone(), DaemonId::new(ns, "redis")]);
+        assert_eq!(worker.depends_as["api"], api);
+        assert_eq!(worker.depends_as["backend"], api);
+        let instance = worker.instance.as_ref().unwrap();
+        assert_eq!(
+            (
+                instance.template.as_str(),
+                instance.name.as_str(),
+                instance.index
+            ),
+            ("workers", "1", 1)
+        );
+        assert!(daemon_named(&pt, "redis").1.instance.is_none());
+
+        assert_eq!(
+            names(&pt.groups["workers.0"].daemons),
+            ["workers.0.api", "workers.0.worker"]
+        );
+        assert_eq!(pt.groups["workers"].daemons.len(), 4);
+        // The template itself is kept for writing the file back.
+        assert_eq!(pt.daemon_templates["workers"].daemons.len(), 2);
+    }
+
+    #[test]
+    fn test_daemon_templates_named_instances_and_shadowed_daemon() {
+        // A regular `api` daemon in the namespace does not clash with the
+        // `api` name a copy keeps for its own instance's api.
+        let pt = merged_templates(&[(
+            "pitchfork.toml",
+            r#"
+[daemons.api]
+run = "shared-api"
+
+[daemon_templates.wt]
+instances = ["main", "feature-x"]
+
+[daemon_templates.wt.daemons.api]
+run = "api"
+
+[daemon_templates.wt.daemons.web]
+run = "web"
+depends = ["api"]
+"#,
+        )])
+        .unwrap();
+        let (id, web) = daemon_named(&pt, "wt.feature-x.web");
+        let api = DaemonId::new(id.namespace(), "wt.feature-x.api");
+        assert_eq!(web.depends, [api.clone()]);
+        assert_eq!(web.depends_as["api"], api);
+        assert_eq!(web.instance.as_ref().unwrap().index, 1);
+        assert!(pt.groups.contains_key("wt.main"));
+        assert_eq!(daemon_named(&pt, "api").1.run, "shared-api");
+    }
+
+    #[test]
+    fn test_daemon_templates_without_instances_add_nothing() {
+        let pt = merged_templates(&[(
+            "pitchfork.toml",
+            "[daemon_templates.t.daemons.a]\nrun = \"a\"\n",
+        )])
+        .unwrap();
+        assert!(pt.daemons.is_empty());
+        assert!(pt.groups.is_empty());
+    }
+
+    #[test]
+    fn test_daemon_templates_local_file_sets_instances() {
+        let pt = merged_templates(&[
+            (
+                "pitchfork.toml",
+                "[daemon_templates.t]\ninstances = 3\n[daemon_templates.t.daemons.a]\nrun = \"a\"\n",
+            ),
+            (
+                "pitchfork.local.toml",
+                "[daemon_templates.t]\ninstances = [\"mine\"]\n[daemon_templates.t.daemons.b]\nrun = \"b\"\n",
+            ),
+        ])
+        .unwrap();
+        let mut names: Vec<_> = pt.daemons.keys().map(|id| id.name()).collect();
+        names.sort();
+        assert_eq!(names, ["t.mine.a", "t.mine.b"]);
+    }
+
+    #[test]
+    fn test_daemon_templates_reject_clashes() {
+        for (case, toml) in [
+            (
+                "daemon",
+                "[daemons.\"t.0.a\"]\nrun = \"x\"\n[daemon_templates.t]\ninstances = 1\n[daemon_templates.t.daemons.a]\nrun = \"a\"\n",
+            ),
+            (
+                "group",
+                "[groups.t]\ndaemons = []\n[daemon_templates.t]\ninstances = 1\n[daemon_templates.t.daemons.a]\nrun = \"a\"\n",
+            ),
+            (
+                "instance group",
+                "[groups.\"t.0\"]\ndaemons = []\n[daemon_templates.t]\ninstances = 1\n[daemon_templates.t.daemons.a]\nrun = \"a\"\n",
+            ),
+        ] {
+            let err = merged_templates(&[("pitchfork.toml", toml)]).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid daemon template 't'"),
+                "{case}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_daemon_templates_reject_bad_names() {
+        for (case, toml) in [
+            ("template", "[daemon_templates.\"a.b\"]\ninstances = 1\n"),
+            ("instance", "[daemon_templates.t]\ninstances = [\"x.y\"]\n"),
+            (
+                "duplicate instance",
+                "[daemon_templates.t]\ninstances = [\"x\", \"x\"]\n",
+            ),
+            ("dash", "[daemon_templates.t]\ninstances = [\"x-\"]\n"),
+            (
+                "daemon",
+                "[daemon_templates.t]\ninstances = 1\n[daemon_templates.t.daemons.\"a.b\"]\nrun = \"a\"\n",
+            ),
+        ] {
+            assert!(parse_daemons(toml).is_err(), "{case} should be rejected");
+        }
+    }
+
+    #[test]
+    fn test_daemon_templates_write_keeps_template_and_not_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pitchfork.toml");
+        std::fs::write(
+            &path,
+            r#"
+[daemon_templates.t]
+instances = ["a", "b"]
+
+[daemon_templates.t.daemons.api]
+run = "api"
+depends = [{ id = "other/db", as = "db" }]
+"#,
+        )
+        .unwrap();
+        let pt = PitchforkToml::read(&path).unwrap();
+        assert!(pt.daemons.is_empty());
+        pt.write().unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("t.a.api"), "{written}");
+        let again = PitchforkToml::read(&path).unwrap();
+        let api = &again.daemon_templates["t"].daemons["api"];
+        assert_eq!(api.run, "api");
+        assert_eq!(api.depends_as["db"], DaemonId::new("other", "db"));
+        assert_eq!(
+            again.daemon_templates["t"].instances,
+            Some(TemplateInstances::Names(vec!["a".into(), "b".into()]))
+        );
     }
 
     #[test]

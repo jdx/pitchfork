@@ -1097,6 +1097,32 @@ named `default` appears first and supplies the **Start stack**, **Stop stack**,
 and **Restart stack** actions. Groups from user and system configs are excluded
 from the stack page.
 
+## Daemon Templates
+
+A daemon template defines a set of daemons once and adds a copy of the set for
+each instance. See [daemon templates](/guides/daemon-templates) for a full
+guide.
+
+```toml
+[daemon_templates.workers]
+instances = 2                 # or a list of names: ["acme", "globex"]
+
+[daemon_templates.workers.daemons.api]
+run = "./api --port $PORT"
+port = { expect = [3000], bump = 10 }
+
+[daemon_templates.workers.daemons.worker]
+run = "./worker --api http://127.0.0.1:{{ daemons.api.port }}"
+depends = ["api"]
+```
+
+- `instances` is a count (instances `0` to `N-1`) or a list of instance names
+- `daemons` takes the same fields as `[daemons.<name>]`
+- Instance `<i>` adds the daemon `<template>.<i>.<daemon>` for each template daemon and the group `<template>.<i>`. The group `<template>` has the daemons of every instance
+- In a copy, `depends` and templates such as <code v-pre>{{ daemons.api.port }}</code> resolve another daemon of the template to its copy in the same instance
+- <code v-pre>{{ instance }}</code> and <code v-pre>{{ instance_index }}</code> are the copy's instance name and position
+- A later file of the same project can change `instances` and add or replace template daemons. A copy or group whose name is already defined is a config error
+
 ## TUI Themes
 
 The TUI colors come from `settings.tui.theme`. The default, `auto`, only uses

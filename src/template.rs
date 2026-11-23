@@ -10,7 +10,7 @@
 //! had their ports resolved).
 
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::PitchforkTomlDaemon;
+use crate::pitchfork_toml::{PitchforkTomlDaemon, TemplateInstance};
 use crate::settings::settings;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -92,6 +92,8 @@ pub struct TemplateContext {
     /// values have been rendered, so it is `None` during env-value rendering
     /// itself (preventing self-reference cycles).
     env: Option<IndexMap<String, String>>,
+    /// The daemon template instance the daemon is a copy for, if any.
+    instance: Option<TemplateInstance>,
 }
 
 impl TemplateContext {
@@ -208,6 +210,7 @@ impl TemplateContext {
             self_state,
             daemon_states,
             env: None,
+            instance: daemon_config.instance.clone(),
         }
     }
 
@@ -246,6 +249,15 @@ impl TemplateContext {
         insert(
             "dir",
             self.self_state.dir.to_string_lossy().to_string().into(),
+        );
+        // Null outside a daemon template, so `{% if instance %}` works anywhere.
+        insert(
+            "instance",
+            serde_json::json!(self.instance.as_ref().map(|i| &i.name)),
+        );
+        insert(
+            "instance_index",
+            serde_json::json!(self.instance.as_ref().map(|i| i.index)),
         );
 
         // Daemons
@@ -813,6 +825,47 @@ mod tests {
         assert_eq!(
             render_template("{{ daemons[\"myproj.redis\"].port }}", &ctx).unwrap(),
             "6379"
+        );
+    }
+
+    #[test]
+    fn test_template_instance_variables_and_sibling_name() {
+        // A copy of a daemon template: `api` is its own instance's api, even
+        // with a regular `api` daemon in the namespace.
+        let self_id = DaemonId::new("app", "w.feat.web");
+        let sibling = DaemonId::new("app", "w.feat.api");
+        let shared = DaemonId::new("app", "api");
+        let mut self_config = make_daemon_config("echo");
+        self_config.depends = vec![sibling.clone()];
+        self_config
+            .depends_as
+            .insert("api".to_string(), sibling.clone());
+        self_config.instance = Some(TemplateInstance {
+            template: "w".into(),
+            name: "feat".into(),
+            index: 2,
+        });
+
+        let resolved = HashMap::from([(sibling.clone(), vec![4002]), (shared.clone(), vec![3000])]);
+        let configs = IndexMap::from([
+            (sibling, make_daemon_config("echo")),
+            (shared, make_daemon_config("echo")),
+        ]);
+        let ctx = TemplateContext::new(&self_id, &self_config, &resolved, &configs);
+
+        assert_eq!(
+            render_template("{{ instance }}-{{ instance_index }}", &ctx).unwrap(),
+            "feat-2"
+        );
+        assert_eq!(
+            render_template("{{ daemons.api.port }}", &ctx).unwrap(),
+            "4002"
+        );
+
+        let plain = make_context_with_daemon("redis", vec![6379]);
+        assert_eq!(
+            render_template("{% if instance %}copy{% else %}plain{% endif %}", &plain).unwrap(),
+            "plain"
         );
     }
 
