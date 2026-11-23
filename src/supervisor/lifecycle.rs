@@ -4179,12 +4179,11 @@ mod port_conflict_tests {
     #[tokio::test]
     async fn bumping_past_the_last_port_ends_the_search() {
         use crate::daemon_id::DaemonId;
-        let _forks = FORKS.lock().await;
-        let one = DaemonId::new("top-one", "web");
-        let two = DaemonId::new("top-two", "web");
-
-        let (_, _claim) = claim_ports(&one, &[65530], false, 0, 1).await.unwrap();
-        let err = claim_ports(&two, &[65530], true, 5, 10).await.unwrap_err();
+        // Claimed, so the start port counts as taken without binding anything.
+        let claimed = HashMap::from([(65530u16, DaemonId::new("top-one", "web"))]);
+        let err = check_ports_available(&[65530], true, 5, 10, &claimed)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err.downcast_ref::<PortError>(),
             Some(PortError::NoAvailablePort { .. })
