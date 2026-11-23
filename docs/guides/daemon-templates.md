@@ -82,7 +82,8 @@ including those the copy only depends on indirectly. A copy is also
 available under its full name, such as
 <code v-pre>{{ daemons["workers.1.api"].port }}</code>. An `as` name in
 `depends` that points to another template daemon also points to the copy in
-the same instance.
+the same instance. An `as` name that is the name of another template daemon
+must point to that daemon; config parsing fails otherwise.
 
 ## Template variables
 

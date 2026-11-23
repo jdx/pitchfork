@@ -184,9 +184,6 @@ pub struct TemplateInstance {
     pub index: usize,
 }
 
-/// Whether `s` can name a daemon template, an instance or a daemon in a
-/// template. Dots are excluded so `<template>.<instance>.<daemon>` stays
-/// unambiguous.
 /// Merge the daemon templates of a later config file into `into`.
 ///
 /// A later file of the same project can set `instances` or replace single
@@ -213,6 +210,9 @@ pub(crate) fn merge_daemon_templates(
     }
 }
 
+/// Whether `s` can name a daemon template, an instance or a daemon in a
+/// template. Dots are excluded so `<template>.<instance>.<daemon>` stays
+/// unambiguous.
 fn is_template_label(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('-')
@@ -2114,11 +2114,28 @@ impl PitchforkToml {
             for (alias, target) in &daemon.depends_as {
                 // In a template copy, an `as` name for another daemon of the
                 // template names that daemon's copy, over a regular daemon.
+                // Any other target must not hide a daemon of the template,
+                // which may come from a later config file.
                 if let Some(instance) = &daemon.instance
-                    && target.namespace() == id.namespace()
-                    && target.name() == format!("{}.{}.{alias}", instance.template, instance.name)
+                    && let Ok(sibling) = DaemonId::try_new(
+                        id.namespace(),
+                        format!("{}.{}.{alias}", instance.template, instance.name),
+                    )
+                    && self.daemons.contains_key(&sibling)
                 {
-                    continue;
+                    if sibling == *target {
+                        continue;
+                    }
+                    return Err(ConfigParseError::InvalidDependency {
+                        daemon: id.name().to_string(),
+                        dependency: target.qualified(),
+                        path: daemon.path.clone().unwrap_or_default(),
+                        reason: format!(
+                            "`as` name {alias:?} clashes with the daemon {alias:?} of template {:?}",
+                            instance.template
+                        ),
+                    }
+                    .into());
                 }
                 let Ok(clash) = DaemonId::try_new(id.namespace(), alias) else {
                     continue;
@@ -3709,6 +3726,39 @@ depends = [{ id = "api", as = "api" }]
         assert_eq!(
             web.depends_as["api"],
             DaemonId::new(id.namespace(), "t.0.api")
+        );
+    }
+
+    #[test]
+    fn test_daemon_templates_alias_clashing_with_a_sibling_from_another_file_is_rejected() {
+        let err = merged_templates(&[
+            (
+                "pitchfork.toml",
+                r#"
+[daemons.shared-db]
+run = "shared-db"
+
+[daemon_templates.t]
+instances = 1
+
+[daemon_templates.t.daemons.worker]
+run = "worker"
+depends = [{ id = "shared-db", as = "db" }]
+"#,
+            ),
+            (
+                "pitchfork.local.toml",
+                r#"
+[daemon_templates.t.daemons.db]
+run = "db"
+"#,
+            ),
+        ])
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("clashes with the daemon \"db\" of template \"t\""),
+            "{err:?}"
         );
     }
 
