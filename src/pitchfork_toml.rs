@@ -2111,6 +2111,14 @@ impl PitchforkToml {
     pub(crate) fn validate_dependency_aliases(&self) -> Result<()> {
         for (id, daemon) in &self.daemons {
             for (alias, target) in &daemon.depends_as {
+                // In a template copy, an `as` name for another daemon of the
+                // template names that daemon's copy, over a regular daemon.
+                if let Some(instance) = &daemon.instance
+                    && target.namespace() == id.namespace()
+                    && target.name() == format!("{}.{}.{alias}", instance.template, instance.name)
+                {
+                    continue;
+                }
                 let Ok(clash) = DaemonId::try_new(id.namespace(), alias) else {
                     continue;
                 };
@@ -3674,6 +3682,33 @@ depends = ["api"]
         assert_eq!(web.instance.as_ref().unwrap().index, 1);
         assert!(pt.groups.contains_key("wt.main"));
         assert_eq!(daemon_named(&pt, "api").1.run, "shared-api");
+    }
+
+    #[test]
+    fn test_daemon_templates_alias_for_a_sibling_wins_over_a_regular_daemon() {
+        let pt = merged_templates(&[(
+            "pitchfork.toml",
+            r#"
+[daemons.api]
+run = "shared-api"
+
+[daemon_templates.t]
+instances = 1
+
+[daemon_templates.t.daemons.api]
+run = "api"
+
+[daemon_templates.t.daemons.web]
+run = "web"
+depends = [{ id = "api", as = "api" }]
+"#,
+        )])
+        .unwrap();
+        let (id, web) = daemon_named(&pt, "t.0.web");
+        assert_eq!(
+            web.depends_as["api"],
+            DaemonId::new(id.namespace(), "t.0.api")
+        );
     }
 
     #[test]

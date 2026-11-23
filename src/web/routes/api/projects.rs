@@ -560,6 +560,7 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
     let mut exposed: HashSet<String> = HashSet::new();
     let mut unreadable_inherited: Option<String> = None;
     let mut templates = IndexMap::new();
+    let mut daemons = IndexMap::new();
     let is_inherited = |path: &StdPath| {
         *path == **crate::env::PITCHFORK_GLOBAL_CONFIG_USER
             || *path == **crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
@@ -577,6 +578,7 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
                     exposed.extend(config.groups.keys().cloned());
                 }
                 declared.extend(config.groups);
+                daemons.extend(config.daemons);
                 merge_daemon_templates(&mut templates, config.daemon_templates);
             }
             // Project files override these, so an unreadable one leaves the
@@ -599,8 +601,11 @@ fn read_groups(paths: &[PathBuf]) -> GroupsResult {
 
     // Daemon templates add their groups after the merge, as for the CLI. A
     // group a template adds is shown when a project file has the template.
+    // With the regular daemons in place, a copy that takes the name of one is
+    // an error, as for the CLI, rather than a group of the regular daemon.
     let mut expanded = PitchforkToml::new(PathBuf::new());
     expanded.groups = declared.clone();
+    expanded.daemons = daemons;
     expanded.daemon_templates = templates;
     if let Err(e) = expanded.expand_daemon_templates() {
         log::warn!("Failed to expand daemon templates: {e}");
@@ -1855,6 +1860,26 @@ mod tests {
         );
         let members: Vec<_> = groups["default"].iter().map(|id| id.name()).collect();
         assert_eq!(members, ["e2e.1.api"]);
+    }
+
+    /// A template whose copy takes a regular daemon's name is an error, so its
+    /// group cannot stop that daemon.
+    #[test]
+    fn daemon_template_clashing_with_a_daemon_yields_no_groups() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemons.\"e2e.0.api\"]\nrun = \"true\"\n\n\
+             [daemon_templates.e2e]\ninstances = 1\n\n\
+             [daemon_templates.e2e.daemons.api]\nrun = \"true\"\n",
+        )
+        .unwrap();
+
+        let (groups, error) = groups_for_dir(&project);
+        assert!(groups.is_empty());
+        assert!(error.unwrap().contains("already defined"));
     }
 
     /// A config file that cannot be read must not leave the groups the files
