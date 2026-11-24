@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.0](https://github.com/jdx/pitchfork/compare/v2.36.0...v2.37.0) - 2026-11-24
+
+### Added
+
+- *(config)* define reusable daemon templates with numbered or named instances ([#1155](https://github.com/jdx/pitchfork/pull/1155))
+- *(config)* add port bump step for daemons limited to spaced ports ([#1154](https://github.com/jdx/pitchfork/pull/1154))
+
+### Fixed
+
+- *(deps)* update rust crates ([#1150](https://github.com/jdx/pitchfork/pull/1150))
+
+### Other
+
+- *(deps)* lock file maintenance ([#1160](https://github.com/jdx/pitchfork/pull/1160))
+- *(deps)* lock file maintenance ([#1157](https://github.com/jdx/pitchfork/pull/1157))
+- *(deps)* lock file maintenance ([#1151](https://github.com/jdx/pitchfork/pull/1151))
+
 ## [2.36.0](https://github.com/jdx/pitchfork/compare/v2.35.0...v2.36.0) - 2026-11-21
 
 ### Added

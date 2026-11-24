@@ -2839,7 +2839,7 @@ checksum = "c938015719552d665fd0553b90d96cd7ff58e83e4c061ca99e6bb78865a72752"
 
 [[package]]
 name = "pitchfork-cli"
-version = "2.36.0"
+version = "2.37.0"
 dependencies = [
  "async-stream",
  "auto-launcher",
