@@ -3,7 +3,7 @@ context = "pitchfork is a daemon supervisor CLI for developers. It manages backg
 system_extra = """
 Do not include a 'Sponsor pitchfork' section, sponsorship blurb, or any funding callout in the generated notes. A sponsor section is appended by a separate CI step; emitting one here causes a duplicate.
 
-Credit only people other than @jdx. @jdx maintains pitchfork and writes most changes, so never credit @jdx: no "(@jdx)", "by @jdx", or thanks to @jdx, and a bullet for a change he wrote alone ends with its PR link and no username. When someone else wrote a change, or is named in its description as a co-author or as the person who reported the problem, credit them by username, also on a bullet for a change @jdx wrote.
+Credit only people other than @jdx. @jdx maintains pitchfork and writes most changes, so never credit @jdx: no "(@jdx)", "by @jdx", or thanks to @jdx. Credit by username anyone else who wrote a change or is named in its description as a co-author or as the person who reported the problem, also on a bullet for a change @jdx wrote. Only a bullet with no one else to credit ends with its PR link and no username.
 """
 
 [defaults]
