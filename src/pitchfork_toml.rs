@@ -480,6 +480,9 @@ struct PitchforkTomlDaemonRaw {
     /// Stop after this long without proxy activity when the proxy started it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy_idle_timeout: Option<ProxyIdleTimeout>,
+    /// Start this daemon when its proxy URL is opened; overrides `proxy.auto_start`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy_auto_start: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -919,6 +922,7 @@ fn daemon_from_raw(
         proxy_tls_port: raw_daemon.proxy_tls_port,
         proxy_port: raw_daemon.proxy_port,
         proxy_idle_timeout: raw_daemon.proxy_idle_timeout,
+        proxy_auto_start: raw_daemon.proxy_auto_start,
         boot_start: raw_daemon.boot_start,
         depends,
         depends_as,
@@ -982,6 +986,7 @@ fn daemon_to_raw(daemon: &PitchforkTomlDaemon, config_namespace: &str) -> Pitchf
         proxy_tls_port: daemon.proxy_tls_port,
         proxy_port: daemon.proxy_port,
         proxy_idle_timeout: daemon.proxy_idle_timeout,
+        proxy_auto_start: daemon.proxy_auto_start,
         // Deprecated fields: written for backward compatibility with older pitchfork versions
         expected_port: port.map(|p| p.expect.clone()).unwrap_or_default(),
         auto_bump_port: port.filter(|p| p.auto_bump()).map(|_| true),
@@ -3038,6 +3043,14 @@ pub struct PitchforkTomlDaemon {
     /// exempt; live dependents, active proxy connections, and tracked shell
     /// sessions prevent idle shutdown.
     pub proxy_idle_timeout: Option<ProxyIdleTimeout>,
+    /// Whether opening this daemon's proxy URL starts it when it is stopped.
+    ///
+    /// Overrides `settings.proxy.auto_start` for this daemon only: `true`
+    /// enables auto-start even when the global setting is off, and `false`
+    /// disables it even when the global setting is on. When omitted, the
+    /// global setting applies. Dependencies of an auto-started daemon are
+    /// started regardless of their own value, as `pitchfork start` does.
+    pub proxy_auto_start: Option<bool>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,
     /// List of daemons that must be started before this one. Each entry is a

@@ -6337,7 +6337,7 @@
         "cli": [],
         "bindings": {},
         "help": "Automatically start daemons when accessed via proxy URL",
-        "long_help": "Automatically start daemons when accessed via proxy URL\n\nEnabled by default. Opening a stopped daemon's proxy URL starts its `depends` dependencies first, using the same startup order and readiness checks as `pitchfork start`. Oneshot dependencies must complete successfully.\n\nThe first request waits for startup. Additional requests to the same daemon receive a \"Starting…\" page that refreshes every two seconds until it is ready. Opening a project or stack page does not start any daemons.\n\nSet to `false` to return a 502 error for stopped daemons and require manual startup.",
+        "long_help": "Automatically start daemons when accessed via proxy URL\n\nEnabled by default. Opening a stopped daemon's proxy URL starts its `depends` dependencies first, using the same startup order and readiness checks as `pitchfork start`. Oneshot dependencies must complete successfully.\n\nThe first request waits for startup. Additional requests to the same daemon receive a \"Starting…\" page that refreshes every two seconds until it is ready. Opening a project or stack page does not start any daemons.\n\nSet to `false` to return a 502 error for stopped daemons and require manual startup.\n\nA daemon's `proxy_auto_start` overrides this setting for that daemon, so auto-start can be turned on for a few daemons while it stays off globally, or turned off for a few while it stays on.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",

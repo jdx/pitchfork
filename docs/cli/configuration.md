@@ -419,6 +419,8 @@ The first request waits for startup. Additional requests to the same daemon rece
 
 Set to `false` to return a 502 error for stopped daemons and require manual startup.
 
+A daemon's `proxy_auto_start` overrides this setting for that daemon, so auto-start can be turned on for a few daemons while it stays off globally, or turned off for a few while it stays on.
+
 ## `proxy.auto_start_timeout`
 
 - **Type:** `duration`
