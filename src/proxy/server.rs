@@ -3958,6 +3958,23 @@ async fn try_auto_start(
         ))
     };
 
+    // The running state was read before the config load, so an earlier
+    // auto-start may have finished since. Starting the graph again would
+    // rerun its completed oneshot dependencies; forward to the daemon instead.
+    let already_running = SUPERVISOR
+        .state_file
+        .lock()
+        .await
+        .daemons
+        .get(&daemon_id)
+        .is_some_and(|d| d.status.is_running());
+    if already_running {
+        let result =
+            tokio::time::timeout_at(deadline, wait_for_active_port(slug, &daemon_id, route)).await;
+        drop(guard);
+        return result.unwrap_or_else(|_elapsed| timed_out());
+    }
+
     log::info!("Auto-start: starting daemon {daemon_id} for slug '{slug}'");
     let start = tokio::spawn({
         let guard = guard.clone();
