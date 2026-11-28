@@ -517,6 +517,10 @@ pub struct SettingsProxy {
     /// Opening a project or stack page does not start any daemons.
     ///
     /// Set to `false` to return a 502 error for stopped daemons and require manual startup.
+    ///
+    /// A daemon's `proxy_auto_start` overrides this setting for that daemon, so
+    /// auto-start can be turned on for a few daemons while it stays off globally,
+    /// or turned off for a few while it stays on.
     #[usage(env = "PITCHFORK_PROXY_AUTO_START", default = true)]
     pub auto_start: bool,
 

@@ -14,7 +14,7 @@ logging and dashboard ports, see [settings](/reference/settings).
 | Run a command | [`run`](#run-required), [`dir`](#dir), [`env`](#env), [`env_file`](#env-file), [`mise`](#mise), [`user`](#user), [`pty`](#pty) |
 | Order startup | [`depends`](#depends), [`oneshot`](#oneshot), [`ready_delay`](#ready-delay), [`ready_output`](#ready-output), [`ready_http`](#ready-http), [`ready_port`](#ready-port), [`ready_cmd`](#ready-cmd) |
 | Recover and monitor | [`retry`](#retry), [`health_cmd`](#health-cmd), [`health_http`](#health-http), [`health_port`](#health-port), [`memory_limit`](#memory-limit), [`cpu_limit`](#cpu-limit) |
-| Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal), [`proxy_idle_timeout`](#proxy-idle-timeout) |
+| Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal), [`proxy_idle_timeout`](#proxy-idle-timeout), [`proxy_auto_start`](#proxy-auto-start) |
 | Configure ports and logs | [`port`](#port), [`logs`](#logs) |
 | Share project configuration | [Environment defaults](#shared-environment), [groups](#daemon-groups), [namespace registry](#namespace-registry), [proxy slugs](#global-config-slug-registry) |
 
@@ -820,6 +820,31 @@ an already-running or explicitly started daemon eligible for idle shutdown.
 Live dependents, active proxy connections, and tracked shell sessions prevent
 shutdown. See [idle shutdown](/guides/port-management#idle-shutdown) for the
 complete lifecycle and activity rules.
+
+### `proxy_auto_start`
+
+Whether opening this daemon's proxy URL starts it when it is stopped.
+Overrides [`proxy.auto_start`](/cli/configuration#proxy-auto-start) for this
+daemon only; when omitted, the global setting applies.
+
+```toml
+[settings.proxy]
+auto_start = false
+
+[daemons.docs]
+run = "npm run docs"
+port = 4000
+proxy_auto_start = true   # started on demand even though auto-start is off
+
+[daemons.db-admin]
+run = "./admin"
+port = 4001
+proxy_auto_start = false  # not started by requests to its own URL, whatever the global setting
+```
+
+The value applies to the daemon behind the hostname. Its `depends`
+dependencies are started with it regardless of their own `proxy_auto_start`,
+as `pitchfork start` would.
 
 ### `expected_port` (deprecated)
 

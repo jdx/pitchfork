@@ -1405,6 +1405,73 @@ EOF
   kill_port "$app_port"
 }
 
+@test "proxy_auto_start on a daemon overrides the global auto_start setting" {
+  local proj="$TEST_TEMP_DIR/overrideproj"
+  mkdir -p "$proj"
+  _register_projects overrideproj
+
+  local http_script on_port plain_port off_port proxy_port
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  on_port=$(free_port)
+  plain_port=$(free_port)
+  off_port=$(free_port)
+  proxy_port=$(free_port)
+
+  cat >"$proj/pitchfork.toml" <<EOF
+[daemons.on]
+run = "python3 -u $http_script 0 $on_port"
+port = $on_port
+ready_http = "http://127.0.0.1:$on_port/health"
+proxy_auto_start = true
+
+[daemons.plain]
+run = "python3 -u $http_script 0 $plain_port"
+port = $plain_port
+
+[daemons.off]
+run = "python3 -u $http_script 0 $off_port"
+port = $off_port
+proxy_auto_start = false
+EOF
+
+  # Globally off: only the daemon that opts in is started.
+  _start_autostart_proxy "$proxy_port" PITCHFORK_PROXY_AUTO_START=false
+
+  run curl -s -w '\n%{http_code}' --max-time 60 \
+    -H "Host: on.overrideproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_line --index 0 "OK"
+  assert_line --index 1 "200"
+
+  run curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
+    -H "Host: plain.overrideproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output "502"
+  run pitchfork status overrideproj/plain
+  refute_output --partial "running"
+
+  # Globally on: the daemon that opts out stays stopped, the rest start.
+  pitchfork stop --all || true
+  _start_autostart_proxy "$proxy_port"
+
+  run curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
+    -H "Host: off.overrideproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output "502"
+  run pitchfork status overrideproj/off
+  refute_output --partial "running"
+
+  run curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
+    -H "Host: plain.overrideproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output "200"
+
+  pitchfork stop --all || true
+  kill_port "$on_port"
+  kill_port "$plain_port"
+  kill_port "$off_port"
+}
+
 @test "auto-start resolves a dependency in another registered project" {
   mkdir -p "$TEST_TEMP_DIR/shared" "$TEST_TEMP_DIR/web"
   _register_projects shared web

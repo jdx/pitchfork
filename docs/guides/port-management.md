@@ -342,6 +342,20 @@ auto_start_timeout = "60s"
 To require manual startup instead, set `auto_start = false` in
 `[settings.proxy]`. Requests to stopped daemons then return a `502` error.
 
+To choose per daemon, set
+[`proxy_auto_start`](/reference/configuration#proxy-auto-start) on it. It
+overrides the global setting in either direction:
+
+```toml
+[settings.proxy]
+auto_start = false
+
+[daemons.docs]
+run = "npm run docs"
+port = 4000
+proxy_auto_start = true   # still started on demand
+```
+
 ## Idle Shutdown
 
 Idle shutdown stops daemons that the proxy auto-started after they are no

@@ -659,6 +659,13 @@
             }
           ]
         },
+        "proxy_auto_start": {
+          "description": "Whether opening this daemon's proxy URL starts it when it is stopped.\n\nOverrides `settings.proxy.auto_start` for this daemon only: `true`\nenables auto-start even when the global setting is off, and `false`\ndisables it even when the global setting is on. When omitted, the\nglobal setting applies. Dependencies of an auto-started daemon are\nstarted regardless of their own value, as `pitchfork start` does.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "proxy_idle_timeout": {
           "description": "Idle timeout when the proxy auto-starts this daemon, for example `\"15m\"`.\nAccepts a duration string or `false`; `\"0\"` also disables idle shutdown.\n\nWhen omitted, a daemon started through its URL uses\n`settings.proxy.idle_timeout`; a dependency inherits the requested\ndaemon's timeout. An explicit `false` exempts this daemon in either case.\n\nThe timeout is recorded at startup. Explicitly started daemons are\nexempt; live dependents, active proxy connections, and tracked shell\nsessions prevent idle shutdown.",
           "anyOf": [

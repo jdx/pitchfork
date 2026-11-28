@@ -3865,7 +3865,8 @@ async fn lock_startup_graph(mut ids: Vec<DaemonId>) -> Vec<tokio::sync::OwnedMut
 
 /// Attempt to auto-start a daemon for the given slug.
 ///
-/// If `proxy.auto_start` is disabled, returns `NotFound`.
+/// If auto-start is disabled for the daemon — its `proxy_auto_start`, or
+/// `proxy.auto_start` when it sets none — returns `NotFound`.
 /// Uses a dedup set to prevent concurrent starts for the same daemon.
 /// Starts the daemon together with its `depends` graph exactly as
 /// `pitchfork start` does — dependencies first, level by level, each waited on
@@ -3885,9 +3886,6 @@ async fn try_auto_start(
     deadline: tokio::time::Instant,
 ) -> ResolveResult {
     let s = settings();
-    if !s.proxy.auto_start {
-        return ResolveResult::NotFound;
-    }
 
     let ns = expected_namespace
         .map(|s| s.to_string())
@@ -3897,6 +3895,38 @@ async fn try_auto_start(
         Ok(id) => id,
         Err(_) => return ResolveResult::NotFound,
     };
+
+    let config_dir = worktree_dir.unwrap_or(&cached.dir).to_path_buf();
+    // Loading visits every registered namespace, so it counts against the
+    // request's deadline like the start that follows.
+    let pt = match tokio::time::timeout_at(
+        deadline,
+        load_auto_start_config(&daemon_id, &config_dir),
+    )
+    .await
+    {
+        Ok(Some(pt)) => pt,
+        Ok(None) => return ResolveResult::NotFound,
+        Err(_elapsed) => {
+            let timeout = s.proxy_auto_start_timeout();
+            log::warn!(
+                "Auto-start: loading config for daemon {daemon_id} exceeded the timeout ({timeout:?})"
+            );
+            return ResolveResult::Error(format!(
+                "Auto-start for '{daemon_id}' timed out after {timeout:?} while loading \
+                 its configuration from {}.\n\
+                 Nothing was started; reload to try again.",
+                config_dir.display()
+            ));
+        }
+    };
+    // The daemon's own `proxy_auto_start` overrides the global setting.
+    let enabled = pt.daemons[&daemon_id]
+        .proxy_auto_start
+        .unwrap_or(s.proxy.auto_start);
+    if !enabled {
+        return ResolveResult::NotFound;
+    }
 
     {
         let mut in_progress = AUTO_START_IN_PROGRESS.lock().await;
@@ -3928,14 +3958,30 @@ async fn try_auto_start(
         ))
     };
 
+    // The running state was read before the config load, so an earlier
+    // auto-start may have finished since. Starting the graph again would
+    // rerun its completed oneshot dependencies; forward to the daemon instead.
+    let already_running = SUPERVISOR
+        .state_file
+        .lock()
+        .await
+        .daemons
+        .get(&daemon_id)
+        .is_some_and(|d| d.status.is_running());
+    if already_running {
+        let result =
+            tokio::time::timeout_at(deadline, wait_for_active_port(slug, &daemon_id, route)).await;
+        drop(guard);
+        return result.unwrap_or_else(|_elapsed| timed_out());
+    }
+
     log::info!("Auto-start: starting daemon {daemon_id} for slug '{slug}'");
     let start = tokio::spawn({
         let guard = guard.clone();
         let daemon_id = daemon_id.clone();
-        let config_dir = worktree_dir.unwrap_or(&cached.dir).to_path_buf();
         async move {
             let _guard = guard;
-            start_with_dependencies(&daemon_id, &config_dir).await
+            start_with_dependencies(&daemon_id, pt).await
         }
     });
     match tokio::time::timeout_at(deadline, start).await {
@@ -3954,40 +4000,48 @@ async fn try_auto_start(
     result.unwrap_or_else(|_elapsed| timed_out())
 }
 
-/// Start `daemon_id` and everything it depends on, through the same batch
-/// start `pitchfork start` uses.
+/// Load the configuration an auto-start of `daemon_id` uses, or `None` when it
+/// cannot be loaded or does not define the daemon.
 ///
 /// Configuration is loaded from `config_dir` — the checkout the hostname named
 /// — together with every registered namespace, so a dependency on a daemon of
 /// another registered project resolves just as it does from that directory on
 /// the command line.
-///
-/// Returns the response to give the request when the daemon cannot be started.
-async fn start_with_dependencies(
+async fn load_auto_start_config(
     daemon_id: &DaemonId,
     config_dir: &std::path::Path,
-) -> std::result::Result<(), ResolveResult> {
-    let loaded =
-        crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_from(config_dir).await;
-    let pt = match loaded {
+) -> Option<crate::pitchfork_toml::PitchforkToml> {
+    let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_from(config_dir)
+        .await
+    {
         Ok(pt) => pt,
         Err(e) => {
             log::warn!(
                 "Auto-start: failed to load config from {}: {e}",
                 config_dir.display()
             );
-            return Err(ResolveResult::NotFound);
+            return None;
         }
     };
-
     if !pt.daemons.contains_key(daemon_id) {
         log::debug!(
             "Auto-start: daemon {daemon_id} not found in config at {}",
             config_dir.display()
         );
-        return Err(ResolveResult::NotFound);
+        return None;
     }
+    Some(pt)
+}
 
+/// Start `daemon_id` and everything it depends on, through the same batch
+/// start `pitchfork start` uses, with the configuration from
+/// [`load_auto_start_config`].
+///
+/// Returns the response to give the request when the daemon cannot be started.
+async fn start_with_dependencies(
+    daemon_id: &DaemonId,
+    pt: crate::pitchfork_toml::PitchforkToml,
+) -> std::result::Result<(), ResolveResult> {
     // `pitchfork start` refuses a disabled daemon, and so does the proxy.
     if SUPERVISOR
         .state_file
