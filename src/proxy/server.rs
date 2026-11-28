@@ -3897,9 +3897,28 @@ async fn try_auto_start(
     };
 
     let config_dir = worktree_dir.unwrap_or(&cached.dir).to_path_buf();
-    let pt = match load_auto_start_config(&daemon_id, &config_dir).await {
-        Some(pt) => pt,
-        None => return ResolveResult::NotFound,
+    // Loading visits every registered namespace, so it counts against the
+    // request's deadline like the start that follows.
+    let pt = match tokio::time::timeout_at(
+        deadline,
+        load_auto_start_config(&daemon_id, &config_dir),
+    )
+    .await
+    {
+        Ok(Some(pt)) => pt,
+        Ok(None) => return ResolveResult::NotFound,
+        Err(_elapsed) => {
+            let timeout = s.proxy_auto_start_timeout();
+            log::warn!(
+                "Auto-start: loading config for daemon {daemon_id} exceeded the timeout ({timeout:?})"
+            );
+            return ResolveResult::Error(format!(
+                "Auto-start for '{daemon_id}' timed out after {timeout:?} while loading \
+                 its configuration from {}.\n\
+                 Nothing was started; reload to try again.",
+                config_dir.display()
+            ));
+        }
     };
     // The daemon's own `proxy_auto_start` overrides the global setting.
     let enabled = pt.daemons[&daemon_id]
