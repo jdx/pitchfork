@@ -1,6 +1,10 @@
 context = "pitchfork is a daemon supervisor CLI for developers. It manages background processes with features like auto-start/stop, cron scheduling, retry logic, and HTTP ready checks."
 
-system_extra = "Do not include a 'Sponsor pitchfork' section, sponsorship blurb, or any funding callout in the generated notes. A sponsor section is appended by a separate CI step; emitting one here causes a duplicate."
+system_extra = """
+Do not include a 'Sponsor pitchfork' section, sponsorship blurb, or any funding callout in the generated notes. A sponsor section is appended by a separate CI step; emitting one here causes a duplicate.
+
+Credit only people other than @jdx. @jdx maintains pitchfork and writes most changes, so a bullet for a change he wrote ends with its PR link and no username: never add "(@jdx)", "by @jdx", or thanks to @jdx. When someone else wrote a change, or is named in its description as a co-author or as the person who reported the problem, credit them by username.
+"""
 
 [defaults]
 emoji = false

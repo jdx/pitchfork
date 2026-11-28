@@ -115,7 +115,11 @@ jobs:
       - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with:
           cache: false
-      - run: communique generate "$TAG" --github-release
+      - run: |
+          communique generate "$TAG" --github-release --review-report "$RUNNER_TEMP/communique-coverage.md"
+          if [[ -f "$RUNNER_TEMP/communique-coverage.md" ]]; then
+            cat "$RUNNER_TEMP/communique-coverage.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
