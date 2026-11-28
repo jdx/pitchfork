@@ -839,7 +839,7 @@ proxy_auto_start = true   # started on demand even though auto-start is off
 [daemons.db-admin]
 run = "./admin"
 port = 4001
-proxy_auto_start = false  # never started by the proxy, whatever the global setting
+proxy_auto_start = false  # not started by requests to its own URL, whatever the global setting
 ```
 
 The value applies to the daemon behind the hostname. Its `depends`
