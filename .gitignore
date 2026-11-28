@@ -9,3 +9,4 @@ node_modules
 .slim/deepwork/
 .slim/clonedeps/
 .mise/usage-cli-6/
+.claude/settings.local.json
